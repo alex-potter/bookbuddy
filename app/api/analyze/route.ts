@@ -88,7 +88,6 @@ ${newChaptersText}
 Return ONLY the complete updated JSON object (same schema, no markdown fences, no explanation):
 ${SCHEMA}`;
 }
-}
 
 // --- Anthropic provider ---
 async function callAnthropic(system: string, userPrompt: string): Promise<string> {

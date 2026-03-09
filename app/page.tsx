@@ -43,6 +43,38 @@ function saveStored(title: string, author: string, state: StoredBookState) {
   }
 }
 
+async function analyzeChapter(
+  bookTitle: string,
+  bookAuthor: string,
+  chapter: { title: string; text: string },
+  previousResult: AnalysisResult | null,
+): Promise<AnalysisResult> {
+  const body = previousResult
+    ? {
+        newChapters: [chapter],
+        previousResult,
+        currentChapterTitle: chapter.title,
+        bookTitle,
+        bookAuthor,
+      }
+    : {
+        chaptersRead: [chapter],
+        currentChapterTitle: chapter.title,
+        bookTitle,
+        bookAuthor,
+      };
+
+  const res = await fetch('/api/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? 'Analysis failed.');
+  return data as AnalysisResult;
+}
+
 export default function Home() {
   const [book, setBook] = useState<ParsedEbook | null>(null);
   const [parsing, setParsing] = useState(false);
@@ -53,6 +85,10 @@ export default function Home() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [analysisMode, setAnalysisMode] = useState<'full' | 'incremental' | null>(null);
+
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildProgress, setRebuildProgress] = useState<{ current: number; total: number } | null>(null);
+  const rebuildCancelRef = useRef(false);
 
   const [tab, setTab] = useState<MainTab>('characters');
   const [sortKey, setSortKey] = useState<SortKey>('importance');
@@ -72,7 +108,6 @@ export default function Home() {
       const parsed = await parseEpub(file);
       setBook(parsed);
       setCurrentIndex(0);
-      // Load any previously saved state for this book
       const stored = loadStored(parsed.title, parsed.author);
       storedRef.current = stored;
       if (stored) {
@@ -99,7 +134,6 @@ export default function Home() {
       let body: Record<string, unknown>;
 
       if (canIncrement) {
-        // Incremental: send only new chapters + stored state
         const newChapters = book.chapters
           .slice(stored.lastAnalyzedIndex + 1, currentIndex + 1)
           .map((ch) => ({ title: ch.title, text: ch.text }));
@@ -112,7 +146,6 @@ export default function Home() {
         };
         setAnalysisMode('incremental');
       } else {
-        // Full analysis: send everything up to current chapter
         const chaptersRead = book.chapters
           .slice(0, currentIndex + 1)
           .map((ch) => ({ title: ch.title, text: ch.text }));
@@ -137,7 +170,6 @@ export default function Home() {
       const newResult = data as AnalysisResult;
       setResult(newResult);
 
-      // Save to localStorage
       const newStored: StoredBookState = { lastAnalyzedIndex: currentIndex, result: newResult };
       storedRef.current = newStored;
       saveStored(book.title, book.author, newStored);
@@ -145,6 +177,37 @@ export default function Home() {
       setAnalyzeError(err instanceof Error ? err.message : 'Analysis failed.');
     } finally {
       setAnalyzing(false);
+    }
+  }, [book, currentIndex]);
+
+  const handleRebuild = useCallback(async () => {
+    if (!book) return;
+    rebuildCancelRef.current = false;
+    setRebuilding(true);
+    setAnalyzeError(null);
+    setRebuildProgress({ current: 0, total: currentIndex + 1 });
+
+    let accumulated: AnalysisResult | null = null;
+    try {
+      for (let i = 0; i <= currentIndex; i++) {
+        if (rebuildCancelRef.current) break;
+        setRebuildProgress({ current: i + 1, total: currentIndex + 1 });
+
+        const chapter = { title: book.chapters[i].title, text: book.chapters[i].text };
+        accumulated = await analyzeChapter(book.title, book.author, chapter, accumulated);
+
+        // Save intermediate progress so a cancel still has a useful partial result
+        const partial: StoredBookState = { lastAnalyzedIndex: i, result: accumulated };
+        storedRef.current = partial;
+        saveStored(book.title, book.author, partial);
+        setResult(accumulated);
+      }
+    } catch (err) {
+      setAnalyzeError(err instanceof Error ? err.message : 'Rebuild failed.');
+    } finally {
+      setRebuilding(false);
+      setRebuildProgress(null);
+      rebuildCancelRef.current = false;
     }
   }, [book, currentIndex]);
 
@@ -176,6 +239,7 @@ export default function Home() {
   const stored = storedRef.current;
   const hasStoredState = !!stored;
   const canIncrement = stored && currentIndex > stored.lastAnalyzedIndex;
+  const busy = analyzing || rebuilding;
 
   return (
     <main className="min-h-screen flex flex-col">
@@ -191,7 +255,7 @@ export default function Home() {
         <div className="flex items-center gap-3">
           {hasStoredState && (
             <span className="text-xs text-amber-400">
-              Progress saved · last analyzed ch.{(stored.lastAnalyzedIndex + 1)}
+              Progress saved · last analyzed ch.{stored.lastAnalyzedIndex + 1}
             </span>
           )}
           <button
@@ -211,7 +275,11 @@ export default function Home() {
             currentIndex={currentIndex}
             onChange={(i) => { setCurrentIndex(i); }}
             onAnalyze={handleAnalyze}
+            onRebuild={handleRebuild}
+            onCancelRebuild={() => { rebuildCancelRef.current = true; }}
             analyzing={analyzing}
+            rebuilding={rebuilding}
+            rebuildProgress={rebuildProgress}
             canIncrement={!!canIncrement}
             lastAnalyzedIndex={stored?.lastAnalyzedIndex ?? null}
           />
@@ -222,7 +290,7 @@ export default function Home() {
 
         {/* Main content */}
         <div className="flex-1 overflow-y-auto p-6">
-          {!result && !analyzing && (
+          {!result && !busy && (
             <div className="flex flex-col items-center justify-center h-full text-center gap-4">
               <span className="text-6xl">🔍</span>
               <p className="text-lg font-medium text-amber-600">
@@ -234,12 +302,12 @@ export default function Home() {
             </div>
           )}
 
-          {analyzing && (
+          {analyzing && !rebuilding && (
             <div className="flex flex-col items-center justify-center h-full gap-4">
               <div className="w-14 h-14 border-4 border-amber-400 border-t-transparent rounded-full animate-spin" />
               <p className="text-amber-700 font-medium">
                 {analysisMode === 'incremental'
-                  ? <>Updating from <em>{book.chapters[stored!.lastAnalyzedIndex]?.title}</em> to <em>{book.chapters[currentIndex]?.title}</em>…</>
+                  ? <>Updating to <em>{book.chapters[currentIndex]?.title}</em>…</>
                   : <>Reading up to <em>{book.chapters[currentIndex]?.title}</em>…</>
                 }
               </p>
@@ -247,6 +315,31 @@ export default function Home() {
                 {analysisMode === 'incremental'
                   ? 'Only reading new chapters — all previous characters preserved'
                   : 'Extracting characters without spoilers'}
+              </p>
+            </div>
+          )}
+
+          {rebuilding && rebuildProgress && (
+            <div className="flex flex-col items-center justify-center h-full gap-5">
+              <div className="w-14 h-14 border-4 border-violet-400 border-t-transparent rounded-full animate-spin" />
+              <div className="text-center">
+                <p className="text-violet-700 font-semibold text-lg">
+                  Rebuilding dataset…
+                </p>
+                <p className="text-sm text-violet-500 mt-1">
+                  Chapter {rebuildProgress.current} of {rebuildProgress.total}
+                  {' '}· <em>{book.chapters[rebuildProgress.current - 1]?.title}</em>
+                </p>
+              </div>
+              {/* Progress bar */}
+              <div className="w-64 bg-violet-100 rounded-full h-2">
+                <div
+                  className="bg-violet-400 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${(rebuildProgress.current / rebuildProgress.total) * 100}%` }}
+                />
+              </div>
+              <p className="text-xs text-violet-400">
+                Results update live · you can cancel at any time
               </p>
             </div>
           )}
@@ -285,7 +378,6 @@ export default function Home() {
 
               {tab === 'characters' && (
                 <>
-                  {/* Controls */}
                   <div className="flex flex-wrap items-center gap-3 mb-4">
                     <div className="flex-1 min-w-36">
                       <input
@@ -322,7 +414,6 @@ export default function Home() {
                     </select>
                   </div>
 
-                  {/* Stats */}
                   <div className="flex gap-4 mb-4 text-xs text-stone-500">
                     <span>{characters.length} characters</span>
                     <span>•</span>

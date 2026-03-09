@@ -8,7 +8,11 @@ interface Props {
   currentIndex: number;
   onChange: (index: number) => void;
   onAnalyze: () => void;
+  onRebuild: () => void;
+  onCancelRebuild: () => void;
   analyzing: boolean;
+  rebuilding: boolean;
+  rebuildProgress: { current: number; total: number } | null;
   canIncrement: boolean;
   lastAnalyzedIndex: number | null;
 }
@@ -37,7 +41,11 @@ export default function ChapterSelector({
   currentIndex,
   onChange,
   onAnalyze,
+  onRebuild,
+  onCancelRebuild,
   analyzing,
+  rebuilding,
+  rebuildProgress,
   canIncrement,
   lastAnalyzedIndex,
 }: Props) {
@@ -45,6 +53,7 @@ export default function ChapterSelector({
   const [locationInput, setLocationInput] = useState('');
 
   const totalLocations = chapterIndexToLocation(chapters.length - 1, chapters);
+  const busy = analyzing || rebuilding;
 
   function handleLocationChange(raw: string) {
     setLocationInput(raw);
@@ -128,12 +137,13 @@ export default function ChapterSelector({
         )}
       </div>
 
+      {/* Analyze button */}
       <button
         onClick={onAnalyze}
-        disabled={analyzing}
+        disabled={busy}
         className={`
           w-full py-3 rounded-xl font-semibold text-sm transition-all duration-200
-          ${analyzing
+          ${busy
             ? 'bg-amber-200 text-amber-500 cursor-not-allowed'
             : 'bg-amber-500 text-white hover:bg-amber-600 active:scale-95 shadow-md hover:shadow-lg'
           }
@@ -151,11 +161,48 @@ export default function ChapterSelector({
         )}
       </button>
 
-      {canIncrement && lastAnalyzedIndex !== null && (
-        <p className="mt-2 text-xs text-center text-amber-400">
-          Only reading chapters {lastAnalyzedIndex + 2}–{currentIndex + 1}
+      {canIncrement && lastAnalyzedIndex !== null && !busy && (
+        <p className="mt-1.5 text-xs text-center text-amber-400">
+          Only reading ch.{lastAnalyzedIndex + 2}–{currentIndex + 1}
         </p>
       )}
+
+      {/* Rebuild button */}
+      <div className="mt-2">
+        {rebuilding ? (
+          <button
+            onClick={onCancelRebuild}
+            className="w-full py-2 rounded-xl text-xs font-semibold border border-red-200 text-red-500 hover:bg-red-50 transition-colors"
+          >
+            Cancel rebuild
+            {rebuildProgress && (
+              <span className="ml-1 text-red-400">
+                ({rebuildProgress.current}/{rebuildProgress.total})
+              </span>
+            )}
+          </button>
+        ) : (
+          <button
+            onClick={onRebuild}
+            disabled={busy}
+            title="Analyze each chapter one-by-one for the most accurate character dataset"
+            className={`
+              w-full py-2 rounded-xl text-xs font-semibold border transition-colors
+              ${busy
+                ? 'border-stone-100 text-stone-300 cursor-not-allowed'
+                : 'border-violet-200 text-violet-500 hover:bg-violet-50'
+              }
+            `}
+          >
+            🔄 Rebuild from scratch
+          </button>
+        )}
+        {!busy && (
+          <p className="mt-1 text-xs text-center text-stone-400">
+            Analyzes ch.1–{currentIndex + 1} one by one
+          </p>
+        )}
+      </div>
 
       {/* Chapter list */}
       <div className="mt-5 flex-1 overflow-y-auto">
@@ -163,49 +210,56 @@ export default function ChapterSelector({
           Chapters
         </p>
         <ul className="space-y-0.5">
-          {chapters.map((ch, i) => (
-            <li key={ch.id}>
-              <button
-                onClick={() => {
-                  onChange(i);
-                  if (mode === 'location') {
-                    setLocationInput(String(chapterIndexToLocation(i, chapters)));
-                  }
-                }}
-                className={`
-                  w-full text-left px-3 py-2 rounded-lg text-sm transition-colors
-                  ${i === currentIndex
-                    ? 'bg-amber-100 text-amber-900 font-semibold'
-                    : lastAnalyzedIndex !== null && i <= lastAnalyzedIndex
-                    ? 'text-amber-700 hover:bg-amber-50'
-                    : i < currentIndex
-                    ? 'text-amber-600 hover:bg-amber-50'
-                    : 'text-amber-300 cursor-default'
-                  }
-                `}
-                disabled={i > currentIndex}
-                title={i > currentIndex ? "You haven't read this chapter yet" : ''}
-              >
-                <span className="mr-2 text-xs">
-                  {lastAnalyzedIndex !== null && i < lastAnalyzedIndex
-                    ? '✓'
-                    : lastAnalyzedIndex !== null && i === lastAnalyzedIndex
-                    ? '★'
-                    : i === currentIndex
-                    ? '▸'
-                    : i < currentIndex
-                    ? '·'
-                    : '○'}
-                </span>
-                {ch.title}
-                {mode === 'location' && (
-                  <span className="ml-1 text-xs text-amber-400">
-                    ~{chapterIndexToLocation(i, chapters).toLocaleString()}
+          {chapters.map((ch, i) => {
+            const isRebuildingThis = rebuilding && rebuildProgress && i === rebuildProgress.current - 1;
+            return (
+              <li key={ch.id}>
+                <button
+                  onClick={() => {
+                    onChange(i);
+                    if (mode === 'location') {
+                      setLocationInput(String(chapterIndexToLocation(i, chapters)));
+                    }
+                  }}
+                  className={`
+                    w-full text-left px-3 py-2 rounded-lg text-sm transition-colors
+                    ${isRebuildingThis
+                      ? 'bg-violet-100 text-violet-800 font-semibold'
+                      : i === currentIndex
+                      ? 'bg-amber-100 text-amber-900 font-semibold'
+                      : lastAnalyzedIndex !== null && i <= lastAnalyzedIndex
+                      ? 'text-amber-700 hover:bg-amber-50'
+                      : i < currentIndex
+                      ? 'text-amber-600 hover:bg-amber-50'
+                      : 'text-amber-300 cursor-default'
+                    }
+                  `}
+                  disabled={i > currentIndex}
+                  title={i > currentIndex ? "You haven't read this chapter yet" : ''}
+                >
+                  <span className="mr-2 text-xs">
+                    {isRebuildingThis
+                      ? '↻'
+                      : lastAnalyzedIndex !== null && i < lastAnalyzedIndex
+                      ? '✓'
+                      : lastAnalyzedIndex !== null && i === lastAnalyzedIndex
+                      ? '★'
+                      : i === currentIndex
+                      ? '▸'
+                      : i < currentIndex
+                      ? '·'
+                      : '○'}
                   </span>
-                )}
-              </button>
-            </li>
-          ))}
+                  {ch.title}
+                  {mode === 'location' && (
+                    <span className="ml-1 text-xs text-amber-400">
+                      ~{chapterIndexToLocation(i, chapters).toLocaleString()}
+                    </span>
+                  )}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       </div>
     </div>
