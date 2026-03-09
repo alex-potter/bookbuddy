@@ -4,29 +4,28 @@ import { useState } from 'react';
 import type { Character } from '@/types';
 
 const STATUS_CONFIG = {
-  alive: { label: 'Alive', color: 'bg-green-100 text-green-800 border-green-200', dot: 'bg-green-400' },
-  dead: { label: 'Dead', color: 'bg-red-100 text-red-800 border-red-200', dot: 'bg-red-400' },
-  unknown: { label: 'Unknown', color: 'bg-gray-100 text-gray-600 border-gray-200', dot: 'bg-gray-400' },
-  uncertain: { label: 'Uncertain', color: 'bg-orange-100 text-orange-800 border-orange-200', dot: 'bg-orange-400' },
+  alive:     { label: 'Alive',     color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20', dot: 'bg-emerald-400' },
+  dead:      { label: 'Dead',      color: 'bg-red-500/10 text-red-400 border-red-500/20',             dot: 'bg-red-400' },
+  unknown:   { label: 'Unknown',   color: 'bg-zinc-700/50 text-zinc-400 border-zinc-600/30',          dot: 'bg-zinc-500' },
+  uncertain: { label: 'Uncertain', color: 'bg-amber-500/10 text-amber-400 border-amber-500/20',       dot: 'bg-amber-400' },
 };
 
 const IMPORTANCE_CONFIG = {
-  main: { label: 'Main', color: 'bg-amber-500 text-white' },
-  secondary: { label: 'Secondary', color: 'bg-amber-200 text-amber-800' },
-  minor: { label: 'Minor', color: 'bg-stone-100 text-stone-600' },
+  main:      { label: 'Main',      color: 'bg-amber-500 text-zinc-900' },
+  secondary: { label: 'Secondary', color: 'bg-zinc-700 text-zinc-300' },
+  minor:     { label: 'Minor',     color: 'bg-zinc-800 text-zinc-500' },
 };
 
-// Generate a deterministic pastel color from a character name
 function nameColor(name: string): string {
   const colors = [
-    'bg-rose-100 text-rose-700',
-    'bg-sky-100 text-sky-700',
-    'bg-violet-100 text-violet-700',
-    'bg-emerald-100 text-emerald-700',
-    'bg-amber-100 text-amber-700',
-    'bg-pink-100 text-pink-700',
-    'bg-teal-100 text-teal-700',
-    'bg-indigo-100 text-indigo-700',
+    'bg-rose-500/15 text-rose-400',
+    'bg-sky-500/15 text-sky-400',
+    'bg-violet-500/15 text-violet-400',
+    'bg-emerald-500/15 text-emerald-400',
+    'bg-amber-500/15 text-amber-400',
+    'bg-pink-500/15 text-pink-400',
+    'bg-teal-500/15 text-teal-400',
+    'bg-indigo-500/15 text-indigo-400',
   ];
   let hash = 0;
   for (const c of name) hash = (hash * 31 + c.charCodeAt(0)) & 0xffffffff;
@@ -34,11 +33,7 @@ function nameColor(name: string): string {
 }
 
 function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() ?? '')
-    .join('');
+  return name.split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? '').join('');
 }
 
 interface Props {
@@ -53,70 +48,64 @@ export default function CharacterCard({ character }: Props) {
   return (
     <div
       className={`
-        bg-white rounded-2xl border border-stone-200 shadow-sm hover:shadow-md
-        transition-shadow duration-200 overflow-hidden
-        ${character.importance === 'main' ? 'ring-1 ring-amber-300' : ''}
+        bg-zinc-900 rounded-xl border overflow-hidden transition-colors duration-150
+        ${character.importance === 'main' ? 'border-amber-500/30' : 'border-zinc-800'}
       `}
     >
-      {/* Card header */}
+      {/* Header */}
       <div className="p-4 flex items-start gap-3">
-        {/* Avatar */}
-        <div
-          className={`
-            flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center
-            text-lg font-bold font-serif ${nameColor(character.name)}
-          `}
-        >
+        <div className={`flex-shrink-0 w-11 h-11 rounded-lg flex items-center justify-center text-sm font-bold ${nameColor(character.name)}`}>
           {initials(character.name)}
         </div>
 
         <div className="flex-1 min-w-0">
           <div className="flex items-start justify-between gap-2">
             <div>
-              <h3 className="font-bold text-stone-800 leading-tight">{character.name}</h3>
+              <h3 className="font-semibold text-zinc-100 leading-tight">{character.name}</h3>
               {character.aliases.length > 0 && (
-                <p className="text-xs text-stone-400 truncate">
-                  also: {character.aliases.join(', ')}
+                <p className="text-xs text-zinc-500 truncate mt-0.5">
+                  {character.aliases.join(', ')}
                 </p>
               )}
             </div>
-            <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded-full font-medium ${importance.color}`}>
+            <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded-md font-medium ${importance.color}`}>
               {importance.label}
             </span>
           </div>
 
-          {/* Status + location row */}
           <div className="flex items-center gap-2 mt-2 flex-wrap">
-            <span className={`inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full border font-medium ${status.color}`}>
+            <span className={`inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-md border font-medium ${status.color}`}>
               <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
               {status.label}
             </span>
-            <span className="text-xs text-stone-500 truncate">
-              📍 {character.currentLocation}
-            </span>
+            {character.currentLocation && character.currentLocation !== 'Unknown' && (
+              <span className="text-xs text-zinc-500 truncate">
+                {character.currentLocation}
+              </span>
+            )}
           </div>
         </div>
       </div>
 
       {/* Description */}
       <div className="px-4 pb-3">
-        <p className="text-sm text-stone-600 leading-relaxed">{character.description}</p>
+        <p className="text-sm text-zinc-400 leading-relaxed">{character.description}</p>
       </div>
 
       {/* Recent events */}
       {character.recentEvents && (
-        <div className="mx-4 mb-3 p-3 bg-amber-50 rounded-xl border border-amber-100">
-          <p className="text-xs font-semibold text-amber-700 mb-1">Recent events</p>
-          <p className="text-xs text-amber-800 leading-relaxed">{character.recentEvents}</p>
+        <div className="mx-4 mb-3 p-3 bg-zinc-800/60 rounded-lg border border-zinc-700/50">
+          <p className="text-xs font-medium text-amber-500 mb-1">Recent events</p>
+          <p className="text-xs text-zinc-400 leading-relaxed">{character.recentEvents}</p>
         </div>
       )}
 
-      {/* Relationships (expandable) */}
+      {/* Relationships */}
       {character.relationships.length > 0 && (
         <div className="px-4 pb-4">
           <button
             onClick={() => setExpanded(!expanded)}
-            className="text-xs text-amber-600 font-medium hover:text-amber-800 flex items-center gap-1 transition-colors"
+            className="text-xs text-zinc-500 hover:text-zinc-300 flex items-center gap-1 transition-colors"
           >
             <span>{expanded ? '▾' : '▸'}</span>
             Relationships ({character.relationships.length})
@@ -125,12 +114,12 @@ export default function CharacterCard({ character }: Props) {
             <ul className="mt-2 space-y-1.5">
               {character.relationships.map((rel, i) => (
                 <li key={i} className="flex items-start gap-2 text-xs">
-                  <span className="flex-shrink-0 w-5 h-5 bg-stone-100 rounded-full flex items-center justify-center text-stone-500 font-medium">
+                  <span className="flex-shrink-0 w-5 h-5 bg-zinc-800 rounded-md flex items-center justify-center text-zinc-400 font-medium">
                     {initials(rel.character)}
                   </span>
                   <div>
-                    <span className="font-semibold text-stone-700">{rel.character}</span>
-                    <span className="text-stone-500 ml-1">— {rel.relationship}</span>
+                    <span className="font-medium text-zinc-300">{rel.character}</span>
+                    <span className="text-zinc-500 ml-1">— {rel.relationship}</span>
                   </div>
                 </li>
               ))}
@@ -139,10 +128,10 @@ export default function CharacterCard({ character }: Props) {
         </div>
       )}
 
-      {/* Last seen footer */}
-      <div className="px-4 py-2 bg-stone-50 border-t border-stone-100">
-        <p className="text-xs text-stone-400">
-          Last seen: <span className="text-stone-500 font-medium">{character.lastSeen}</span>
+      {/* Footer */}
+      <div className="px-4 py-2 bg-zinc-800/40 border-t border-zinc-800">
+        <p className="text-xs text-zinc-600">
+          Last seen: <span className="text-zinc-500">{character.lastSeen}</span>
         </p>
       </div>
     </div>

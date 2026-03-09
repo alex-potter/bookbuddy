@@ -19,7 +19,7 @@ const IMPORTANCE_ORDER: Record<Character['importance'], number> = {
 };
 
 interface StoredBookState {
-  lastAnalyzedIndex: number; // -1 = series carry-forward with no chapters of this book analyzed yet
+  lastAnalyzedIndex: number;
   result: AnalysisResult;
 }
 
@@ -45,9 +45,7 @@ function loadStored(title: string, author: string): StoredBookState | null {
 function saveStored(title: string, author: string, state: StoredBookState) {
   try {
     localStorage.setItem(storageKey(title, author), JSON.stringify(state));
-  } catch {
-    // storage full or unavailable — silently ignore
-  }
+  } catch { /* ignore */ }
 }
 
 function listSavedBooks(excludeTitle: string, excludeAuthor: string): SavedBookEntry[] {
@@ -61,13 +59,9 @@ function listSavedBooks(excludeTitle: string, excludeAuthor: string): SavedBookE
       const raw = localStorage.getItem(key);
       if (!raw) continue;
       const state = JSON.parse(raw) as StoredBookState;
-      if (state.lastAnalyzedIndex >= 0) {
-        results.push({ title, author, lastAnalyzedIndex: state.lastAnalyzedIndex });
-      }
+      if (state.lastAnalyzedIndex >= 0) results.push({ title, author, lastAnalyzedIndex: state.lastAnalyzedIndex });
     }
-  } catch {
-    // ignore
-  }
+  } catch { /* ignore */ }
   return results;
 }
 
@@ -78,26 +72,14 @@ async function analyzeChapter(
   previousResult: AnalysisResult | null,
 ): Promise<AnalysisResult> {
   const body = previousResult
-    ? {
-        newChapters: [chapter],
-        previousResult,
-        currentChapterTitle: chapter.title,
-        bookTitle,
-        bookAuthor,
-      }
-    : {
-        chaptersRead: [chapter],
-        currentChapterTitle: chapter.title,
-        bookTitle,
-        bookAuthor,
-      };
+    ? { newChapters: [chapter], previousResult, currentChapterTitle: chapter.title, bookTitle, bookAuthor }
+    : { chaptersRead: [chapter], currentChapterTitle: chapter.title, bookTitle, bookAuthor };
 
   const res = await fetch('/api/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? 'Analysis failed.');
   return data as AnalysisResult;
@@ -108,7 +90,6 @@ export default function Home() {
   const [parsing, setParsing] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
 
-  // Series picker state
   const [pendingBook, setPendingBook] = useState<ParsedEbook | null>(null);
   const [seriesOptions, setSeriesOptions] = useState<SavedBookEntry[]>([]);
 
@@ -128,7 +109,6 @@ export default function Home() {
   const [search, setSearch] = useState('');
 
   const storedRef = useRef<StoredBookState | null>(null);
-  // The "base" result to start rebuilds from (null = fresh, set = series carry-forward)
   const seriesBaseRef = useRef<AnalysisResult | null>(null);
 
   function activateBook(parsed: ParsedEbook, initialStored: StoredBookState | null) {
@@ -153,16 +133,11 @@ export default function Home() {
     seriesBaseRef.current = null;
     try {
       const parsed = await parseEpub(file);
-
-      // Check for an existing saved state for this exact book
       const ownStored = loadStored(parsed.title, parsed.author);
       if (ownStored) {
-        // Resume exactly where we left off — no series picker needed
         activateBook(parsed, ownStored);
         return;
       }
-
-      // Check for other saved books that could be series predecessors
       const others = listSavedBooks(parsed.title, parsed.author);
       if (others.length > 0) {
         setPendingBook(parsed);
@@ -181,7 +156,6 @@ export default function Home() {
     if (!pendingBook) return;
     const prevStored = loadStored(prevTitle, prevAuthor);
     if (!prevStored) { activateBook(pendingBook, null); return; }
-    // lastAnalyzedIndex = -1 signals "series carry-forward, no chapters of THIS book analyzed"
     const carried: StoredBookState = { lastAnalyzedIndex: -1, result: prevStored.result };
     setPendingBook(null);
     setSeriesOptions([]);
@@ -204,47 +178,25 @@ export default function Home() {
     try {
       const stored = storedRef.current;
       const canIncrement = stored && currentIndex > stored.lastAnalyzedIndex;
-
       let body: Record<string, unknown>;
 
       if (canIncrement) {
-        const fromIndex = stored.lastAnalyzedIndex + 1; // 0 when lastAnalyzedIndex is -1
-        const newChapters = book.chapters
-          .slice(fromIndex, currentIndex + 1)
-          .map((ch) => ({ title: ch.title, text: ch.text }));
-        body = {
-          newChapters,
-          previousResult: stored.result,
-          currentChapterTitle: book.chapters[currentIndex].title,
-          bookTitle: book.title,
-          bookAuthor: book.author,
-        };
+        const fromIndex = stored.lastAnalyzedIndex + 1;
+        const newChapters = book.chapters.slice(fromIndex, currentIndex + 1).map((ch) => ({ title: ch.title, text: ch.text }));
+        body = { newChapters, previousResult: stored.result, currentChapterTitle: book.chapters[currentIndex].title, bookTitle: book.title, bookAuthor: book.author };
         setAnalysisMode('incremental');
       } else {
-        const chaptersRead = book.chapters
-          .slice(0, currentIndex + 1)
-          .map((ch) => ({ title: ch.title, text: ch.text }));
-        body = {
-          chaptersRead,
-          currentChapterTitle: book.chapters[currentIndex].title,
-          bookTitle: book.title,
-          bookAuthor: book.author,
-        };
+        const chaptersRead = book.chapters.slice(0, currentIndex + 1).map((ch) => ({ title: ch.title, text: ch.text }));
+        body = { chaptersRead, currentChapterTitle: book.chapters[currentIndex].title, bookTitle: book.title, bookAuthor: book.author };
         setAnalysisMode('full');
       }
 
-      const res = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-
+      const res = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Analysis failed.');
 
       const newResult = data as AnalysisResult;
       setResult(newResult);
-
       const newStored: StoredBookState = { lastAnalyzedIndex: currentIndex, result: newResult };
       storedRef.current = newStored;
       saveStored(book.title, book.author, newStored);
@@ -262,17 +214,13 @@ export default function Home() {
     setAnalyzeError(null);
     setRebuildProgress({ current: 0, total: currentIndex + 1 });
 
-    // Start from series carry-forward state if present, otherwise null (fresh)
     let accumulated: AnalysisResult | null = seriesBaseRef.current;
-
     try {
       for (let i = 0; i <= currentIndex; i++) {
         if (rebuildCancelRef.current) break;
         setRebuildProgress({ current: i + 1, total: currentIndex + 1 });
-
         const chapter = { title: book.chapters[i].title, text: book.chapters[i].text };
         accumulated = await analyzeChapter(book.title, book.author, chapter, accumulated);
-
         const partial: StoredBookState = { lastAnalyzedIndex: i, result: accumulated };
         storedRef.current = partial;
         saveStored(book.title, book.author, partial);
@@ -301,10 +249,9 @@ export default function Home() {
       return 0;
     });
 
-  // Series picker shown after parsing when other saved books exist
   if (pendingBook) {
     return (
-      <main className="min-h-screen p-6">
+      <main className="min-h-screen">
         <SeriesPicker
           newBookTitle={pendingBook.title}
           newBookAuthor={pendingBook.author}
@@ -320,9 +267,7 @@ export default function Home() {
     return (
       <main className="min-h-screen p-6">
         <UploadZone onFile={handleFile} parsing={parsing} />
-        {parseError && (
-          <p className="mt-4 text-center text-red-600 text-sm">{parseError}</p>
-        )}
+        {parseError && <p className="mt-4 text-center text-red-500 text-sm">{parseError}</p>}
       </main>
     );
   }
@@ -335,38 +280,40 @@ export default function Home() {
 
   return (
     <main className="min-h-screen flex flex-col">
-      <header className="bg-white border-b border-amber-100 px-6 py-3 flex items-center justify-between shadow-sm">
+      {/* Header */}
+      <header className="bg-zinc-900 border-b border-zinc-800 px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <span className="text-2xl">📖</span>
+          <span className="text-xl">📖</span>
           <div>
-            <h1 className="font-serif font-bold text-amber-900 leading-tight">{book.title}</h1>
-            <p className="text-xs text-amber-600">{book.author}</p>
+            <h1 className="font-bold text-zinc-100 leading-tight">{book.title}</h1>
+            <p className="text-xs text-zinc-500">{book.author}</p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4">
           {isSeriesContinuation && (
-            <span className="text-xs text-violet-500 font-medium">📚 Series mode</span>
+            <span className="text-xs text-violet-400 font-medium">Series mode</span>
           )}
           {hasStoredState && (
-            <span className="text-xs text-amber-400">
-              Progress saved · last analyzed ch.{stored.lastAnalyzedIndex + 1}
+            <span className="text-xs text-zinc-600">
+              Saved · ch.{stored.lastAnalyzedIndex + 1}
             </span>
           )}
           <button
             onClick={() => { setBook(null); setResult(null); storedRef.current = null; seriesBaseRef.current = null; }}
-            className="text-xs text-amber-500 hover:text-amber-700 underline underline-offset-2"
+            className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
           >
-            Load different book
+            Change book
           </button>
         </div>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        <aside className="w-72 flex-shrink-0 bg-white border-r border-amber-100 p-4 overflow-y-auto">
+        {/* Sidebar */}
+        <aside className="w-64 flex-shrink-0 bg-zinc-900 border-r border-zinc-800 p-4 overflow-y-auto">
           <ChapterSelector
             chapters={book.chapters}
             currentIndex={currentIndex}
-            onChange={(i) => { setCurrentIndex(i); }}
+            onChange={setCurrentIndex}
             onAnalyze={handleAnalyze}
             onRebuild={handleRebuild}
             onCancelRebuild={() => { rebuildCancelRef.current = true; }}
@@ -381,87 +328,77 @@ export default function Home() {
           )}
         </aside>
 
+        {/* Main */}
         <div className="flex-1 overflow-y-auto p-6">
           {!result && !busy && (
-            <div className="flex flex-col items-center justify-center h-full text-center gap-4">
-              <span className="text-6xl">{isSeriesContinuation ? '📚' : '🔍'}</span>
-              <p className="text-lg font-medium text-amber-600">
+            <div className="flex flex-col items-center justify-center h-full text-center gap-3">
+              <span className="text-5xl opacity-20">{isSeriesContinuation ? '📚' : '⌖'}</span>
+              <p className="text-zinc-400 font-medium">
                 {isSeriesContinuation
-                  ? <>Characters from the previous book are loaded. Select your chapter and click <strong>Update Characters</strong>.</>
-                  : <>Select your current chapter and click <strong>Analyze Characters</strong></>
-                }
+                  ? 'Series characters loaded. Select a chapter and update.'
+                  : 'Select your chapter and analyze.'}
               </p>
-              <p className="text-sm text-amber-400 max-w-xs">
+              <p className="text-sm text-zinc-600 max-w-xs">
                 {isSeriesContinuation
-                  ? 'Only new chapters will be read — series characters are already tracked.'
-                  : "Claude will only read what you've read so far — zero spoilers."}
+                  ? 'Only new chapters will be read — your existing characters carry forward.'
+                  : "Only what you've read is sent to the model — no spoilers."}
               </p>
             </div>
           )}
 
           {analyzing && !rebuilding && (
             <div className="flex flex-col items-center justify-center h-full gap-4">
-              <div className="w-14 h-14 border-4 border-amber-400 border-t-transparent rounded-full animate-spin" />
-              <p className="text-amber-700 font-medium">
-                {analysisMode === 'incremental'
-                  ? <>Updating to <em>{book.chapters[currentIndex]?.title}</em>…</>
-                  : <>Reading up to <em>{book.chapters[currentIndex]?.title}</em>…</>
-                }
+              <div className="w-10 h-10 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+              <p className="text-zinc-300 font-medium">
+                {analysisMode === 'incremental' ? 'Updating characters…' : 'Analyzing…'}
               </p>
-              <p className="text-sm text-amber-400">
-                {analysisMode === 'incremental'
-                  ? 'Only reading new chapters — all previous characters preserved'
-                  : 'Extracting characters without spoilers'}
+              <p className="text-sm text-zinc-600">
+                {analysisMode === 'incremental' ? 'New chapters only — existing roster preserved' : 'Extracting characters without spoilers'}
               </p>
             </div>
           )}
 
           {rebuilding && rebuildProgress && (
             <div className="flex flex-col items-center justify-center h-full gap-5">
-              <div className="w-14 h-14 border-4 border-violet-400 border-t-transparent rounded-full animate-spin" />
+              <div className="w-10 h-10 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
               <div className="text-center">
-                <p className="text-violet-700 font-semibold text-lg">Rebuilding dataset…</p>
-                <p className="text-sm text-violet-500 mt-1">
-                  Chapter {rebuildProgress.current} of {rebuildProgress.total}
-                  {' '}· <em>{book.chapters[rebuildProgress.current - 1]?.title}</em>
+                <p className="text-zinc-200 font-semibold">Rebuilding…</p>
+                <p className="text-sm text-zinc-500 mt-1">
+                  Chapter {rebuildProgress.current} / {rebuildProgress.total}
+                  {' · '}<span className="text-zinc-400">{book.chapters[rebuildProgress.current - 1]?.title}</span>
                 </p>
-                {seriesBaseRef.current && (
-                  <p className="text-xs text-violet-400 mt-1">Starting from series carry-forward</p>
-                )}
               </div>
-              <div className="w-64 bg-violet-100 rounded-full h-2">
+              <div className="w-56 bg-zinc-800 rounded-full h-1">
                 <div
-                  className="bg-violet-400 h-2 rounded-full transition-all duration-300"
+                  className="bg-violet-500 h-1 rounded-full transition-all duration-300"
                   style={{ width: `${(rebuildProgress.current / rebuildProgress.total) * 100}%` }}
                 />
               </div>
-              <p className="text-xs text-violet-400">Results update live · you can cancel at any time</p>
+              <p className="text-xs text-zinc-700">Results update live · cancel anytime</p>
             </div>
           )}
 
           {result && (
             <div>
+              {/* Summary */}
               {result.summary && (
-                <div className="mb-5 p-4 bg-white rounded-2xl border border-amber-100 shadow-sm">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-amber-500 mb-1">
-                    Story so far
-                  </p>
-                  <p className="text-sm text-stone-700 leading-relaxed">{result.summary}</p>
+                <div className="mb-5 p-4 bg-zinc-900 rounded-xl border border-zinc-800">
+                  <p className="text-xs font-medium text-zinc-600 uppercase tracking-wider mb-2">Story so far</p>
+                  <p className="text-sm text-zinc-400 leading-relaxed">{result.summary}</p>
                 </div>
               )}
 
-              <div className="flex rounded-xl overflow-hidden border border-amber-200 mb-5 w-fit">
+              {/* Tabs */}
+              <div className="flex rounded-lg overflow-hidden border border-zinc-800 mb-5 w-fit">
                 {([
-                  { key: 'characters', label: '👥 Characters' },
-                  { key: 'locations', label: '🗺️ Locations' },
+                  { key: 'characters', label: 'Characters' },
+                  { key: 'locations', label: 'Locations' },
                 ] as const).map(({ key, label }) => (
                   <button
                     key={key}
                     onClick={() => setTab(key)}
-                    className={`px-5 py-2 text-sm font-semibold transition-colors ${
-                      tab === key
-                        ? 'bg-amber-500 text-white'
-                        : 'bg-white text-amber-600 hover:bg-amber-50'
+                    className={`px-5 py-2 text-sm font-medium transition-colors ${
+                      tab === key ? 'bg-zinc-700 text-zinc-100' : 'bg-transparent text-zinc-500 hover:text-zinc-300'
                     }`}
                   >
                     {label}
@@ -471,25 +408,24 @@ export default function Home() {
 
               {tab === 'characters' && (
                 <>
-                  <div className="flex flex-wrap items-center gap-3 mb-4">
-                    <div className="flex-1 min-w-36">
-                      <input
-                        type="search"
-                        placeholder="Search characters…"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        className="w-full bg-white border border-stone-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
-                      />
-                    </div>
-                    <div className="flex gap-2 flex-wrap">
+                  {/* Controls */}
+                  <div className="flex flex-wrap items-center gap-2 mb-4">
+                    <input
+                      type="search"
+                      placeholder="Search…"
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-sm text-zinc-300 placeholder-zinc-600 focus:outline-none focus:border-zinc-600 min-w-36 flex-1"
+                    />
+                    <div className="flex gap-1.5">
                       {(['all', 'main', 'secondary', 'minor'] as const).map((f) => (
                         <button
                           key={f}
                           onClick={() => setFilter(f)}
-                          className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                             filter === f
-                              ? 'bg-amber-500 text-white'
-                              : 'bg-white text-amber-700 border border-amber-200 hover:bg-amber-50'
+                              ? 'bg-zinc-700 text-zinc-100'
+                              : 'text-zinc-500 hover:text-zinc-300 border border-zinc-800 hover:border-zinc-700'
                           }`}
                         >
                           {f.charAt(0).toUpperCase() + f.slice(1)}
@@ -499,28 +435,29 @@ export default function Home() {
                     <select
                       value={sortKey}
                       onChange={(e) => setSortKey(e.target.value as SortKey)}
-                      className="bg-white border border-stone-200 rounded-xl px-3 py-2 text-xs text-stone-600 focus:outline-none focus:ring-2 focus:ring-amber-300"
+                      className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-500 focus:outline-none focus:border-zinc-600"
                     >
-                      <option value="importance">Sort: Importance</option>
-                      <option value="name">Sort: Name</option>
-                      <option value="status">Sort: Status</option>
+                      <option value="importance">Importance</option>
+                      <option value="name">Name</option>
+                      <option value="status">Status</option>
                     </select>
                   </div>
 
-                  <div className="flex gap-4 mb-4 text-xs text-stone-500">
+                  {/* Stats */}
+                  <div className="flex gap-4 mb-4 text-xs text-zinc-600">
                     <span>{characters.length} characters</span>
-                    <span>•</span>
+                    <span>·</span>
                     <span>{characters.filter((c) => c.status === 'alive').length} alive</span>
-                    <span>•</span>
+                    <span>·</span>
                     <span>{characters.filter((c) => c.status === 'dead').length} dead</span>
-                    <span>•</span>
+                    <span>·</span>
                     <span>{characters.filter((c) => c.importance === 'main').length} main</span>
                   </div>
 
                   {displayed.length === 0 ? (
-                    <p className="text-center text-stone-400 py-12">No characters match your filter.</p>
+                    <p className="text-center text-zinc-600 py-12">No characters match.</p>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                       {displayed.map((character) => (
                         <CharacterCard key={character.name} character={character} />
                       ))}

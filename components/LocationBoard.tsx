@@ -9,10 +9,10 @@ interface LocationGroup {
 }
 
 const STATUS_DOT: Record<Character['status'], string> = {
-  alive: 'bg-green-400',
+  alive: 'bg-emerald-400',
   dead: 'bg-red-400',
-  unknown: 'bg-gray-400',
-  uncertain: 'bg-orange-400',
+  unknown: 'bg-zinc-500',
+  uncertain: 'bg-amber-400',
 };
 
 function initials(name: string) {
@@ -21,14 +21,14 @@ function initials(name: string) {
 
 function nameColor(name: string): string {
   const colors = [
-    'bg-rose-200 text-rose-700',
-    'bg-sky-200 text-sky-700',
-    'bg-violet-200 text-violet-700',
-    'bg-emerald-200 text-emerald-700',
-    'bg-amber-200 text-amber-700',
-    'bg-pink-200 text-pink-700',
-    'bg-teal-200 text-teal-700',
-    'bg-indigo-200 text-indigo-700',
+    'bg-rose-500/15 text-rose-400',
+    'bg-sky-500/15 text-sky-400',
+    'bg-violet-500/15 text-violet-400',
+    'bg-emerald-500/15 text-emerald-400',
+    'bg-amber-500/15 text-amber-400',
+    'bg-pink-500/15 text-pink-400',
+    'bg-teal-500/15 text-teal-400',
+    'bg-indigo-500/15 text-indigo-400',
   ];
   let hash = 0;
   for (const c of name) hash = (hash * 31 + c.charCodeAt(0)) & 0xffffffff;
@@ -48,7 +48,6 @@ export default function LocationBoard({ characters, bookTitle }: Props) {
   const [showUrlInput, setShowUrlInput] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Group characters by currentLocation
   const groups: LocationGroup[] = [];
   const seen = new Map<string, Character[]>();
   for (const c of characters) {
@@ -56,9 +55,7 @@ export default function LocationBoard({ characters, bookTitle }: Props) {
     if (!seen.has(loc)) seen.set(loc, []);
     seen.get(loc)!.push(c);
   }
-  for (const [loc, chars] of seen.entries()) {
-    groups.push({ location: loc, characters: chars });
-  }
+  for (const [loc, chars] of seen.entries()) groups.push({ location: loc, characters: chars });
   groups.sort((a, b) => {
     if (a.location === 'Unknown') return 1;
     if (b.location === 'Unknown') return -1;
@@ -84,7 +81,6 @@ export default function LocationBoard({ characters, bookTitle }: Props) {
     if (file?.type.startsWith('image/')) {
       loadFile(file);
     } else {
-      // Maybe they dropped an image URL from a browser
       const url = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
       if (url?.match(/^https?:\/\/.+\.(jpg|jpeg|png|webp|gif)/i)) {
         setMapImage(url);
@@ -94,13 +90,10 @@ export default function LocationBoard({ characters, bookTitle }: Props) {
   }
 
   function handlePaste(e: React.ClipboardEvent) {
-    // Image copied from browser (right-click → Copy Image)
     const imageFile = Array.from(e.clipboardData.items)
       .find((item) => item.type.startsWith('image/'))
       ?.getAsFile();
     if (imageFile) { loadFile(imageFile); return; }
-
-    // URL pasted as text
     const text = e.clipboardData.getData('text');
     if (text?.startsWith('http')) { setMapImage(text); setMapLabel('Map'); }
   }
@@ -115,29 +108,23 @@ export default function LocationBoard({ characters, bookTitle }: Props) {
   }
 
   return (
-    <div className="space-y-5">
-      {/* Map image section */}
-      <div className="bg-white rounded-2xl border border-amber-100 overflow-hidden shadow-sm">
+    <div className="space-y-4">
+      {/* Map section */}
+      <div className="bg-zinc-900 rounded-xl border border-zinc-800 overflow-hidden">
         {mapImage ? (
           <div>
             <div className="relative">
-              <img
-                src={mapImage}
-                alt={mapLabel || 'Book map'}
-                className="w-full max-h-96 object-contain bg-stone-50"
-              />
+              <img src={mapImage} alt={mapLabel || 'Book map'} className="w-full max-h-96 object-contain bg-zinc-950" />
               <button
                 onClick={() => { setMapImage(null); setMapLabel(''); }}
-                className="absolute top-2 right-2 bg-white/80 hover:bg-white text-stone-500 hover:text-red-500 rounded-full w-7 h-7 flex items-center justify-center text-sm shadow transition-colors"
+                className="absolute top-2 right-2 bg-zinc-900/80 hover:bg-zinc-900 text-zinc-400 hover:text-red-400 rounded-lg w-7 h-7 flex items-center justify-center text-sm transition-colors border border-zinc-700"
                 title="Remove map"
               >
                 ✕
               </button>
             </div>
             {mapLabel && (
-              <p className="text-xs text-center text-stone-400 py-2 border-t border-stone-100">
-                {mapLabel}
-              </p>
+              <p className="text-xs text-center text-zinc-600 py-2 border-t border-zinc-800">{mapLabel}</p>
             )}
           </div>
         ) : (
@@ -148,16 +135,16 @@ export default function LocationBoard({ characters, bookTitle }: Props) {
             onPaste={handlePaste}
             tabIndex={0}
             className={`flex flex-col items-center justify-center gap-3 py-8 outline-none transition-colors ${
-              dragging ? 'bg-amber-50 border-amber-300' : ''
+              dragging ? 'bg-amber-500/5' : ''
             }`}
           >
-            <span className="text-3xl">🗺️</span>
-            <p className="text-sm font-medium text-amber-700">Add your book&apos;s map</p>
+            <span className="text-3xl opacity-30">🗺️</span>
+            <p className="text-sm font-medium text-zinc-500">Add your book&apos;s map</p>
 
             <div className="flex gap-2 flex-wrap justify-center">
               <label
                 htmlFor="map-upload"
-                className="px-4 py-2 bg-amber-500 text-white text-xs font-semibold rounded-xl cursor-pointer hover:bg-amber-600 transition-colors"
+                className="px-3 py-1.5 bg-zinc-800 text-zinc-300 text-xs font-medium rounded-lg cursor-pointer hover:bg-zinc-700 transition-colors border border-zinc-700"
               >
                 Upload file
               </label>
@@ -166,14 +153,14 @@ export default function LocationBoard({ characters, bookTitle }: Props) {
                   href={`https://www.google.com/search?q=${encodeURIComponent(bookTitle + ' map')}&tbm=isch`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="px-4 py-2 bg-white border border-amber-200 text-amber-700 text-xs font-semibold rounded-xl hover:bg-amber-50 transition-colors"
+                  className="px-3 py-1.5 bg-zinc-800 text-zinc-300 text-xs font-medium rounded-lg hover:bg-zinc-700 transition-colors border border-zinc-700"
                 >
                   Search Google Images
                 </a>
               )}
               <button
                 onClick={() => setShowUrlInput((v) => !v)}
-                className="px-4 py-2 bg-white border border-amber-200 text-amber-700 text-xs font-semibold rounded-xl hover:bg-amber-50 transition-colors"
+                className="px-3 py-1.5 bg-zinc-800 text-zinc-300 text-xs font-medium rounded-lg hover:bg-zinc-700 transition-colors border border-zinc-700"
               >
                 Paste URL
               </button>
@@ -186,77 +173,59 @@ export default function LocationBoard({ characters, bookTitle }: Props) {
                   value={urlInput}
                   onChange={(e) => setUrlInput(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleUrlSubmit()}
-                  placeholder="https://..."
+                  placeholder="https://…"
                   autoFocus
-                  className="flex-1 bg-white border border-amber-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-amber-300"
+                  className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
                 />
                 <button
                   onClick={handleUrlSubmit}
-                  className="px-3 py-2 bg-amber-500 text-white text-xs font-semibold rounded-xl hover:bg-amber-600"
+                  className="px-3 py-1.5 bg-amber-500 text-zinc-900 text-xs font-semibold rounded-lg hover:bg-amber-400"
                 >
                   Load
                 </button>
               </div>
             )}
 
-            <p className="text-xs text-amber-400">
-              or drag &amp; drop · or <kbd className="bg-stone-100 px-1 rounded text-stone-500">Ctrl+V</kbd> to paste a copied image
+            <p className="text-xs text-zinc-700">
+              drag &amp; drop · or <kbd className="bg-zinc-800 px-1 py-0.5 rounded text-zinc-600 border border-zinc-700 text-[10px]">Ctrl+V</kbd> to paste
             </p>
 
-            <input
-              id="map-upload"
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              className="sr-only"
-              onChange={handleFileInput}
-            />
+            <input id="map-upload" ref={fileRef} type="file" accept="image/*" className="sr-only" onChange={handleFileInput} />
           </div>
         )}
       </div>
 
       {/* Location groups */}
       <div>
-        <p className="text-xs font-semibold uppercase tracking-wider text-amber-500 mb-3">
-          Character Locations · {groups.filter(g => g.location !== 'Unknown').length} known locations
+        <p className="text-xs font-medium text-zinc-600 uppercase tracking-wider mb-3">
+          Locations · {groups.filter(g => g.location !== 'Unknown').length} known
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           {groups.map(({ location, characters: chars }) => (
             <div
               key={location}
-              className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${
-                location === 'Unknown' ? 'border-stone-200 opacity-75' : 'border-amber-100'
+              className={`bg-zinc-900 rounded-xl border border-zinc-800 overflow-hidden ${
+                location === 'Unknown' ? 'opacity-50' : ''
               }`}
             >
-              {/* Location header */}
-              <div className={`px-4 py-3 border-b ${
-                location === 'Unknown' ? 'bg-stone-50 border-stone-100' : 'bg-amber-50 border-amber-100'
-              }`}>
-                <div className="flex items-center gap-2">
-                  <span className="text-base">{location === 'Unknown' ? '❓' : '📍'}</span>
-                  <h3 className="font-bold text-stone-800 text-sm leading-tight">{location}</h3>
-                  <span className="ml-auto text-xs text-stone-400">{chars.length}</span>
-                </div>
+              <div className="px-4 py-2.5 border-b border-zinc-800 bg-zinc-800/40 flex items-center gap-2">
+                <span className="text-xs text-zinc-600">{location === 'Unknown' ? '?' : '◎'}</span>
+                <h3 className="font-medium text-zinc-300 text-sm">{location}</h3>
+                <span className="ml-auto text-xs text-zinc-600">{chars.length}</span>
               </div>
 
-              {/* Characters at this location */}
-              <ul className="divide-y divide-stone-50">
+              <ul className="divide-y divide-zinc-800/50">
                 {chars.map((c) => (
                   <li key={c.name} className="px-4 py-2.5 flex items-center gap-3">
-                    {/* Avatar */}
-                    <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${nameColor(c.name)}`}>
+                    <div className={`flex-shrink-0 w-7 h-7 rounded-md flex items-center justify-center text-xs font-bold ${nameColor(c.name)}`}>
                       {initials(c.name)}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-stone-800 truncate">{c.name}</p>
-                      <p className="text-xs text-stone-400 truncate">{c.description.split('.')[0]}</p>
+                      <p className="text-sm font-medium text-zinc-300 truncate">{c.name}</p>
+                      <p className="text-xs text-zinc-600 truncate">{c.description.split('.')[0]}</p>
                     </div>
-                    {/* Status dot */}
-                    <span
-                      className={`flex-shrink-0 w-2 h-2 rounded-full ${STATUS_DOT[c.status]}`}
-                      title={c.status}
-                    />
+                    <span className={`flex-shrink-0 w-2 h-2 rounded-full ${STATUS_DOT[c.status]}`} title={c.status} />
                   </li>
                 ))}
               </ul>

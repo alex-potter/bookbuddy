@@ -31,8 +31,8 @@ export default function UploadZone({ onFile, parsing }: Props) {
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] gap-8">
       <div className="text-center">
-        <h1 className="text-4xl font-serif font-bold text-amber-900 mb-2">Chapter Companion</h1>
-        <p className="text-amber-700 text-lg">Track characters as you read — spoiler-free</p>
+        <h1 className="text-4xl font-bold text-zinc-100 tracking-tight mb-2">Chapter Companion</h1>
+        <p className="text-zinc-500">Track characters as you read — spoiler-free</p>
       </div>
 
       <label
@@ -44,24 +44,22 @@ export default function UploadZone({ onFile, parsing }: Props) {
           relative flex flex-col items-center justify-center w-80 h-52 rounded-2xl border-2 border-dashed
           cursor-pointer transition-all duration-200
           ${dragging
-            ? 'border-amber-500 bg-amber-50 scale-105'
-            : 'border-amber-300 bg-white hover:border-amber-400 hover:bg-amber-50'
+            ? 'border-amber-500 bg-amber-500/5'
+            : 'border-zinc-700 bg-zinc-900 hover:border-zinc-500 hover:bg-zinc-800/60'
           }
-          ${parsing ? 'pointer-events-none opacity-70' : ''}
+          ${parsing ? 'pointer-events-none opacity-50' : ''}
         `}
       >
         {parsing ? (
           <>
-            <div className="w-10 h-10 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mb-3" />
-            <p className="text-amber-700 font-medium">Parsing EPUB…</p>
+            <div className="w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full animate-spin mb-3" />
+            <p className="text-zinc-400 text-sm font-medium">Parsing EPUB…</p>
           </>
         ) : (
           <>
-            <span className="text-5xl mb-3">📖</span>
-            <p className="text-amber-800 font-semibold text-center px-4">
-              Drop your EPUB here
-            </p>
-            <p className="text-amber-500 text-sm mt-1">or click to browse</p>
+            <span className="text-4xl mb-3">📖</span>
+            <p className="text-zinc-300 font-semibold text-center px-4">Drop your EPUB here</p>
+            <p className="text-zinc-600 text-sm mt-1">or click to browse</p>
           </>
         )}
         <input
@@ -74,9 +72,9 @@ export default function UploadZone({ onFile, parsing }: Props) {
         />
       </label>
 
-      <div className="text-center text-sm text-amber-600 max-w-xs">
+      <div className="text-center text-sm text-zinc-600 max-w-xs">
         <p>Your book is processed entirely in your browser.</p>
-        <p className="mt-1">Only the text <em>you&apos;ve already read</em> is sent to Claude — no spoilers, ever.</p>
+        <p className="mt-1">Only the text <em className="text-zinc-500">you&apos;ve already read</em> is sent to the model — no spoilers, ever.</p>
       </div>
     </div>
   );

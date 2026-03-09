@@ -17,7 +17,6 @@ interface Props {
   lastAnalyzedIndex: number | null;
 }
 
-// 1 Kindle location ≈ 128 bytes of text
 const BYTES_PER_LOCATION = 128;
 
 function locationToChapterIndex(location: number, chapters: EbookChapter[]): number {
@@ -58,30 +57,26 @@ export default function ChapterSelector({
   function handleLocationChange(raw: string) {
     setLocationInput(raw);
     const loc = parseInt(raw, 10);
-    if (!isNaN(loc) && loc > 0) {
-      onChange(locationToChapterIndex(loc, chapters));
-    }
+    if (!isNaN(loc) && loc > 0) onChange(locationToChapterIndex(loc, chapters));
   }
 
   function handleModeSwitch(next: 'chapter' | 'location') {
     setMode(next);
-    if (next === 'location') {
-      setLocationInput(String(chapterIndexToLocation(currentIndex, chapters)));
-    }
+    if (next === 'location') setLocationInput(String(chapterIndexToLocation(currentIndex, chapters)));
   }
 
   return (
     <div className="flex flex-col h-full">
       {/* Mode toggle */}
-      <div className="flex rounded-xl overflow-hidden border border-amber-200 mb-4">
+      <div className="flex rounded-lg overflow-hidden border border-zinc-700 mb-4">
         {(['chapter', 'location'] as const).map((m) => (
           <button
             key={m}
             onClick={() => handleModeSwitch(m)}
-            className={`flex-1 py-1.5 text-xs font-semibold transition-colors ${
+            className={`flex-1 py-1.5 text-xs font-medium transition-colors ${
               mode === m
-                ? 'bg-amber-500 text-white'
-                : 'bg-white text-amber-600 hover:bg-amber-50'
+                ? 'bg-zinc-700 text-zinc-100'
+                : 'bg-transparent text-zinc-500 hover:text-zinc-300'
             }`}
           >
             {m === 'chapter' ? 'By Chapter' : 'Kindle Location'}
@@ -90,8 +85,8 @@ export default function ChapterSelector({
       </div>
 
       <div className="mb-4">
-        <label className="block text-xs font-semibold uppercase tracking-wider text-amber-600 mb-2">
-          I am currently at…
+        <label className="block text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">
+          Currently at
         </label>
 
         {mode === 'chapter' ? (
@@ -100,19 +95,17 @@ export default function ChapterSelector({
               <select
                 value={currentIndex}
                 onChange={(e) => onChange(Number(e.target.value))}
-                className="w-full appearance-none bg-white border border-amber-200 rounded-xl px-4 py-3 pr-10 text-amber-900 font-medium text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer"
+                className="w-full appearance-none bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 pr-8 text-zinc-200 text-sm focus:outline-none focus:border-zinc-500 cursor-pointer"
               >
                 {chapters.map((ch, i) => (
-                  <option key={ch.id} value={i}>
-                    {i + 1}. {ch.title}
-                  </option>
+                  <option key={ch.id} value={i}>{i + 1}. {ch.title}</option>
                 ))}
               </select>
-              <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-amber-400">
+              <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-zinc-500">
                 ▾
               </div>
             </div>
-            <p className="mt-2 text-xs text-amber-500">
+            <p className="mt-1.5 text-xs text-zinc-600">
               {currentIndex + 1} of {chapters.length} chapters
             </p>
           </>
@@ -125,14 +118,12 @@ export default function ChapterSelector({
               value={locationInput}
               onChange={(e) => handleLocationChange(e.target.value)}
               placeholder="e.g. 3421"
-              className="w-full bg-white border border-amber-200 rounded-xl px-4 py-3 text-amber-900 font-medium text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 text-zinc-200 text-sm focus:outline-none focus:border-zinc-500"
             />
-            <p className="mt-2 text-xs text-amber-500">
-              ≈ {chapters[currentIndex]?.title} · book total ~{totalLocations.toLocaleString()} loc
+            <p className="mt-1.5 text-xs text-zinc-600">
+              ≈ {chapters[currentIndex]?.title} · ~{totalLocations.toLocaleString()} total
             </p>
-            <p className="mt-1 text-xs text-amber-400">
-              Location numbers are approximate (±1 chapter)
-            </p>
+            <p className="mt-0.5 text-xs text-zinc-700">Approximate (±1 chapter)</p>
           </>
         )}
       </div>
@@ -141,29 +132,25 @@ export default function ChapterSelector({
       <button
         onClick={onAnalyze}
         disabled={busy}
-        className={`
-          w-full py-3 rounded-xl font-semibold text-sm transition-all duration-200
-          ${busy
-            ? 'bg-amber-200 text-amber-500 cursor-not-allowed'
-            : 'bg-amber-500 text-white hover:bg-amber-600 active:scale-95 shadow-md hover:shadow-lg'
-          }
-        `}
+        className={`w-full py-2.5 rounded-lg text-sm font-semibold transition-colors ${
+          busy
+            ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed'
+            : canIncrement
+            ? 'bg-amber-500 text-zinc-900 hover:bg-amber-400'
+            : 'bg-amber-500 text-zinc-900 hover:bg-amber-400'
+        }`}
       >
         {analyzing ? (
           <span className="flex items-center justify-center gap-2">
-            <span className="w-4 h-4 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+            <span className="w-3.5 h-3.5 border-2 border-zinc-600 border-t-transparent rounded-full animate-spin" />
             Analyzing…
           </span>
-        ) : canIncrement ? (
-          '⚡ Update Characters'
-        ) : (
-          '🔍 Analyze Characters'
-        )}
+        ) : canIncrement ? '⚡ Update Characters' : '⌖ Analyze Characters'}
       </button>
 
       {canIncrement && lastAnalyzedIndex !== null && !busy && (
-        <p className="mt-1.5 text-xs text-center text-amber-400">
-          Only reading ch.{lastAnalyzedIndex + 2}–{currentIndex + 1}
+        <p className="mt-1.5 text-xs text-center text-zinc-600">
+          Chapters {lastAnalyzedIndex + 2}–{currentIndex + 1} only
         </p>
       )}
 
@@ -172,11 +159,11 @@ export default function ChapterSelector({
         {rebuilding ? (
           <button
             onClick={onCancelRebuild}
-            className="w-full py-2 rounded-xl text-xs font-semibold border border-red-200 text-red-500 hover:bg-red-50 transition-colors"
+            className="w-full py-2 rounded-lg text-xs font-medium border border-red-800/50 text-red-500 hover:bg-red-950/30 transition-colors"
           >
             Cancel rebuild
             {rebuildProgress && (
-              <span className="ml-1 text-red-400">
+              <span className="ml-1 text-red-600">
                 ({rebuildProgress.current}/{rebuildProgress.total})
               </span>
             )}
@@ -185,30 +172,26 @@ export default function ChapterSelector({
           <button
             onClick={onRebuild}
             disabled={busy}
-            title="Analyze each chapter one-by-one for the most accurate character dataset"
-            className={`
-              w-full py-2 rounded-xl text-xs font-semibold border transition-colors
-              ${busy
-                ? 'border-stone-100 text-stone-300 cursor-not-allowed'
-                : 'border-violet-200 text-violet-500 hover:bg-violet-50'
-              }
-            `}
+            title="Analyze each chapter individually for the most accurate dataset"
+            className={`w-full py-2 rounded-lg text-xs font-medium border transition-colors ${
+              busy
+                ? 'border-zinc-800 text-zinc-700 cursor-not-allowed'
+                : 'border-zinc-700 text-zinc-500 hover:text-zinc-300 hover:border-zinc-600'
+            }`}
           >
-            🔄 Rebuild from scratch
+            Rebuild from scratch
           </button>
         )}
         {!busy && (
-          <p className="mt-1 text-xs text-center text-stone-400">
-            Analyzes ch.1–{currentIndex + 1} one by one
+          <p className="mt-1 text-xs text-center text-zinc-700">
+            Ch.1–{currentIndex + 1}, one by one
           </p>
         )}
       </div>
 
       {/* Chapter list */}
       <div className="mt-5 flex-1 overflow-y-auto">
-        <p className="text-xs font-semibold uppercase tracking-wider text-amber-500 mb-2">
-          Chapters
-        </p>
+        <p className="text-xs font-medium text-zinc-600 uppercase tracking-wider mb-2">Chapters</p>
         <ul className="space-y-0.5">
           {chapters.map((ch, i) => {
             const isRebuildingThis = rebuilding && rebuildProgress && i === rebuildProgress.current - 1;
@@ -217,27 +200,24 @@ export default function ChapterSelector({
                 <button
                   onClick={() => {
                     onChange(i);
-                    if (mode === 'location') {
-                      setLocationInput(String(chapterIndexToLocation(i, chapters)));
-                    }
+                    if (mode === 'location') setLocationInput(String(chapterIndexToLocation(i, chapters)));
                   }}
                   className={`
-                    w-full text-left px-3 py-2 rounded-lg text-sm transition-colors
+                    w-full text-left px-2.5 py-1.5 rounded-md text-xs transition-colors
                     ${isRebuildingThis
-                      ? 'bg-violet-100 text-violet-800 font-semibold'
+                      ? 'bg-violet-500/10 text-violet-400'
                       : i === currentIndex
-                      ? 'bg-amber-100 text-amber-900 font-semibold'
+                      ? 'bg-zinc-800 text-zinc-100 font-medium'
                       : lastAnalyzedIndex !== null && i <= lastAnalyzedIndex
-                      ? 'text-amber-700 hover:bg-amber-50'
+                      ? 'text-zinc-400 hover:bg-zinc-800/60'
                       : i < currentIndex
-                      ? 'text-amber-600 hover:bg-amber-50'
-                      : 'text-amber-300 cursor-default'
+                      ? 'text-zinc-500 hover:bg-zinc-800/60'
+                      : 'text-zinc-700 cursor-default'
                     }
                   `}
                   disabled={i > currentIndex}
-                  title={i > currentIndex ? "You haven't read this chapter yet" : ''}
                 >
-                  <span className="mr-2 text-xs">
+                  <span className="mr-1.5 text-[10px]">
                     {isRebuildingThis
                       ? '↻'
                       : lastAnalyzedIndex !== null && i < lastAnalyzedIndex
@@ -252,7 +232,7 @@ export default function ChapterSelector({
                   </span>
                   {ch.title}
                   {mode === 'location' && (
-                    <span className="ml-1 text-xs text-amber-400">
+                    <span className="ml-1 text-zinc-600">
                       ~{chapterIndexToLocation(i, chapters).toLocaleString()}
                     </span>
                   )}
