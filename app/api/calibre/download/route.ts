@@ -18,12 +18,12 @@ export async function GET(req: NextRequest) {
       ? `${serverUrl}/get/epub/${bookId}/${libraryId}`
       : `${serverUrl}/get/epub/${bookId}`;
 
-    const res = await fetch(downloadUrl, { signal: AbortSignal.timeout(30000) });
+    const res = await fetch(downloadUrl, { cache: 'no-store', signal: AbortSignal.timeout(30000) });
 
     if (!res.ok) {
       // Try without library_id as fallback
       if (libraryId) {
-        const fallback = await fetch(`${serverUrl}/get/epub/${bookId}`, { signal: AbortSignal.timeout(30000) });
+        const fallback = await fetch(`${serverUrl}/get/epub/${bookId}`, { cache: 'no-store', signal: AbortSignal.timeout(30000) });
         if (!fallback.ok) throw new Error(`Download failed: ${res.status}`);
         const body = fallback.body;
         if (!body) throw new Error('Empty response');
