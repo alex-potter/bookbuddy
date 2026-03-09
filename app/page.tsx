@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { parseEpub } from '@/lib/epub-parser';
 import type { AnalysisResult, Character, ParsedEbook } from '@/types';
+import CalibreLibrary from '@/components/CalibreLibrary';
 import CharacterCard from '@/components/CharacterCard';
 import ChapterSelector from '@/components/ChapterSelector';
 import LocationBoard from '@/components/LocationBoard';
@@ -98,6 +99,8 @@ export default function Home() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [analysisMode, setAnalysisMode] = useState<'full' | 'incremental' | null>(null);
+
+  const [uploadTab, setUploadTab] = useState<'file' | 'calibre'>('file');
 
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildProgress, setRebuildProgress] = useState<{ current: number; total: number } | null>(null);
@@ -265,9 +268,37 @@ export default function Home() {
 
   if (!book) {
     return (
-      <main className="min-h-screen p-6">
-        <UploadZone onFile={handleFile} parsing={parsing} />
-        {parseError && <p className="mt-4 text-center text-red-500 text-sm">{parseError}</p>}
+      <main className="min-h-screen flex flex-col">
+        {/* Tab bar */}
+        <div className="flex border-b border-zinc-800 px-6 pt-6 gap-1">
+          {([
+            { key: 'file', label: 'Upload EPUB' },
+            { key: 'calibre', label: 'Calibre Library' },
+          ] as const).map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setUploadTab(key)}
+              className={`px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 transition-colors -mb-px ${
+                uploadTab === key
+                  ? 'border-amber-500 text-amber-400'
+                  : 'border-transparent text-zinc-500 hover:text-zinc-300'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 p-6">
+          {uploadTab === 'file' ? (
+            <>
+              <UploadZone onFile={handleFile} parsing={parsing} />
+              {parseError && <p className="mt-4 text-center text-red-500 text-sm">{parseError}</p>}
+            </>
+          ) : (
+            <CalibreLibrary onFile={handleFile} />
+          )}
+        </div>
       </main>
     );
   }
