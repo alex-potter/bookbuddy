@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import type { AnalysisResult } from '@/types';
 
 export const maxDuration = 120; // seconds
 export const dynamic = 'force-dynamic';
 
 const anthropic = new Anthropic();
 
-// How many characters of book text we'll send (fits within most model context windows)
+// Max chars of new chapter text to send in incremental mode
+const MAX_NEW_CHARS = 120_000;
+// Max chars for full analysis (no prior state)
 const MAX_CHARS = 180_000;
-// When truncating, keep this much from the start (character introductions) and the rest from the tail (recent events)
 const HEAD_CHARS = 50_000;
 
 const SYSTEM_PROMPT = `You are a literary companion that helps readers keep track of characters in the book they are currently reading. Your most important rule is NEVER SPOILING anything beyond what appears in the text provided.
@@ -23,21 +25,7 @@ STRICT ANTI-SPOILER RULES (follow these without exception):
 
 Your output must be valid JSON and nothing else.`;
 
-function buildUserPrompt(
-  bookTitle: string,
-  bookAuthor: string,
-  currentChapterTitle: string,
-  truncated: string,
-): string {
-  return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${currentChapterTitle}".
-
-Below is everything I have read so far. Please analyze it and return a JSON object tracking the characters and story state as I understand them RIGHT NOW — no more, no less.
-
-TEXT I HAVE READ:
-${truncated}
-
-Return ONLY a JSON object matching this exact schema (no markdown fences, no explanation):
-{
+const SCHEMA = `{
   "characters": [
     {
       "name": "Full character name",
@@ -55,6 +43,51 @@ Return ONLY a JSON object matching this exact schema (no markdown fences, no exp
   ],
   "summary": "2–3 sentence summary of where the story stands as of the current chapter, from the reader's perspective"
 }`;
+
+function buildFullPrompt(
+  bookTitle: string,
+  bookAuthor: string,
+  currentChapterTitle: string,
+  text: string,
+): string {
+  return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${currentChapterTitle}".
+
+Below is everything I have read so far. Please analyze it and return a JSON object tracking the characters and story state as I understand them RIGHT NOW — no more, no less.
+
+TEXT I HAVE READ:
+${text}
+
+Return ONLY a JSON object matching this exact schema (no markdown fences, no explanation):
+${SCHEMA}`;
+}
+
+function buildUpdatePrompt(
+  bookTitle: string,
+  bookAuthor: string,
+  currentChapterTitle: string,
+  previousResult: AnalysisResult,
+  newChaptersText: string,
+): string {
+  return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${currentChapterTitle}".
+
+Here is my existing character tracking state from when I last analyzed earlier chapters:
+${JSON.stringify(previousResult, null, 2)}
+
+Below are the NEW chapters I have read since then. Please UPDATE the character tracking state based only on what is revealed in these new chapters.
+
+Rules for updating:
+- Keep ALL existing characters — do not drop anyone even if they don't appear in the new chapters
+- Update status, currentLocation, recentEvents, relationships only if new chapters reveal changes
+- Add any brand new characters introduced in these chapters
+- Update the summary to reflect the story as of the current chapter
+- Do NOT use any knowledge of this book beyond what is in the text below
+
+NEW CHAPTERS:
+${newChaptersText}
+
+Return ONLY the complete updated JSON object (same schema, no markdown fences, no explanation):
+${SCHEMA}`;
+}
 }
 
 // --- Anthropic provider ---
@@ -101,29 +134,43 @@ async function callLocal(system: string, userPrompt: string): Promise<string> {
 
 export async function POST(req: NextRequest) {
   try {
-    const { chaptersRead, currentChapterTitle, bookTitle, bookAuthor } = await req.json() as {
-      chaptersRead: Array<{ title: string; text: string }>;
-      currentChapterTitle: string;
-      bookTitle: string;
-      bookAuthor: string;
-    };
+    const { chaptersRead, newChapters, currentChapterTitle, bookTitle, bookAuthor, previousResult } =
+      await req.json() as {
+        chaptersRead?: Array<{ title: string; text: string }>;
+        newChapters?: Array<{ title: string; text: string }>;
+        currentChapterTitle: string;
+        bookTitle: string;
+        bookAuthor: string;
+        previousResult?: AnalysisResult;
+      };
 
-    if (!chaptersRead?.length) {
-      return NextResponse.json({ error: 'No chapter text provided.' }, { status: 400 });
+    let userPrompt: string;
+
+    if (previousResult && newChapters?.length) {
+      // Incremental mode: only send new chapters + existing state
+      const newText = newChapters
+        .map((ch) => `=== ${ch.title} ===\n\n${ch.text}`)
+        .join('\n\n---\n\n');
+      const truncatedNew = newText.length > MAX_NEW_CHARS
+        ? newText.slice(-MAX_NEW_CHARS)
+        : newText;
+      userPrompt = buildUpdatePrompt(bookTitle, bookAuthor, currentChapterTitle, previousResult, truncatedNew);
+    } else {
+      // Full analysis mode
+      if (!chaptersRead?.length) {
+        return NextResponse.json({ error: 'No chapter text provided.' }, { status: 400 });
+      }
+      const fullText = chaptersRead
+        .map((ch) => `=== ${ch.title} ===\n\n${ch.text}`)
+        .join('\n\n---\n\n');
+      const truncated = (() => {
+        if (fullText.length <= MAX_CHARS) return fullText;
+        const head = fullText.slice(0, HEAD_CHARS);
+        const tail = fullText.slice(-(MAX_CHARS - HEAD_CHARS));
+        return `${head}\n\n[... middle chapters omitted to fit context ...]\n\n${tail}`;
+      })();
+      userPrompt = buildFullPrompt(bookTitle, bookAuthor, currentChapterTitle, truncated);
     }
-
-    const fullText = chaptersRead
-      .map((ch) => `=== ${ch.title} ===\n\n${ch.text}`)
-      .join('\n\n---\n\n');
-
-    const truncated = (() => {
-      if (fullText.length <= MAX_CHARS) return fullText;
-      const head = fullText.slice(0, HEAD_CHARS);
-      const tail = fullText.slice(-(MAX_CHARS - HEAD_CHARS));
-      return `${head}\n\n[... middle chapters omitted to fit context ...]\n\n${tail}`;
-    })();
-
-    const userPrompt = buildUserPrompt(bookTitle, bookAuthor, currentChapterTitle, truncated);
 
     const useLocal = process.env.USE_LOCAL_MODEL === 'true';
     const raw = useLocal

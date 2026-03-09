@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { parseEpub } from '@/lib/epub-parser';
 import type { AnalysisResult, Character, ParsedEbook } from '@/types';
 import CharacterCard from '@/components/CharacterCard';
@@ -17,6 +17,32 @@ const IMPORTANCE_ORDER: Record<Character['importance'], number> = {
   minor: 2,
 };
 
+interface StoredBookState {
+  lastAnalyzedIndex: number;
+  result: AnalysisResult;
+}
+
+function storageKey(title: string, author: string) {
+  return `ebook-tracker::${title}::${author}`;
+}
+
+function loadStored(title: string, author: string): StoredBookState | null {
+  try {
+    const raw = localStorage.getItem(storageKey(title, author));
+    return raw ? (JSON.parse(raw) as StoredBookState) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStored(title: string, author: string, state: StoredBookState) {
+  try {
+    localStorage.setItem(storageKey(title, author), JSON.stringify(state));
+  } catch {
+    // storage full or unavailable — silently ignore
+  }
+}
+
 export default function Home() {
   const [book, setBook] = useState<ParsedEbook | null>(null);
   const [parsing, setParsing] = useState(false);
@@ -26,21 +52,33 @@ export default function Home() {
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+  const [analysisMode, setAnalysisMode] = useState<'full' | 'incremental' | null>(null);
 
   const [tab, setTab] = useState<MainTab>('characters');
   const [sortKey, setSortKey] = useState<SortKey>('importance');
   const [filter, setFilter] = useState<Character['importance'] | 'all'>('all');
   const [search, setSearch] = useState('');
 
+  // Tracks stored state for the currently loaded book
+  const storedRef = useRef<StoredBookState | null>(null);
+
   const handleFile = useCallback(async (file: File) => {
     setParsing(true);
     setParseError(null);
     setBook(null);
     setResult(null);
+    storedRef.current = null;
     try {
       const parsed = await parseEpub(file);
       setBook(parsed);
       setCurrentIndex(0);
+      // Load any previously saved state for this book
+      const stored = loadStored(parsed.title, parsed.author);
+      storedRef.current = stored;
+      if (stored) {
+        setResult(stored.result);
+        setCurrentIndex(stored.lastAnalyzedIndex);
+      }
     } catch (err) {
       setParseError(err instanceof Error ? err.message : 'Failed to parse EPUB.');
     } finally {
@@ -52,26 +90,57 @@ export default function Home() {
     if (!book) return;
     setAnalyzing(true);
     setAnalyzeError(null);
-    try {
-      const chaptersRead = book.chapters.slice(0, currentIndex + 1).map((ch) => ({
-        title: ch.title,
-        text: ch.text,
-      }));
+    setAnalysisMode(null);
 
-      const res = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+    try {
+      const stored = storedRef.current;
+      const canIncrement = stored && currentIndex > stored.lastAnalyzedIndex;
+
+      let body: Record<string, unknown>;
+
+      if (canIncrement) {
+        // Incremental: send only new chapters + stored state
+        const newChapters = book.chapters
+          .slice(stored.lastAnalyzedIndex + 1, currentIndex + 1)
+          .map((ch) => ({ title: ch.title, text: ch.text }));
+        body = {
+          newChapters,
+          previousResult: stored.result,
+          currentChapterTitle: book.chapters[currentIndex].title,
+          bookTitle: book.title,
+          bookAuthor: book.author,
+        };
+        setAnalysisMode('incremental');
+      } else {
+        // Full analysis: send everything up to current chapter
+        const chaptersRead = book.chapters
+          .slice(0, currentIndex + 1)
+          .map((ch) => ({ title: ch.title, text: ch.text }));
+        body = {
           chaptersRead,
           currentChapterTitle: book.chapters[currentIndex].title,
           bookTitle: book.title,
           bookAuthor: book.author,
-        }),
+        };
+        setAnalysisMode('full');
+      }
+
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
       });
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Analysis failed.');
-      setResult(data as AnalysisResult);
+
+      const newResult = data as AnalysisResult;
+      setResult(newResult);
+
+      // Save to localStorage
+      const newStored: StoredBookState = { lastAnalyzedIndex: currentIndex, result: newResult };
+      storedRef.current = newStored;
+      saveStored(book.title, book.author, newStored);
     } catch (err) {
       setAnalyzeError(err instanceof Error ? err.message : 'Analysis failed.');
     } finally {
@@ -104,6 +173,10 @@ export default function Home() {
     );
   }
 
+  const stored = storedRef.current;
+  const hasStoredState = !!stored;
+  const canIncrement = stored && currentIndex > stored.lastAnalyzedIndex;
+
   return (
     <main className="min-h-screen flex flex-col">
       {/* Top bar */}
@@ -115,12 +188,19 @@ export default function Home() {
             <p className="text-xs text-amber-600">{book.author}</p>
           </div>
         </div>
-        <button
-          onClick={() => { setBook(null); setResult(null); }}
-          className="text-xs text-amber-500 hover:text-amber-700 underline underline-offset-2"
-        >
-          Load different book
-        </button>
+        <div className="flex items-center gap-3">
+          {hasStoredState && (
+            <span className="text-xs text-amber-400">
+              Progress saved · last analyzed ch.{(stored.lastAnalyzedIndex + 1)}
+            </span>
+          )}
+          <button
+            onClick={() => { setBook(null); setResult(null); storedRef.current = null; }}
+            className="text-xs text-amber-500 hover:text-amber-700 underline underline-offset-2"
+          >
+            Load different book
+          </button>
+        </div>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
@@ -129,9 +209,11 @@ export default function Home() {
           <ChapterSelector
             chapters={book.chapters}
             currentIndex={currentIndex}
-            onChange={(i) => { setCurrentIndex(i); setResult(null); }}
+            onChange={(i) => { setCurrentIndex(i); }}
             onAnalyze={handleAnalyze}
             analyzing={analyzing}
+            canIncrement={!!canIncrement}
+            lastAnalyzedIndex={stored?.lastAnalyzedIndex ?? null}
           />
           {analyzeError && (
             <p className="mt-3 text-xs text-red-500 text-center">{analyzeError}</p>
@@ -156,9 +238,16 @@ export default function Home() {
             <div className="flex flex-col items-center justify-center h-full gap-4">
               <div className="w-14 h-14 border-4 border-amber-400 border-t-transparent rounded-full animate-spin" />
               <p className="text-amber-700 font-medium">
-                Reading up to <em>{book.chapters[currentIndex]?.title}</em>…
+                {analysisMode === 'incremental'
+                  ? <>Updating from <em>{book.chapters[stored!.lastAnalyzedIndex]?.title}</em> to <em>{book.chapters[currentIndex]?.title}</em>…</>
+                  : <>Reading up to <em>{book.chapters[currentIndex]?.title}</em>…</>
+                }
               </p>
-              <p className="text-sm text-amber-400">Extracting characters without spoilers</p>
+              <p className="text-sm text-amber-400">
+                {analysisMode === 'incremental'
+                  ? 'Only reading new chapters — all previous characters preserved'
+                  : 'Extracting characters without spoilers'}
+              </p>
             </div>
           )}
 

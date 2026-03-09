@@ -9,6 +9,8 @@ interface Props {
   onChange: (index: number) => void;
   onAnalyze: () => void;
   analyzing: boolean;
+  canIncrement: boolean;
+  lastAnalyzedIndex: number | null;
 }
 
 // 1 Kindle location ≈ 128 bytes of text
@@ -36,6 +38,8 @@ export default function ChapterSelector({
   onChange,
   onAnalyze,
   analyzing,
+  canIncrement,
+  lastAnalyzedIndex,
 }: Props) {
   const [mode, setMode] = useState<'chapter' | 'location'>('chapter');
   const [locationInput, setLocationInput] = useState('');
@@ -140,10 +144,18 @@ export default function ChapterSelector({
             <span className="w-4 h-4 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
             Analyzing…
           </span>
+        ) : canIncrement ? (
+          '⚡ Update Characters'
         ) : (
           '🔍 Analyze Characters'
         )}
       </button>
+
+      {canIncrement && lastAnalyzedIndex !== null && (
+        <p className="mt-2 text-xs text-center text-amber-400">
+          Only reading chapters {lastAnalyzedIndex + 2}–{currentIndex + 1}
+        </p>
+      )}
 
       {/* Chapter list */}
       <div className="mt-5 flex-1 overflow-y-auto">
@@ -164,8 +176,10 @@ export default function ChapterSelector({
                   w-full text-left px-3 py-2 rounded-lg text-sm transition-colors
                   ${i === currentIndex
                     ? 'bg-amber-100 text-amber-900 font-semibold'
-                    : i < currentIndex
+                    : lastAnalyzedIndex !== null && i <= lastAnalyzedIndex
                     ? 'text-amber-700 hover:bg-amber-50'
+                    : i < currentIndex
+                    ? 'text-amber-600 hover:bg-amber-50'
                     : 'text-amber-300 cursor-default'
                   }
                 `}
@@ -173,7 +187,15 @@ export default function ChapterSelector({
                 title={i > currentIndex ? "You haven't read this chapter yet" : ''}
               >
                 <span className="mr-2 text-xs">
-                  {i < currentIndex ? '✓' : i === currentIndex ? '▸' : '○'}
+                  {lastAnalyzedIndex !== null && i < lastAnalyzedIndex
+                    ? '✓'
+                    : lastAnalyzedIndex !== null && i === lastAnalyzedIndex
+                    ? '★'
+                    : i === currentIndex
+                    ? '▸'
+                    : i < currentIndex
+                    ? '·'
+                    : '○'}
                 </span>
                 {ch.title}
                 {mode === 'location' && (
