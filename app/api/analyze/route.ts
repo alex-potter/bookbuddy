@@ -46,6 +46,12 @@ const SCHEMA = `{
       "recentEvents": "Key things that have happened to or involving this character in the most recent chapters read"
     }
   ],
+  "locations": [
+    {
+      "name": "Location name (must match a currentLocation value used above)",
+      "description": "1–2 sentence description of this place — what kind of place it is, its significance, atmosphere, or notable features as established in the text"
+    }
+  ],
   "summary": "2–3 sentence summary of where the story stands as of the current chapter, from the reader's perspective"
 }`;
 
@@ -73,7 +79,7 @@ function compactCharacterList(chars: AnalysisResult['characters']): string {
     .join('\n');
 }
 
-// Delta schema — only new/changed characters
+// Delta schema — only new/changed characters and locations
 const DELTA_SCHEMA = `{
   "updatedCharacters": [
     {
@@ -88,6 +94,12 @@ const DELTA_SCHEMA = `{
         { "character": "Other character's name", "relationship": "How they relate" }
       ],
       "recentEvents": "Key things that happened in the NEW chapter only"
+    }
+  ],
+  "updatedLocations": [
+    {
+      "name": "Location name",
+      "description": "1–2 sentence description of this place as revealed so far"
     }
   ],
   "summary": "2–3 sentence summary of where the story stands as of the current chapter"
@@ -114,17 +126,18 @@ INSTRUCTIONS — RETURN ONLY CHANGES, NOT THE FULL LIST:
 2. For each character who APPEARS in the new chapter: include them in "updatedCharacters" with updated fields (status, currentLocation, recentEvents, lastSeen). Keep description/relationships from existing state unless the chapter changes them.
 3. For any BRAND NEW named character introduced in this chapter: include them in "updatedCharacters" with all fields filled in.
 4. Do NOT include characters from the existing list who do not appear in the new chapter.
-5. Update the summary to reflect the story as of the current chapter.
-6. Do NOT use any knowledge of this book beyond what is listed above and the new chapter text.
+5. For any location that appears or is described in this chapter: include it in "updatedLocations" with a 1–2 sentence description. Only include locations with meaningful descriptions; omit vague or unnamed places.
+6. Update the summary to reflect the story as of the current chapter.
+7. Do NOT use any knowledge of this book beyond what is listed above and the new chapter text.
 
-Return ONLY a JSON object with "updatedCharacters" and "summary" (no markdown fences, no explanation):
+Return ONLY a JSON object with "updatedCharacters", "updatedLocations", and "summary" (no markdown fences, no explanation):
 ${DELTA_SCHEMA}`;
 }
 
 // Merge a delta result into the previous full result
 function mergeDelta(
   previous: AnalysisResult,
-  delta: { updatedCharacters?: AnalysisResult['characters']; summary?: string },
+  delta: { updatedCharacters?: AnalysisResult['characters']; updatedLocations?: AnalysisResult['locations']; summary?: string },
 ): AnalysisResult {
   const merged = previous.characters.map((c) => ({ ...c }));
   for (const updated of delta.updatedCharacters ?? []) {
@@ -135,7 +148,23 @@ function mergeDelta(
       merged.push(updated);
     }
   }
-  return { characters: merged, summary: delta.summary ?? previous.summary };
+
+  const prevLocations = previous.locations ?? [];
+  const mergedLocations = [...prevLocations];
+  for (const updated of delta.updatedLocations ?? []) {
+    const idx = mergedLocations.findIndex((l) => l.name.toLowerCase() === updated.name.toLowerCase());
+    if (idx >= 0) {
+      mergedLocations[idx] = { ...mergedLocations[idx], ...updated };
+    } else {
+      mergedLocations.push(updated);
+    }
+  }
+
+  return {
+    characters: merged,
+    locations: mergedLocations.length > 0 ? mergedLocations : undefined,
+    summary: delta.summary ?? previous.summary,
+  };
 }
 
 /** Extract complete JSON objects from an array field that may be truncated. */

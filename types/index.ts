@@ -31,8 +31,14 @@ export interface Character {
   recentEvents: string;
 }
 
+export interface LocationInfo {
+  name: string;
+  description: string;  // 1–2 sentence description of the place
+}
+
 export interface AnalysisResult {
   characters: Character[];
+  locations?: LocationInfo[];
   summary: string;
 }
 

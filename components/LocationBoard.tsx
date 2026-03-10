@@ -1,11 +1,12 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import type { Character } from '@/types';
+import type { Character, LocationInfo } from '@/types';
 
 interface LocationGroup {
   location: string;
   characters: Character[];
+  description?: string;
 }
 
 const STATUS_DOT: Record<Character['status'], string> = {
@@ -37,16 +38,19 @@ function nameColor(name: string): string {
 
 interface Props {
   characters: Character[];
+  locations?: LocationInfo[];
   bookTitle?: string;
 }
 
-export default function LocationBoard({ characters, bookTitle }: Props) {
+export default function LocationBoard({ characters, locations, bookTitle }: Props) {
   const [mapImage, setMapImage] = useState<string | null>(null);
   const [mapLabel, setMapLabel] = useState('');
   const [dragging, setDragging] = useState(false);
   const [urlInput, setUrlInput] = useState('');
   const [showUrlInput, setShowUrlInput] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const locationDescMap = new Map((locations ?? []).map((l) => [l.name.toLowerCase(), l.description]));
 
   const groups: LocationGroup[] = [];
   const seen = new Map<string, Character[]>();
@@ -55,7 +59,10 @@ export default function LocationBoard({ characters, bookTitle }: Props) {
     if (!seen.has(loc)) seen.set(loc, []);
     seen.get(loc)!.push(c);
   }
-  for (const [loc, chars] of seen.entries()) groups.push({ location: loc, characters: chars });
+  for (const [loc, chars] of seen.entries()) {
+    const description = locationDescMap.get(loc.toLowerCase());
+    groups.push({ location: loc, characters: chars, description });
+  }
   groups.sort((a, b) => {
     if (a.location === 'Unknown') return 1;
     if (b.location === 'Unknown') return -1;
@@ -202,17 +209,22 @@ export default function LocationBoard({ characters, bookTitle }: Props) {
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {groups.map(({ location, characters: chars }) => (
+          {groups.map(({ location, characters: chars, description }) => (
             <div
               key={location}
               className={`bg-zinc-900 rounded-xl border border-zinc-800 overflow-hidden ${
                 location === 'Unknown' ? 'opacity-50' : ''
               }`}
             >
-              <div className="px-4 py-2.5 border-b border-zinc-800 bg-zinc-800/40 flex items-center gap-2">
-                <span className="text-xs text-zinc-600">{location === 'Unknown' ? '?' : '◎'}</span>
-                <h3 className="font-medium text-zinc-300 text-sm">{location}</h3>
-                <span className="ml-auto text-xs text-zinc-600">{chars.length}</span>
+              <div className="px-4 py-2.5 border-b border-zinc-800 bg-zinc-800/40">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-zinc-600">{location === 'Unknown' ? '?' : '◎'}</span>
+                  <h3 className="font-medium text-zinc-300 text-sm">{location}</h3>
+                  <span className="ml-auto text-xs text-zinc-600">{chars.length}</span>
+                </div>
+                {description && (
+                  <p className="mt-1.5 text-xs text-zinc-500 leading-relaxed">{description}</p>
+                )}
               </div>
 
               <ul className="divide-y divide-zinc-800/50">
