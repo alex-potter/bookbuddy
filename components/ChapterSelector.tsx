@@ -18,6 +18,8 @@ interface Props {
   snapshotIndices?: Set<number>;
   excludedBooks?: Set<number>;
   onToggleBook?: (bookIndex: number) => void;
+  excludedChapters?: Set<number>;
+  onToggleChapter?: (chapterIndex: number) => void;
   metaOnly?: boolean;
 }
 
@@ -52,11 +54,12 @@ interface ChapterItemProps {
   chapters: EbookChapter[];
   onChange: (index: number) => void;
   setLocationInput: (v: string) => void;
+  onToggleChapter?: (index: number) => void;
 }
 
 function ChapterItem({
   ch, globalIndex, currentIndex, lastAnalyzedIndex, snapshotIndices,
-  isExcluded, rebuilding, rebuildProgress, mode, chapters, onChange, setLocationInput,
+  isExcluded, rebuilding, rebuildProgress, mode, chapters, onChange, setLocationInput, onToggleChapter,
 }: ChapterItemProps) {
   const isRebuildingThis = rebuilding && rebuildProgress && globalIndex === rebuildProgress.current - 1;
   const hasSnapshot = snapshotIndices?.has(globalIndex) ?? false;
@@ -84,28 +87,43 @@ function ChapterItem({
     : 'text-zinc-700 cursor-default';
 
   return (
-    <button
-      onClick={() => {
-        onChange(globalIndex);
-        if (mode === 'location') setLocationInput(String(chapterIndexToLocation(globalIndex, chapters)));
-      }}
-      disabled={globalIndex > frontier || isExcluded}
-      title={hasSnapshot ? 'Snapshot saved' : undefined}
-      className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs transition-colors ${color}`}
-    >
-      <span className="mr-1.5 text-[10px]">{marker}</span>
-      {ch.title}
-      {mode === 'location' && (
-        <span className="ml-1 text-zinc-600">~{chapterIndexToLocation(globalIndex, chapters).toLocaleString()}</span>
+    <div className="flex items-center group">
+      <button
+        onClick={() => {
+          onChange(globalIndex);
+          if (mode === 'location') setLocationInput(String(chapterIndexToLocation(globalIndex, chapters)));
+        }}
+        disabled={globalIndex > frontier || isExcluded}
+        title={hasSnapshot ? 'Snapshot saved' : undefined}
+        className={`flex-1 text-left px-2.5 py-1.5 rounded-md text-xs transition-colors ${color}`}
+      >
+        <span className="mr-1.5 text-[10px]">{marker}</span>
+        {ch.title}
+        {mode === 'location' && (
+          <span className="ml-1 text-zinc-600">~{chapterIndexToLocation(globalIndex, chapters).toLocaleString()}</span>
+        )}
+      </button>
+      {onToggleChapter && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleChapter(globalIndex); }}
+          title={isExcluded ? 'Include in analysis' : 'Exclude from analysis'}
+          className={`flex-shrink-0 ml-1 w-4 h-4 flex items-center justify-center rounded text-[9px] opacity-0 group-hover:opacity-100 transition-opacity ${
+            isExcluded
+              ? 'text-zinc-500 hover:text-zinc-300 opacity-100'
+              : 'text-zinc-700 hover:text-red-500/70'
+          }`}
+        >
+          {isExcluded ? '↩' : '✕'}
+        </button>
       )}
-    </button>
+    </div>
   );
 }
 
 export default function ChapterSelector({
   chapters, currentIndex, onChange, onAnalyze, onCancelAnalyze, onRebuild, onCancelRebuild,
   analyzing, rebuilding, rebuildProgress, lastAnalyzedIndex,
-  snapshotIndices, excludedBooks, onToggleBook, metaOnly,
+  snapshotIndices, excludedBooks, onToggleBook, excludedChapters, onToggleChapter, metaOnly,
 }: Props) {
   const [mode, setMode] = useState<'chapter' | 'location'>('chapter');
   const [locationInput, setLocationInput] = useState('');
@@ -161,7 +179,7 @@ export default function ChapterSelector({
     if (next === 'location') setLocationInput(String(chapterIndexToLocation(currentIndex, chapters)));
   }
 
-  const itemProps = { currentIndex, lastAnalyzedIndex, snapshotIndices, rebuilding, rebuildProgress, mode, chapters, onChange, setLocationInput };
+  const itemProps = { currentIndex, lastAnalyzedIndex, snapshotIndices, rebuilding, rebuildProgress, mode, chapters, onChange, setLocationInput, onToggleChapter };
 
   return (
     <div className="flex flex-col h-full">
@@ -335,7 +353,7 @@ export default function ChapterSelector({
                   {isExpanded && (
                     <ul className="mt-0.5 ml-2 space-y-0.5 border-l border-zinc-800 pl-2">
                       {items.map(({ ch, globalIndex }) => (
-                        <ChapterItem key={ch.id} ch={ch} globalIndex={globalIndex} isExcluded={isExcluded} {...itemProps} />
+                        <ChapterItem key={ch.id} ch={ch} globalIndex={globalIndex} isExcluded={isExcluded || (excludedChapters?.has(globalIndex) ?? false)} {...itemProps} />
                       ))}
                     </ul>
                   )}
@@ -347,7 +365,7 @@ export default function ChapterSelector({
           /* Flat list for non-omnibus */
           <ul className="space-y-0.5">
             {chapters.map((ch, i) => (
-              <ChapterItem key={ch.id} ch={ch} globalIndex={i} isExcluded={false} {...itemProps} />
+              <ChapterItem key={ch.id} ch={ch} globalIndex={i} isExcluded={excludedChapters?.has(i) ?? false} {...itemProps} />
             ))}
           </ul>
         )}
