@@ -344,11 +344,14 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
     return { n, primaryColor, r, labelX, labelY, labelAnchor, labelBaseline };
   });
 
+  // Grid as a CSS background so it covers the full container, not just the SVG viewBox
+  const gridBg = `url("data:image/svg+xml,%3Csvg width='30' height='30' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M 30 0 L 0 0 0 30' fill='none' stroke='%2327272a' stroke-width='0.5'/%3E%3C/svg%3E")`;
+
   return (
-    <div className="relative w-full h-full">
+    <div className="relative w-full h-full bg-zinc-950" style={{ backgroundImage: gridBg }}>
       {/* Spinner shown while physics settles */}
       {!settled && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-zinc-900">
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2">
           <div className="w-5 h-5 rounded-full border-2 border-zinc-700 border-t-zinc-400 animate-spin" />
           <p className="text-[10px] text-zinc-600">Laying out map…</p>
         </div>
@@ -359,17 +362,11 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
         style={{ height: '100%', display: 'block', opacity: settled ? 1 : 0, transition: 'opacity 0.4s ease' }}
       >
       <defs>
-        <pattern id="sm-grid" width="30" height="30" patternUnits="userSpaceOnUse">
-          <path d="M 30 0 L 0 0 0 30" fill="none" stroke="#27272a" strokeWidth="0.5" />
-        </pattern>
         <filter id="sm-glow" x="-50%" y="-50%" width="200%" height="200%">
           <feGaussianBlur stdDeviation="2.5" result="blur" />
           <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
         </filter>
       </defs>
-
-      <rect width={W} height={H} fill="#09090b" />
-      <rect width={W} height={H} fill="url(#sm-grid)" />
 
       {/* Transit lines */}
       <g>
