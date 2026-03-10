@@ -301,7 +301,7 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
   return (
     <div className="flex gap-4 h-full min-h-0">
       {/* Map area */}
-      <div className="flex-1 min-w-0 flex flex-col gap-2">
+      <div className="flex-1 min-w-0 flex flex-col gap-2 min-h-0">
         {/* Toolbar */}
         <div className="flex items-center gap-3 flex-shrink-0">
           <p className="text-xs text-zinc-600">
@@ -362,10 +362,11 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
         )}
 
         {/* Map + pins */}
+        <div className="flex-1 min-h-0 overflow-y-auto rounded-xl">
         <div
           ref={mapRef}
           onClick={handleMapClick}
-          className={`relative rounded-xl border border-zinc-800 overflow-hidden select-none ${placingLocation ? 'cursor-crosshair' : 'cursor-default'}`}
+          className={`relative border border-zinc-800 overflow-hidden select-none ${placingLocation ? 'cursor-crosshair' : 'cursor-default'}`}
         >
           <img src={mapState.imageDataUrl} alt="Map" className="w-full block" draggable={false} />
 
@@ -467,6 +468,7 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
               </div>
             </div>
           ))}
+        </div>
         </div>
       </div>
 
