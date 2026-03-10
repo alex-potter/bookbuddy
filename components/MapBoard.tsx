@@ -78,14 +78,40 @@ function buildLocationMap(characters: Character[]): Map<string, Character[]> {
   return new Map([...result.entries()].sort((a, b) => b[1].length - a[1].length));
 }
 
-function clusterOffsets(count: number): { dx: number; dy: number }[] {
+const BUBBLE_PX = 28; // w-7 = 28px diameter
+const BUBBLE_GAP = 2; // px between bubble edges
+const BUBBLE_STEP = BUBBLE_PX + BUBBLE_GAP;
+
+/** Return cluster positions (as % of map) for `count` bubbles centred on (cx%, cy%).
+ *  Uses a tight row-grid in pixel space so bubbles never overlap regardless of aspect ratio. */
+function clusterPositions(
+  count: number,
+  cx: number,
+  cy: number,
+  mapW: number,
+  mapH: number,
+): { x: number; y: number }[] {
   if (count === 0) return [];
-  if (count === 1) return [{ dx: 0, dy: 0 }];
-  const radius = Math.min(2.5 + count * 0.4, 6);
-  return Array.from({ length: count }, (_, i) => {
-    const angle = (i / count) * 2 * Math.PI - Math.PI / 2;
-    return { dx: Math.cos(angle) * radius, dy: Math.sin(angle) * radius * 1.4 };
-  });
+  if (count === 1) return [{ x: cx, y: cy }];
+
+  const cols = Math.ceil(Math.sqrt(count));
+  const rows = Math.ceil(count / cols);
+  const positions: { x: number; y: number }[] = [];
+
+  let idx = 0;
+  for (let row = 0; row < rows && idx < count; row++) {
+    const inRow = Math.min(cols, count - row * cols);
+    for (let col = 0; col < inRow; col++) {
+      const dxPx = (col - (inRow - 1) / 2) * BUBBLE_STEP;
+      const dyPx = (row - (rows - 1) / 2) * BUBBLE_STEP;
+      positions.push({
+        x: Math.max(1, Math.min(99, cx + (dxPx / mapW) * 100)),
+        y: Math.max(1, Math.min(99, cy + (dyPx / mapH) * 100)),
+      });
+      idx++;
+    }
+  }
+  return positions;
 }
 
 function charImportanceColor(importance: Character['importance']): string {
@@ -496,16 +522,19 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
               snapshot changes and CSS transitions animate position smoothly */}
           {charMode && (() => {
             // Build flat list: { char, location, px, py } for every character at a pinned location
+            const mapRect = mapRef.current?.getBoundingClientRect();
+            const mapW = mapRect?.width ?? 800;
+            const mapH = mapRect?.height ?? 600;
             const charPins: { char: Character; location: string; px: number; py: number }[] = [];
             for (const [location, { x, y }] of Object.entries(pins)) {
               const chars = locationMap.get(location) ?? [];
               if (chars.length === 0) continue;
-              const offsets = clusterOffsets(chars.length);
+              const positions = clusterPositions(chars.length, x, y, mapW, mapH);
               chars.forEach((char, i) => charPins.push({
                 char,
                 location,
-                px: Math.max(1, Math.min(99, x + offsets[i].dx)),
-                py: Math.max(1, Math.min(99, y + offsets[i].dy)),
+                px: positions[i].x,
+                py: positions[i].y,
               }));
             }
             return (
