@@ -39,15 +39,37 @@ function initials(name: string): string {
   return name.split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? '').join('');
 }
 
+/** Normalise a location name for deduplication comparison. */
+function normalizeLocation(loc: string): string {
+  return loc.toLowerCase().replace(/^the\s+/, '').split(',')[0].trim();
+}
+
 function buildLocationMap(characters: Character[]): Map<string, Character[]> {
-  const map = new Map<string, Character[]>();
+  // Collect characters per raw location string
+  const raw = new Map<string, Character[]>();
   for (const ch of characters) {
     const loc = ch.currentLocation?.trim();
     if (!loc || loc === 'Unknown') continue;
-    if (!map.has(loc)) map.set(loc, []);
-    map.get(loc)!.push(ch);
+    if (!raw.has(loc)) raw.set(loc, []);
+    raw.get(loc)!.push(ch);
   }
-  return new Map([...map.entries()].sort((a, b) => b[1].length - a[1].length));
+
+  // Group by normalised key; use the shortest variant as the canonical display name
+  const groups = new Map<string, { canonical: string; chars: Character[] }>();
+  for (const [loc, chars] of raw.entries()) {
+    const key = normalizeLocation(loc);
+    const existing = groups.get(key);
+    if (existing) {
+      existing.chars.push(...chars);
+      if (loc.length < existing.canonical.length) existing.canonical = loc;
+    } else {
+      groups.set(key, { canonical: loc, chars: [...chars] });
+    }
+  }
+
+  const result = new Map<string, Character[]>();
+  for (const { canonical, chars } of groups.values()) result.set(canonical, chars);
+  return new Map([...result.entries()].sort((a, b) => b[1].length - a[1].length));
 }
 
 export default function MapBoard({ characters, bookTitle, mapState, onMapStateChange }: Props) {
