@@ -156,6 +156,32 @@ function nodeColor(name: string) {
   return Math.abs(hash) % PALETTE_SIZE;
 }
 
+// Label placement: pick the angle (8 candidates) furthest from all connected edge directions
+const LABEL_CANDS = [0, 45, 90, 135, 180, 225, 270, 315].map((d) => (d * Math.PI) / 180);
+
+function angDist(a: number, b: number): number {
+  const d = Math.abs(a - b) % (2 * Math.PI);
+  return d > Math.PI ? 2 * Math.PI - d : d;
+}
+
+function pickAngle(nodeId: string, nodes: { id: string; x: number; y: number }[], edges: { source: string; target: string }[]): number {
+  const self = nodes.find((n) => n.id === nodeId);
+  if (!self) return Math.PI / 2;
+  const edgeAngles = edges
+    .filter((e) => e.source === nodeId || e.target === nodeId)
+    .flatMap((e) => {
+      const other = nodes.find((n) => n.id === (e.source === nodeId ? e.target : e.source));
+      return other ? [Math.atan2(other.y - self.y, other.x - self.x)] : [];
+    });
+  if (edgeAngles.length === 0) return Math.PI / 2; // default: below
+  let best = LABEL_CANDS[0]; let bestScore = -Infinity;
+  for (const cand of LABEL_CANDS) {
+    const score = Math.min(...edgeAngles.map((a) => angDist(cand, a)));
+    if (score > bestScore) { bestScore = score; best = cand; }
+  }
+  return best;
+}
+
 interface Props {
   snapshots: Snapshot[];
 }
@@ -358,16 +384,27 @@ export default function LocationGraph({ snapshots }: Props) {
                     {n.characterCount}
                   </text>
                 )}
-                {/* Location name label */}
-                <text
-                  y={r + 11}
-                  textAnchor="middle"
-                  fontSize="10"
-                  fontWeight="500"
-                  fill={labelFills[ci]}
-                >
-                  {n.id.length > 20 ? n.id.slice(0, 18) + '…' : n.id}
-                </text>
+                {/* Location name label — placed in the most open direction */}
+                {(() => {
+                  const angle = pickAngle(n.id, graph.nodes, graph.edges);
+                  const dist = r + 11;
+                  const lx = Math.cos(angle) * dist;
+                  const ly = Math.sin(angle) * dist;
+                  const anchor = Math.cos(angle) > 0.3 ? 'start' : Math.cos(angle) < -0.3 ? 'end' : 'middle';
+                  const baseline = Math.sin(angle) > 0.3 ? 'hanging' : Math.sin(angle) < -0.3 ? 'auto' : 'central';
+                  return (
+                    <text
+                      x={lx} y={ly}
+                      textAnchor={anchor}
+                      dominantBaseline={baseline}
+                      fontSize="10"
+                      fontWeight="500"
+                      fill={labelFills[ci]}
+                    >
+                      {n.id.length > 20 ? n.id.slice(0, 18) + '…' : n.id}
+                    </text>
+                  );
+                })()}
               </g>
             );
           })}

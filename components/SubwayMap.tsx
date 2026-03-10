@@ -143,6 +143,39 @@ function tick(nodes: Node[], edges: Edge[]): Node[] {
   return next;
 }
 
+/* ── Label placement ──────────────────────────────────────────────────── */
+
+// Pick the angle (from 8 candidates) that is furthest from all connected edge directions.
+// This places labels in the most "open" direction — away from neighboring stations.
+const LABEL_CANDIDATES = [0, 45, 90, 135, 180, 225, 270, 315].map((d) => (d * Math.PI) / 180);
+
+function angularDist(a: number, b: number): number {
+  const d = Math.abs(a - b) % (2 * Math.PI);
+  return d > Math.PI ? 2 * Math.PI - d : d;
+}
+
+function pickLabelAngle(node: Node, edges: Edge[], nodeMap: Map<string, Node>): number {
+  const edgeAngles = edges
+    .filter((e) => e.source === node.id || e.target === node.id)
+    .flatMap((e) => {
+      const other = nodeMap.get(e.source === node.id ? e.target : e.source);
+      return other ? [Math.atan2(other.y - node.y, other.x - node.x)] : [];
+    });
+
+  if (edgeAngles.length === 0) {
+    // Isolated node: push away from canvas center
+    return Math.atan2(node.y - CY, node.x - CX);
+  }
+
+  let bestAngle = LABEL_CANDIDATES[0];
+  let bestScore = -Infinity;
+  for (const cand of LABEL_CANDIDATES) {
+    const score = Math.min(...edgeAngles.map((a) => angularDist(cand, a)));
+    if (score > bestScore) { bestScore = score; bestAngle = cand; }
+  }
+  return bestAngle;
+}
+
 /* ── Subway routing ───────────────────────────────────────────────────── */
 
 function subwayPath(x1: number, y1: number, x2: number, y2: number): string {
@@ -262,11 +295,13 @@ export default function SubwayMap({ snapshots }: Props) {
         const primaryColor = colors[0] ?? '#71717a';
         const r = n.charCount > 0 ? 9 : 6;
 
-        // Determine label side: push label away from center
-        const labelRight = n.x < CX;
-        const labelAnchor = labelRight ? 'start' : 'end';
-        const labelX = labelRight ? n.x + r + 7 : n.x - r - 7;
-        const labelY = n.y;
+        // Place label in the most open direction (away from connected neighbors)
+        const angle = pickLabelAngle(n, graph.edges, nodeMap);
+        const labelDist = r + 11;
+        const labelX = n.x + Math.cos(angle) * labelDist;
+        const labelY = n.y + Math.sin(angle) * labelDist;
+        const labelAnchor = Math.cos(angle) > 0.3 ? 'start' : Math.cos(angle) < -0.3 ? 'end' : 'middle';
+        const labelBaseline = Math.sin(angle) > 0.3 ? 'hanging' : Math.sin(angle) < -0.3 ? 'auto' : 'central';
 
         return (
           <g key={n.id} filter="url(#sm-glow)">
@@ -289,9 +324,9 @@ export default function SubwayMap({ snapshots }: Props) {
             )}
             {/* Station name */}
             <text
-              x={labelX} y={labelY - 1}
+              x={labelX} y={labelY}
               textAnchor={labelAnchor}
-              dominantBaseline="central"
+              dominantBaseline={labelBaseline}
               fontSize="9.5"
               fontWeight="600"
               fill="#e4e4e7"
