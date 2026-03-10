@@ -9,26 +9,25 @@ const ollamaAgent = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
 const SUPPORTED_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 
 function buildPrompt(locations: string[]): string {
-  return `This is a fantasy/story map image. Your task is to locate specific place names that are printed as visible text labels directly on the map image, and return their positions as percentages of the image dimensions.
+  return `Look at this map image and find as many of the listed place names as you can. The names are printed as text labels directly on the map.
 
-Coordinate system:
-- x = 0 means the LEFT edge of the image, x = 100 means the RIGHT edge
-- y = 0 means the TOP edge of the image, y = 100 means the BOTTOM edge
-- Example: a label in the upper-left quarter might be x=20, y=15
-- Example: a label near the bottom-center might be x=50, y=85
+For each name you can find, record the position of its text label as a percentage of the image size:
+- x: 0 = left edge, 100 = right edge
+- y: 0 = top edge, 100 = bottom edge
 
-Return ONLY a valid JSON object with no prose, no markdown, no explanation:
-{"pins": {"Exact Label Text": {"x": 34.5, "y": 61.2}, ...}}
+Examples: upper-left label → x=15, y=10 | bottom-center label → x=50, y=85
 
-Strict rules:
-- ONLY include a location if you can clearly read its name as printed text somewhere on the map image.
-- Do NOT guess or estimate for names you cannot see written on the map.
-- Do NOT include a location if it is not visibly labelled.
-- Partial matches are acceptable (e.g. "Tar Valon" matches a label reading "Tar Valon" or "TAR VALON").
-- x and y must point to the center of the text label itself, not the territory it represents.
-- If none of the locations are labelled on the map, return {"pins": {}}.
+Rules:
+- Include every name from the list that you can find written on the map, even if the text is small or stylised.
+- x and y should point to the center of the text label itself.
+- Case-insensitive matching is fine (e.g. "TAR VALON" matches "Tar Valon").
+- Only omit a name if you genuinely cannot find it anywhere on the map.
+- If you cannot find any of the names, return {"pins": {}}.
 
-Locations to find (look for these as written text on the map):
+Return ONLY this JSON (no markdown fences, no explanation):
+{"pins": {"Place Name": {"x": 34.5, "y": 61.2}, ...}}
+
+Place names to find:
 ${locations.map((l) => `- ${l}`).join('\n')}`;
 }
 
@@ -159,8 +158,9 @@ export async function POST(req: NextRequest) {
       ? await callLocal(imageDataUrl, prompt)
       : await callAnthropic(base64Data, mediaType, prompt);
 
-    console.log('[detect-pins] raw response:', raw.slice(0, 500));
-    const pins = extractPins(raw);
+    const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+    console.log('[detect-pins] raw response:', cleaned.slice(0, 500));
+    const pins = extractPins(cleaned);
     console.log('[detect-pins] extracted pins:', Object.keys(pins));
     return NextResponse.json({ pins });
   } catch (err) {

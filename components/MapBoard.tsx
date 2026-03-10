@@ -158,7 +158,7 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
     setDetectError(null);
     setSuggestions(null);
     try {
-      const imageDataUrl = await resizeDataUrl(mapState.imageDataUrl, 1024);
+      const imageDataUrl = await resizeDataUrl(mapState.imageDataUrl, 1536);
       const res = await fetch('/api/detect-pins', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
