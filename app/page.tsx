@@ -738,6 +738,51 @@ export default function Home() {
             ))}
           </div>
 
+          {/* Snapshot navigator — shown on all tabs when snapshots exist */}
+          {!busy && (stored?.snapshots?.length ?? 0) > 0 && (() => {
+            const snaps = [...(stored!.snapshots)].sort((a, b) => a.index - b.index);
+            const pos = viewingSnapshotIndex === null
+              ? snaps.length - 1  // latest
+              : snaps.findIndex((s) => s.index === viewingSnapshotIndex);
+            const atLatest = viewingSnapshotIndex === null || pos === snaps.length - 1;
+            const snap = snaps[pos];
+            const chTitle = book.chapters[snap?.index]?.title ?? `Chapter ${(snap?.index ?? 0) + 1}`;
+            function goTo(newPos: number) {
+              const target = snaps[newPos];
+              if (newPos === snaps.length - 1) {
+                setCurrentIndex(stored!.lastAnalyzedIndex);
+                setResult(stored!.result);
+                setViewingSnapshotIndex(null);
+              } else {
+                setCurrentIndex(target.index);
+                setResult(target.result);
+                setViewingSnapshotIndex(target.index);
+              }
+            }
+            return (
+              <div className="mb-4 flex items-center gap-2 px-3 py-2 bg-zinc-800/50 rounded-xl border border-zinc-700/40 flex-shrink-0">
+                <button
+                  onClick={() => goTo(Math.max(0, pos - 1))}
+                  disabled={pos <= 0}
+                  className="text-zinc-500 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-default transition-colors px-1"
+                  title="Previous snapshot"
+                >‹</button>
+                <span className="flex-1 text-center text-xs text-zinc-400 truncate">
+                  {atLatest
+                    ? <><span className="text-zinc-200 font-medium">ch.{(snap?.index ?? 0) + 1} — {chTitle}</span> <span className="text-zinc-600">(latest)</span></>
+                    : <>Viewing <span className="text-zinc-200 font-medium">ch.{snap.index + 1} — {chTitle}</span> <span className="text-zinc-600">({pos + 1}/{snaps.length})</span></>
+                  }
+                </span>
+                <button
+                  onClick={() => goTo(Math.min(snaps.length - 1, pos + 1))}
+                  disabled={atLatest}
+                  className="text-zinc-500 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-default transition-colors px-1"
+                  title="Next snapshot"
+                >›</button>
+              </div>
+            );
+          })()}
+
           {/* Map tab — always accessible, fills remaining height */}
           {tab === 'map' && (
             <div className="flex-1 min-h-0">
@@ -756,26 +801,6 @@ export default function Home() {
           {/* Characters + Locations tabs */}
           {tab !== 'map' && (
             <>
-              {/* History banner */}
-              {isViewingHistory && !busy && (
-                <div className="mb-4 flex items-center justify-between px-4 py-2.5 bg-zinc-800/60 rounded-xl border border-zinc-700/50 flex-shrink-0">
-                  <span className="text-xs text-zinc-400">
-                    Viewing saved state from <span className="text-zinc-200 font-medium">ch.{viewingSnapshotIndex + 1} — {book.chapters[viewingSnapshotIndex]?.title}</span>
-                  </span>
-                  <button
-                    onClick={() => {
-                      if (stored && stored.lastAnalyzedIndex >= 0) {
-                        setCurrentIndex(stored.lastAnalyzedIndex);
-                        setResult(stored.result);
-                        setViewingSnapshotIndex(null);
-                      }
-                    }}
-                    className="text-xs text-amber-500 hover:text-amber-400 font-medium transition-colors whitespace-nowrap ml-4"
-                  >
-                    Jump to latest →
-                  </button>
-                </div>
-              )}
 
               {!result && !busy && (
                 <div className="flex flex-col items-center justify-center flex-1 text-center gap-3">
