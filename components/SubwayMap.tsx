@@ -345,7 +345,19 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
   });
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: '100%', display: 'block' }}>
+    <div className="relative w-full h-full">
+      {/* Spinner shown while physics settles */}
+      {!settled && (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-zinc-900">
+          <div className="w-5 h-5 rounded-full border-2 border-zinc-700 border-t-zinc-400 animate-spin" />
+          <p className="text-[10px] text-zinc-600">Laying out map…</p>
+        </div>
+      )}
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full"
+        style={{ height: '100%', display: 'block', opacity: settled ? 1 : 0, transition: 'opacity 0.4s ease' }}
+      >
       <defs>
         <pattern id="sm-grid" width="30" height="30" patternUnits="userSpaceOnUse">
           <path d="M 30 0 L 0 0 0 30" fill="none" stroke="#27272a" strokeWidth="0.5" />
@@ -427,9 +439,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
         );
       })}
 
-      {!settled && (
-        <text x={W - 8} y={H - 8} textAnchor="end" fontSize="8" fill="#3f3f46">settling…</text>
-      )}
     </svg>
+    </div>
   );
 }
