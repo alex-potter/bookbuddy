@@ -410,32 +410,53 @@ export async function POST(req: NextRequest) {
       userPrompt = buildFullPrompt(bookTitle, bookAuthor, currentChapterTitle, truncated);
     }
 
-    const raw = useLocal
-      ? await callLocal(SYSTEM_PROMPT, userPrompt)
-      : await callAnthropic(SYSTEM_PROMPT, userPrompt);
+    type ParseOutcome =
+      | { ok: true; parsed: Record<string, unknown>; recovered: false }
+      | { ok: true; parsed: AnalysisResult; recovered: true }
+      | { ok: false };
 
-    // Strip markdown code fences and any leading/trailing prose the model adds
-    let cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
-    // Trim to the outermost {...} — drops leading prose and trailing notes
-    const firstBrace = cleaned.indexOf('{');
-    const lastBrace = cleaned.lastIndexOf('}');
-    if (firstBrace >= 0 && lastBrace > firstBrace) cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+    async function callAndParse(): Promise<ParseOutcome> {
+      const raw = useLocal
+        ? await callLocal(SYSTEM_PROMPT, userPrompt)
+        : await callAnthropic(SYSTEM_PROMPT, userPrompt);
 
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch {
-      const recovered = recoverPartialJson(cleaned, previousResult);
-      if (!recovered) {
-        console.error('[analyze] Unrecoverable JSON. Raw length:', cleaned.length, 'Preview:', cleaned.slice(-200));
-        return NextResponse.json({ error: 'Model returned malformed JSON. Try again.' }, { status: 500 });
+      let cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+      const firstBrace = cleaned.indexOf('{');
+      const lastBrace = cleaned.lastIndexOf('}');
+      if (firstBrace >= 0 && lastBrace > firstBrace) cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+
+      try {
+        return { ok: true, parsed: JSON.parse(cleaned) as Record<string, unknown>, recovered: false };
+      } catch {
+        const recovered = recoverPartialJson(cleaned, previousResult);
+        if (recovered) {
+          console.warn('[analyze] Recovered from truncated JSON — kept', recovered.characters.length, 'characters');
+          return { ok: true, parsed: recovered, recovered: true };
+        }
+        console.warn('[analyze] Unrecoverable JSON. Raw length:', cleaned.length, 'Preview:', cleaned.slice(-200));
+        return { ok: false };
       }
-      console.warn('[analyze] Recovered from truncated JSON — kept', recovered.characters.length, 'characters');
-      // Treat recovered result as a full result (not delta)
-      return NextResponse.json(
-        isDelta ? mergeDelta(previousResult!, { updatedCharacters: recovered.characters, summary: recovered.summary }) : recovered
-      );
     }
+
+    let outcome = await callAndParse();
+    if (!outcome.ok) {
+      console.warn('[analyze] Retrying after unrecoverable JSON…');
+      outcome = await callAndParse();
+    }
+    if (!outcome.ok) {
+      return NextResponse.json({ error: 'Model returned malformed JSON. Try again.' }, { status: 500 });
+    }
+
+    // Recovered path: AnalysisResult already merged by recoverPartialJson
+    if (outcome.recovered) {
+      const r = outcome.parsed;
+      const finalResult = isDelta
+        ? mergeDelta(previousResult!, { updatedCharacters: r.characters, summary: r.summary })
+        : r;
+      return NextResponse.json({ ...finalResult, characters: deduplicateCharacters(finalResult.characters), locations: deduplicateLocations(finalResult.locations) });
+    }
+
+    const parsed = outcome.parsed;
 
     let result: AnalysisResult;
     if (isDelta) {
