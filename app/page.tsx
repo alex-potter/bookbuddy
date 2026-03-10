@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { parseEpub } from '@/lib/epub-parser';
 import type { AnalysisResult, Character, MapState, ParsedEbook, Snapshot } from '@/types';
 import CalibreLibrary from '@/components/CalibreLibrary';
@@ -241,6 +241,35 @@ export default function Home() {
   const [sortKey, setSortKey] = useState<SortKey>('importance');
   const [filter, setFilter] = useState<Character['importance'] | 'all'>('all');
   const [search, setSearch] = useState('');
+
+  const [playing, setPlaying] = useState(false);
+  const [playSpeed, setPlaySpeed] = useState(2000); // ms per step
+  const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Drive playback: advance one snapshot per interval tick
+  useEffect(() => {
+    if (playIntervalRef.current) { clearInterval(playIntervalRef.current); playIntervalRef.current = null; }
+    if (!playing) return;
+    playIntervalRef.current = setInterval(() => {
+      const stored = storedRef.current;
+      if (!stored?.snapshots?.length) { setPlaying(false); return; }
+      const snaps = [...stored.snapshots].sort((a, b) => a.index - b.index);
+      setViewingSnapshotIndex((cur) => {
+        const pos = cur === null ? snaps.length - 1 : snaps.findIndex((s) => s.index === cur);
+        const next = pos + 1;
+        if (next >= snaps.length) {
+          // Reached the end — stop
+          setPlaying(false);
+          return null;
+        }
+        const target = snaps[next];
+        setCurrentIndex(target.index);
+        setResult(target.result);
+        return target.index;
+      });
+    }, playSpeed);
+    return () => { if (playIntervalRef.current) clearInterval(playIntervalRef.current); };
+  }, [playing, playSpeed]);
 
   const storedRef = useRef<StoredBookState | null>(null);
   const seriesBaseRef = useRef<AnalysisResult | null>(null);
@@ -763,7 +792,7 @@ export default function Home() {
               <div className="mb-4 flex items-center gap-2 px-3 py-2 bg-zinc-800/50 rounded-xl border border-zinc-700/40 flex-shrink-0">
                 <button
                   onClick={() => goTo(Math.max(0, pos - 1))}
-                  disabled={pos <= 0}
+                  disabled={pos <= 0 || playing}
                   className="text-zinc-500 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-default transition-colors px-1"
                   title="Previous snapshot"
                 >‹</button>
@@ -775,10 +804,39 @@ export default function Home() {
                 </span>
                 <button
                   onClick={() => goTo(Math.min(snaps.length - 1, pos + 1))}
-                  disabled={atLatest}
+                  disabled={atLatest || playing}
                   className="text-zinc-500 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-default transition-colors px-1"
                   title="Next snapshot"
                 >›</button>
+                <div className="w-px h-4 bg-zinc-700 mx-1" />
+                {/* Speed selector */}
+                <select
+                  value={playSpeed}
+                  onChange={(e) => setPlaySpeed(Number(e.target.value))}
+                  className="text-xs bg-transparent text-zinc-500 border-none outline-none cursor-pointer hover:text-zinc-300 transition-colors"
+                  title="Playback speed"
+                >
+                  <option value={3000}>Slow</option>
+                  <option value={2000}>Normal</option>
+                  <option value={1000}>Fast</option>
+                  <option value={400}>Very fast</option>
+                </select>
+                {/* Play / pause */}
+                <button
+                  onClick={() => {
+                    if (playing) { setPlaying(false); return; }
+                    // If at the end, rewind to start first
+                    if (atLatest && snaps.length > 1) goTo(0);
+                    setPlaying(true);
+                  }}
+                  className="text-zinc-400 hover:text-zinc-100 transition-colors w-6 h-6 flex items-center justify-center rounded-md hover:bg-zinc-700"
+                  title={playing ? 'Pause' : 'Play through chapters'}
+                >
+                  {playing
+                    ? <svg width="10" height="12" viewBox="0 0 10 12" fill="currentColor"><rect x="0" y="0" width="3" height="12"/><rect x="7" y="0" width="3" height="12"/></svg>
+                    : <svg width="10" height="12" viewBox="0 0 10 12" fill="currentColor"><polygon points="0,0 10,6 0,12"/></svg>
+                  }
+                </button>
               </div>
             );
           })()}
