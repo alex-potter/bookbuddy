@@ -164,8 +164,9 @@ function nodeColor(name: string) {
   return Math.abs(hash) % PALETTE_SIZE;
 }
 
-// Label placement: pick the angle (8 candidates) furthest from all connected edge directions
-const LABEL_CANDS = [0, 45, 90, 135, 180, 225, 270, 315].map((d) => (d * Math.PI) / 180);
+// Label placement: 16 candidates, avoid edge directions + nearby node directions
+const LABEL_CANDS = Array.from({ length: 16 }, (_, i) => (i * 22.5 * Math.PI) / 180);
+const NEARBY_RADIUS = 220; // px
 
 function angDist(a: number, b: number): number {
   const d = Math.abs(a - b) % (2 * Math.PI);
@@ -175,16 +176,35 @@ function angDist(a: number, b: number): number {
 function pickAngle(nodeId: string, nodes: { id: string; x: number; y: number }[], edges: { source: string; target: string }[]): number {
   const self = nodes.find((n) => n.id === nodeId);
   if (!self) return Math.PI / 2;
-  const edgeAngles = edges
-    .filter((e) => e.source === nodeId || e.target === nodeId)
-    .flatMap((e) => {
-      const other = nodes.find((n) => n.id === (e.source === nodeId ? e.target : e.source));
-      return other ? [Math.atan2(other.y - self.y, other.x - self.x)] : [];
-    });
-  if (edgeAngles.length === 0) return Math.PI / 2; // default: below
+
+  const connectedIds = new Set(
+    edges
+      .filter((e) => e.source === nodeId || e.target === nodeId)
+      .map((e) => (e.source === nodeId ? e.target : e.source)),
+  );
+
+  const edgeAngles = [...connectedIds].flatMap((id) => {
+    const other = nodes.find((n) => n.id === id);
+    return other ? [Math.atan2(other.y - self.y, other.x - self.x)] : [];
+  });
+
+  // Nearby non-connected nodes also act as obstacles, weighted by proximity
+  const obstacles: number[] = [...edgeAngles];
+  for (const other of nodes) {
+    if (other.id === nodeId || connectedIds.has(other.id)) continue;
+    const dx = other.x - self.x;
+    const dy = other.y - self.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < NEARBY_RADIUS) {
+      const copies = Math.round(1 + (1 - dist / NEARBY_RADIUS) * 3);
+      for (let k = 0; k < copies; k++) obstacles.push(Math.atan2(dy, dx));
+    }
+  }
+
+  if (obstacles.length === 0) return Math.PI / 2;
   let best = LABEL_CANDS[0]; let bestScore = -Infinity;
   for (const cand of LABEL_CANDS) {
-    const score = Math.min(...edgeAngles.map((a) => angDist(cand, a)));
+    const score = Math.min(...obstacles.map((a) => angDist(cand, a)));
     if (score > bestScore) { bestScore = score; best = cand; }
   }
   return best;
@@ -393,8 +413,8 @@ export default function LocationGraph({ snapshots, currentCharacters = [] }: Pro
               const chars = liveByLoc.get(n.id) ?? [];
               const r = Math.max(16, Math.min(28, 16 + chars.length * 2));
               const labelAngle = pickAngle(n.id, graph.nodes, graph.edges);
-              const lx = Math.cos(labelAngle) * (r + 12);
-              const ly = Math.sin(labelAngle) * (r + 12);
+              const lx = Math.cos(labelAngle) * (r + 15);
+              const ly = Math.sin(labelAngle) * (r + 15);
               const anchor = (Math.cos(labelAngle) > 0.3 ? 'start' : Math.cos(labelAngle) < -0.3 ? 'end' : 'middle') as 'start' | 'end' | 'middle';
               const baseline = (Math.sin(labelAngle) > 0.3 ? 'hanging' : Math.sin(labelAngle) < -0.3 ? 'auto' : 'central') as 'hanging' | 'auto' | 'central';
 

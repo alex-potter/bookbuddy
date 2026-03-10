@@ -182,27 +182,55 @@ function tick(nodes: Node[], edges: Edge[]): Node[] {
 
 /* ── Label placement ──────────────────────────────────────────────────── */
 
-const LABEL_CANDIDATES = [0, 45, 90, 135, 180, 225, 270, 315].map((d) => (d * Math.PI) / 180);
+// 16 candidates at 22.5° intervals for finer granularity
+const LABEL_CANDIDATES = Array.from({ length: 16 }, (_, i) => (i * 22.5 * Math.PI) / 180);
+const NEARBY_RADIUS = 200; // px — nearby nodes also act as label obstacles
 
 function angularDist(a: number, b: number): number {
   const d = Math.abs(a - b) % (2 * Math.PI);
   return d > Math.PI ? 2 * Math.PI - d : d;
 }
 
-function pickLabelAngle(node: Node, edges: Edge[], nodeMap: Map<string, Node>): number {
+function pickLabelAngle(node: Node, edges: Edge[], allNodes: Node[]): number {
+  // Edge directions are hard obstacles
   const edgeAngles = edges
     .filter((e) => e.source === node.id || e.target === node.id)
     .flatMap((e) => {
-      const other = nodeMap.get(e.source === node.id ? e.target : e.source);
+      const otherId = e.source === node.id ? e.target : e.source;
+      const other = allNodes.find((n) => n.id === otherId);
       return other ? [Math.atan2(other.y - node.y, other.x - node.x)] : [];
     });
 
-  if (edgeAngles.length === 0) return Math.atan2(node.y - CY, node.x - CX);
+  // Nearby (non-connected) nodes also repel labels, weighted by proximity
+  const nearbyAngles: { angle: number; weight: number }[] = [];
+  const connectedIds = new Set(
+    edges
+      .filter((e) => e.source === node.id || e.target === node.id)
+      .map((e) => (e.source === node.id ? e.target : e.source)),
+  );
+  for (const other of allNodes) {
+    if (other.id === node.id || connectedIds.has(other.id)) continue;
+    const dx = other.x - node.x;
+    const dy = other.y - node.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < NEARBY_RADIUS) {
+      nearbyAngles.push({ angle: Math.atan2(dy, dx), weight: 1 - dist / NEARBY_RADIUS });
+    }
+  }
+
+  const obstacles: number[] = [...edgeAngles];
+  for (const { angle, weight } of nearbyAngles) {
+    // Expand nearby obstacles: repeat them proportional to weight so they count more when closer
+    const copies = Math.round(1 + weight * 3);
+    for (let k = 0; k < copies; k++) obstacles.push(angle);
+  }
+
+  if (obstacles.length === 0) return Math.atan2(node.y - CY, node.x - CX);
 
   let bestAngle = LABEL_CANDIDATES[0];
   let bestScore = -Infinity;
   for (const cand of LABEL_CANDIDATES) {
-    const score = Math.min(...edgeAngles.map((a) => angularDist(cand, a)));
+    const score = Math.min(...obstacles.map((a) => angularDist(cand, a)));
     if (score > bestScore) { bestScore = score; bestAngle = cand; }
   }
   return bestAngle;
@@ -291,9 +319,9 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
     const chars = liveByLoc.get(n.id) ?? [];
     const r = chars.length > 0 ? 9 : 6;
 
-    const labelAngle = pickLabelAngle(n, graph.edges, nodeMap);
-    const labelX = n.x + Math.cos(labelAngle) * (r + 12);
-    const labelY = n.y + Math.sin(labelAngle) * (r + 12);
+    const labelAngle = pickLabelAngle(n, graph.edges, graph.nodes);
+    const labelX = n.x + Math.cos(labelAngle) * (r + 15);
+    const labelY = n.y + Math.sin(labelAngle) * (r + 15);
     const labelAnchor = (Math.cos(labelAngle) > 0.3 ? 'start' : Math.cos(labelAngle) < -0.3 ? 'end' : 'middle') as 'start' | 'end' | 'middle';
     const labelBaseline = (Math.sin(labelAngle) > 0.3 ? 'hanging' : Math.sin(labelAngle) < -0.3 ? 'auto' : 'central') as 'hanging' | 'auto' | 'central';
 
