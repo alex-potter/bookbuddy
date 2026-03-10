@@ -8,12 +8,12 @@ interface Props {
   currentIndex: number;
   onChange: (index: number) => void;
   onAnalyze: () => void;
+  onCancelAnalyze: () => void;
   onRebuild: () => void;
   onCancelRebuild: () => void;
   analyzing: boolean;
   rebuilding: boolean;
   rebuildProgress: { current: number; total: number } | null;
-  canIncrement: boolean;
   lastAnalyzedIndex: number | null;
   snapshotIndices?: Set<number>;
   excludedBooks?: Set<number>;
@@ -102,8 +102,8 @@ function ChapterItem({
 }
 
 export default function ChapterSelector({
-  chapters, currentIndex, onChange, onAnalyze, onRebuild, onCancelRebuild,
-  analyzing, rebuilding, rebuildProgress, canIncrement, lastAnalyzedIndex,
+  chapters, currentIndex, onChange, onAnalyze, onCancelAnalyze, onRebuild, onCancelRebuild,
+  analyzing, rebuilding, rebuildProgress, lastAnalyzedIndex,
   snapshotIndices, excludedBooks, onToggleBook,
 }: Props) {
   const [mode, setMode] = useState<'chapter' | 'location'>('chapter');
@@ -231,21 +231,23 @@ export default function ChapterSelector({
       </div>
 
       {/* Analyze */}
-      <button
-        onClick={onAnalyze} disabled={busy}
-        className={`w-full py-2.5 rounded-lg text-sm font-semibold transition-colors ${
-          busy ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed' : 'bg-amber-500 text-zinc-900 hover:bg-amber-400'
-        }`}
-      >
-        {analyzing ? (
-          <span className="flex items-center justify-center gap-2">
-            <span className="w-3.5 h-3.5 border-2 border-zinc-600 border-t-transparent rounded-full animate-spin" />
-            Analyzing…
-          </span>
-        ) : canIncrement ? '⚡ Update Characters' : '⌖ Analyze Characters'}
-      </button>
-      {canIncrement && lastAnalyzedIndex !== null && !busy && (
-        <p className="mt-1.5 text-xs text-center text-zinc-600">Chapters {lastAnalyzedIndex + 2}–{currentIndex + 1} only</p>
+      {analyzing ? (
+        <button onClick={onCancelAnalyze} className="w-full py-2.5 rounded-lg text-sm font-semibold border border-red-800/50 text-red-400 hover:bg-red-950/30 transition-colors">
+          Cancel
+          {rebuildProgress && <span className="ml-1.5 text-red-600 text-xs">({rebuildProgress.current}/{rebuildProgress.total})</span>}
+        </button>
+      ) : (
+        <button
+          onClick={onAnalyze} disabled={busy}
+          className={`w-full py-2.5 rounded-lg text-sm font-semibold transition-colors ${
+            busy ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed' : 'bg-amber-500 text-zinc-900 hover:bg-amber-400'
+          }`}
+        >
+          ⌖ Analyze Characters
+        </button>
+      )}
+      {!busy && lastAnalyzedIndex !== null && lastAnalyzedIndex >= 0 && lastAnalyzedIndex < currentIndex && (
+        <p className="mt-1.5 text-xs text-center text-zinc-600">Ch.{lastAnalyzedIndex + 2}–{currentIndex + 1} · chapter by chapter</p>
       )}
 
       {/* Rebuild */}
@@ -258,7 +260,7 @@ export default function ChapterSelector({
         ) : (
           <button
             onClick={onRebuild} disabled={busy}
-            title="Analyze each chapter individually for the most accurate dataset"
+            title="Re-analyze from chapter 1, overwriting existing data"
             className={`w-full py-2 rounded-lg text-xs font-medium border transition-colors ${
               busy ? 'border-zinc-800 text-zinc-700 cursor-not-allowed' : 'border-zinc-700 text-zinc-500 hover:text-zinc-300 hover:border-zinc-600'
             }`}
@@ -266,7 +268,7 @@ export default function ChapterSelector({
             Rebuild from scratch
           </button>
         )}
-        {!busy && <p className="mt-1 text-xs text-center text-zinc-700">Ch.1–{currentIndex + 1}, one by one</p>}
+        {!busy && <p className="mt-1 text-xs text-center text-zinc-700">Re-analyze ch.1–{currentIndex + 1} from scratch</p>}
       </div>
 
       {/* Chapter list */}

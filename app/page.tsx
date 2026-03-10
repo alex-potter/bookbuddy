@@ -138,13 +138,13 @@ export default function Home() {
   const [viewingSnapshotIndex, setViewingSnapshotIndex] = useState<number | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
-  const [analysisMode, setAnalysisMode] = useState<'full' | 'incremental' | null>(null);
 
   const [uploadTab, setUploadTab] = useState<'file' | 'calibre'>('file');
 
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildProgress, setRebuildProgress] = useState<{ current: number; total: number } | null>(null);
   const rebuildCancelRef = useRef(false);
+  const analyzeCancelRef = useRef(false);
 
   const [excludedBooks, setExcludedBooks] = useState<Set<number>>(new Set());
   const [mapState, setMapState] = useState<MapState | null>(null);
@@ -246,51 +246,41 @@ export default function Home() {
 
   const handleAnalyze = useCallback(async () => {
     if (!book) return;
+    analyzeCancelRef.current = false;
     setAnalyzing(true);
     setAnalyzeError(null);
-    setAnalysisMode(null);
+
+    const stored = storedRef.current;
+    const startIndex = stored && stored.lastAnalyzedIndex >= 0 ? stored.lastAnalyzedIndex + 1 : 0;
+    const total = currentIndex - startIndex + 1;
+    setRebuildProgress({ current: 0, total });
+
+    let accumulated: AnalysisResult | null =
+      stored && stored.lastAnalyzedIndex >= 0 ? stored.result : seriesBaseRef.current;
+    let snapshots: Snapshot[] = stored?.snapshots ?? [];
 
     try {
-      const stored = storedRef.current;
-      const canIncrement = stored && currentIndex > stored.lastAnalyzedIndex;
-      let body: Record<string, unknown>;
-
-      const included = (ch: typeof book.chapters[0]) =>
-        ch.bookIndex === undefined || !excludedBooks.has(ch.bookIndex);
-
-      if (canIncrement) {
-        const fromIndex = stored.lastAnalyzedIndex + 1;
-        const newChapters = book.chapters.slice(fromIndex, currentIndex + 1).filter(included).map((ch) => ({ title: ch.title, text: ch.text }));
-        body = { newChapters, previousResult: stored.result, currentChapterTitle: book.chapters[currentIndex].title, bookTitle: book.title, bookAuthor: book.author };
-        setAnalysisMode('incremental');
-      } else {
-        const chaptersRead = book.chapters.slice(0, currentIndex + 1).filter(included).map((ch) => ({ title: ch.title, text: ch.text }));
-        body = { chaptersRead, currentChapterTitle: book.chapters[currentIndex].title, bookTitle: book.title, bookAuthor: book.author };
-        setAnalysisMode('full');
+      for (let i = startIndex; i <= currentIndex; i++) {
+        if (analyzeCancelRef.current) break;
+        setRebuildProgress({ current: i - startIndex + 1, total });
+        const ch = book.chapters[i];
+        if (ch.bookIndex !== undefined && excludedBooks.has(ch.bookIndex)) continue;
+        accumulated = await analyzeChapter(book.title, book.author, { title: ch.title, text: ch.text }, accumulated);
+        snapshots = upsertSnapshot(snapshots, i, accumulated);
+        const partial: StoredBookState = { lastAnalyzedIndex: i, result: accumulated, snapshots };
+        storedRef.current = partial;
+        saveStored(book.title, book.author, partial);
+        setResult(accumulated);
+        setViewingSnapshotIndex(null);
       }
-
-      const res = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Analysis failed.');
-
-      const newResult = data as AnalysisResult;
-      setResult(newResult);
-      setViewingSnapshotIndex(null);
-
-      const prevSnapshots = storedRef.current?.snapshots ?? [];
-      const newStored: StoredBookState = {
-        lastAnalyzedIndex: currentIndex,
-        result: newResult,
-        snapshots: upsertSnapshot(prevSnapshots, currentIndex, newResult),
-      };
-      storedRef.current = newStored;
-      saveStored(book.title, book.author, newStored);
     } catch (err) {
       setAnalyzeError(err instanceof Error ? err.message : 'Analysis failed.');
     } finally {
       setAnalyzing(false);
+      setRebuildProgress(null);
+      analyzeCancelRef.current = false;
     }
-  }, [book, currentIndex]);
+  }, [book, currentIndex, excludedBooks]);
 
   const handleRebuild = useCallback(async () => {
     if (!book) return;
@@ -392,7 +382,6 @@ export default function Home() {
   const stored = storedRef.current;
   const hasStoredState = !!stored && stored.lastAnalyzedIndex >= 0;
   const isSeriesContinuation = stored?.lastAnalyzedIndex === -1;
-  const canIncrement = stored && currentIndex > stored.lastAnalyzedIndex;
   const busy = analyzing || rebuilding;
   const snapshotIndices = new Set((stored?.snapshots ?? []).map((s) => s.index));
   // Whether the displayed result is from a historical snapshot rather than the latest
@@ -429,12 +418,12 @@ export default function Home() {
             currentIndex={currentIndex}
             onChange={handleChapterChange}
             onAnalyze={handleAnalyze}
+            onCancelAnalyze={() => { analyzeCancelRef.current = true; }}
             onRebuild={handleRebuild}
             onCancelRebuild={() => { rebuildCancelRef.current = true; }}
             analyzing={analyzing}
             rebuilding={rebuilding}
             rebuildProgress={rebuildProgress}
-            canIncrement={!!canIncrement}
             lastAnalyzedIndex={stored?.lastAnalyzedIndex ?? null}
             snapshotIndices={snapshotIndices}
             excludedBooks={excludedBooks}
@@ -518,31 +507,21 @@ export default function Home() {
                 </div>
               )}
 
-              {analyzing && !rebuilding && (
-                <div className="flex flex-col items-center justify-center flex-1 gap-4">
-                  <div className="w-10 h-10 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
-                  <p className="text-zinc-300 font-medium">
-                    {analysisMode === 'incremental' ? 'Updating characters…' : 'Analyzing…'}
-                  </p>
-                  <p className="text-sm text-zinc-600">
-                    {analysisMode === 'incremental' ? 'New chapters only — existing roster preserved' : 'Extracting characters without spoilers'}
-                  </p>
-                </div>
-              )}
-
-              {rebuilding && rebuildProgress && (
+              {(analyzing || rebuilding) && rebuildProgress && (
                 <div className="flex flex-col items-center justify-center flex-1 gap-5">
-                  <div className="w-10 h-10 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+                  <div className={`w-10 h-10 border-2 border-t-transparent rounded-full animate-spin ${rebuilding ? 'border-violet-500' : 'border-amber-500'}`} />
                   <div className="text-center">
-                    <p className="text-zinc-200 font-semibold">Rebuilding…</p>
+                    <p className="text-zinc-200 font-semibold">{rebuilding ? 'Rebuilding…' : 'Analyzing…'}</p>
                     <p className="text-sm text-zinc-500 mt-1">
                       Chapter {rebuildProgress.current} / {rebuildProgress.total}
-                      {' · '}<span className="text-zinc-400">{book.chapters[rebuildProgress.current - 1]?.title}</span>
+                      {rebuildProgress.current > 0 && (
+                        <>{' · '}<span className="text-zinc-400">{book.chapters[rebuildProgress.current - 1]?.title}</span></>
+                      )}
                     </p>
                   </div>
                   <div className="w-56 bg-zinc-800 rounded-full h-1">
                     <div
-                      className="bg-violet-500 h-1 rounded-full transition-all duration-300"
+                      className={`h-1 rounded-full transition-all duration-300 ${rebuilding ? 'bg-violet-500' : 'bg-amber-500'}`}
                       style={{ width: `${(rebuildProgress.current / rebuildProgress.total) * 100}%` }}
                     />
                   </div>
