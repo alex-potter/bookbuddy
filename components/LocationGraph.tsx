@@ -375,69 +375,76 @@ export default function LocationGraph({ snapshots, currentCharacters = [] }: Pro
             })}
           </g>
 
-          {/* Nodes */}
-          {graph.nodes.map((n) => {
-            const ci = nodeColor(n.id);
-            // Live characters at this location in the current snapshot
-            const chars = liveByLoc.get(n.id) ?? [];
-            const r = Math.max(16, Math.min(28, 16 + chars.length * 2));
+          {/* Nodes — circles + labels only, no avatars */}
+          {(() => {
             const fills = ['#f43f5e22','#0ea5e922','#8b5cf622','#10b98122','#f59e0b22','#ec489922','#14b8a622','#6366f122'];
             const strokes = ['#f43f5e99','#0ea5e999','#8b5cf699','#10b98199','#f59e0b99','#ec489999','#14b8a699','#6366f199'];
             const labelFills = ['#fb7185','#38bdf8','#a78bfa','#34d399','#fbbf24','#f472b6','#2dd4bf','#818cf8'];
 
-            const labelAngle = pickAngle(n.id, graph.nodes, graph.edges);
-            const labelDist = r + 12;
-            const lx = Math.cos(labelAngle) * labelDist;
-            const ly = Math.sin(labelAngle) * labelDist;
-            const anchor = Math.cos(labelAngle) > 0.3 ? 'start' : Math.cos(labelAngle) < -0.3 ? 'end' : 'middle';
-            const baseline = Math.sin(labelAngle) > 0.3 ? 'hanging' : Math.sin(labelAngle) < -0.3 ? 'auto' : 'central';
-
+            // Also pre-compute absolute avatar positions for the flat list below
+            const charPos = new Map<string, { x: number; y: number; status: CharAvatar['status'] }>();
             const AVT = 7;
-            const ringR = r + AVT + 4;
-            const step = chars.length > 0 ? (2 * Math.PI) / chars.length : 0;
-            const startAngle = labelAngle + Math.PI;
+
+            const nodes = graph.nodes.map((n) => {
+              const ci = nodeColor(n.id);
+              const chars = liveByLoc.get(n.id) ?? [];
+              const r = Math.max(16, Math.min(28, 16 + chars.length * 2));
+              const labelAngle = pickAngle(n.id, graph.nodes, graph.edges);
+              const lx = Math.cos(labelAngle) * (r + 12);
+              const ly = Math.sin(labelAngle) * (r + 12);
+              const anchor = (Math.cos(labelAngle) > 0.3 ? 'start' : Math.cos(labelAngle) < -0.3 ? 'end' : 'middle') as 'start' | 'end' | 'middle';
+              const baseline = (Math.sin(labelAngle) > 0.3 ? 'hanging' : Math.sin(labelAngle) < -0.3 ? 'auto' : 'central') as 'hanging' | 'auto' | 'central';
+
+              const ringR = r + AVT + 4;
+              const step = chars.length > 0 ? (2 * Math.PI) / chars.length : 0;
+              const startAngle = labelAngle + Math.PI;
+              chars.forEach((c, i) => {
+                const a = startAngle + i * step;
+                charPos.set(c.name, { x: n.x + Math.cos(a) * ringR, y: n.y + Math.sin(a) * ringR, status: c.status });
+              });
+
+              return { n, ci, r, lx, ly, anchor, baseline };
+            });
 
             return (
-              <g
-                key={n.id}
-                transform={`translate(${n.x},${n.y})`}
-                onMouseDown={(e) => handleMouseDown(e, n.id)}
-                style={{ cursor: 'grab' }}
-              >
-                {/* Character avatars in a ring */}
-                {chars.map((c, i) => {
-                  const a = startAngle + i * step;
-                  const ax = Math.cos(a) * ringR;
-                  const ay = Math.sin(a) * ringR;
-                  const hex = STATUS_HEX[c.status];
+              <>
+                {nodes.map(({ n, ci, r, lx, ly, anchor, baseline }) => (
+                  <g
+                    key={n.id}
+                    transform={`translate(${n.x},${n.y})`}
+                    onMouseDown={(e) => handleMouseDown(e, n.id)}
+                    style={{ cursor: 'grab' }}
+                  >
+                    <circle r={r} fill={fills[ci]} stroke={strokes[ci]} strokeWidth="1.5" />
+                    <text x={lx} y={ly} textAnchor={anchor} dominantBaseline={baseline}
+                      fontSize="10" fontWeight="500" fill={labelFills[ci]}>
+                      {n.id.length > 20 ? n.id.slice(0, 18) + '…' : n.id}
+                    </text>
+                  </g>
+                ))}
+
+                {/* Character avatars — flat list keyed by name so CSS transition fires on move */}
+                {Array.from(charPos.entries()).map(([name, { x, y, status }]) => {
+                  const hex = STATUS_HEX[status];
                   return (
-                    <g key={c.name} transform={`translate(${ax},${ay})`}>
-                      <title>{c.name} ({c.status})</title>
+                    <g
+                      key={name}
+                      style={{
+                        transform: `translate(${x}px, ${y}px)`,
+                        transition: running ? 'none' : 'transform 0.65s cubic-bezier(0.4, 0, 0.2, 1)',
+                      }}
+                    >
+                      <title>{name} ({status})</title>
                       <circle r={AVT} fill={hex + '28'} stroke={hex} strokeWidth="1.5" />
                       <text textAnchor="middle" dominantBaseline="central" fontSize="5" fontWeight="700" fill={hex}>
-                        {charInitials(c.name)}
+                        {charInitials(name)}
                       </text>
                     </g>
                   );
                 })}
-
-                {/* Node circle */}
-                <circle r={r} fill={fills[ci]} stroke={strokes[ci]} strokeWidth="1.5" />
-
-                {/* Location name */}
-                <text
-                  x={lx} y={ly}
-                  textAnchor={anchor}
-                  dominantBaseline={baseline}
-                  fontSize="10"
-                  fontWeight="500"
-                  fill={labelFills[ci]}
-                >
-                  {n.id.length > 20 ? n.id.slice(0, 18) + '…' : n.id}
-                </text>
-              </g>
+              </>
             );
-          })}
+          })()}
         </svg>
       </div>
 

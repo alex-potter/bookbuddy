@@ -276,6 +276,43 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
   const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
   const maxW = Math.max(...graph.edges.map((e) => e.weight), 1);
 
+  // Pre-compute per-node render data AND absolute avatar positions in one pass.
+  // Avatars are rendered as a flat list (keyed by char name) so the same DOM element
+  // persists across snapshot changes — CSS transition then animates the position change.
+  const charPositions = new Map<string, { x: number; y: number; status: CharAvatar['status'] }>();
+  const overflowBadges: Array<{ x: number; y: number; count: number }> = [];
+
+  const nodeData = graph.nodes.map((n) => {
+    const colors = graph.edges.filter((e) => e.source === n.id || e.target === n.id).map((e) => e.color);
+    const primaryColor = colors[0] ?? '#71717a';
+    const chars = liveByLoc.get(n.id) ?? [];
+    const r = chars.length > 0 ? 9 : 6;
+
+    const labelAngle = pickLabelAngle(n, graph.edges, nodeMap);
+    const labelX = n.x + Math.cos(labelAngle) * (r + 12);
+    const labelY = n.y + Math.sin(labelAngle) * (r + 12);
+    const labelAnchor = (Math.cos(labelAngle) > 0.3 ? 'start' : Math.cos(labelAngle) < -0.3 ? 'end' : 'middle') as 'start' | 'end' | 'middle';
+    const labelBaseline = (Math.sin(labelAngle) > 0.3 ? 'hanging' : Math.sin(labelAngle) < -0.3 ? 'auto' : 'central') as 'hanging' | 'auto' | 'central';
+
+    // Avatar cluster on opposite side of label
+    const charAngle = labelAngle + Math.PI;
+    const displayChars = chars.slice(0, MAX_SHOW);
+    const extra = chars.length - MAX_SHOW;
+    const showCount = displayChars.length + (extra > 0 ? 1 : 0);
+    const avatarRows = Math.ceil(Math.max(showCount, 1) / 3);
+    const { cx: aCX, cy: aCY } = clusterCenter(n.x, n.y, r, charAngle, avatarRows);
+    const positions = clusterPositions(showCount, aCX, aCY);
+
+    displayChars.forEach((c, i) => {
+      if (positions[i]) charPositions.set(c.name, { x: positions[i].x, y: positions[i].y, status: c.status });
+    });
+    if (extra > 0 && positions[MAX_SHOW]) {
+      overflowBadges.push({ x: positions[MAX_SHOW].x, y: positions[MAX_SHOW].y, count: extra });
+    }
+
+    return { n, primaryColor, r, labelX, labelY, labelAnchor, labelBaseline };
+  });
+
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: '100%', display: 'block' }}>
       <defs>
@@ -312,72 +349,48 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
         })}
       </g>
 
-      {/* Stations + character avatars + labels */}
-      {graph.nodes.map((n) => {
-        const colors = graph.edges
-          .filter((e) => e.source === n.id || e.target === n.id)
-          .map((e) => e.color);
-        const primaryColor = colors[0] ?? '#71717a';
+      {/* Station markers + labels (no avatars here) */}
+      {nodeData.map(({ n, primaryColor, r, labelX, labelY, labelAnchor, labelBaseline }) => (
+        <g key={n.id}>
+          <g filter="url(#sm-glow)">
+            <circle cx={n.x} cy={n.y} r={r + 3} fill={primaryColor} opacity={0.2} />
+            <circle cx={n.x} cy={n.y} r={r} fill="#18181b" stroke={primaryColor} strokeWidth={2.5} />
+          </g>
+          <text
+            x={labelX} y={labelY}
+            textAnchor={labelAnchor} dominantBaseline={labelBaseline}
+            fontSize="9.5" fontWeight="600" fill="#e4e4e7"
+            style={{ textShadow: '0 1px 4px #000, 0 0 8px #000' }}
+          >
+            {n.id.length > 22 ? n.id.slice(0, 20) + '…' : n.id}
+          </text>
+        </g>
+      ))}
 
-        // Live characters at this location in the current snapshot
-        const chars = liveByLoc.get(n.id) ?? [];
-        const r = chars.length > 0 ? 9 : 6;
+      {/* Overflow +N badges (static per station, no transition needed) */}
+      {overflowBadges.map(({ x, y, count }, i) => (
+        <g key={`overflow-${i}`} transform={`translate(${x},${y})`}>
+          <circle r={AVT_R} fill="#27272a" stroke="#52525b" strokeWidth="1" />
+          <text textAnchor="middle" dominantBaseline="central" fontSize="5" fill="#a1a1aa">+{count}</text>
+        </g>
+      ))}
 
-        const labelAngle = pickLabelAngle(n, graph.edges, nodeMap);
-        const labelDist = r + 12;
-        const labelX = n.x + Math.cos(labelAngle) * labelDist;
-        const labelY = n.y + Math.sin(labelAngle) * labelDist;
-        const labelAnchor = Math.cos(labelAngle) > 0.3 ? 'start' : Math.cos(labelAngle) < -0.3 ? 'end' : 'middle';
-        const labelBaseline = Math.sin(labelAngle) > 0.3 ? 'hanging' : Math.sin(labelAngle) < -0.3 ? 'auto' : 'central';
-
-        // Avatars on the opposite side of the label
-        const charAngle = labelAngle + Math.PI;
-        const displayChars = chars.slice(0, MAX_SHOW);
-        const extra = chars.length - MAX_SHOW;
-        const showCount = displayChars.length + (extra > 0 ? 1 : 0);
-        const avatarRows = Math.ceil(showCount / 3);
-        const { cx: avatarCX, cy: avatarCY } = clusterCenter(n.x, n.y, r, charAngle, avatarRows);
-        const positions = clusterPositions(showCount, avatarCX, avatarCY);
-
+      {/* Character avatars — flat list keyed by name so the same DOM element persists
+          across snapshot changes, letting CSS transition animate the position. */}
+      {Array.from(charPositions.entries()).map(([name, { x, y, status }]) => {
+        const hex = STATUS_HEX[status];
         return (
-          <g key={n.id}>
-            {/* Character avatar cluster */}
-            {displayChars.map((c, i) => {
-              const pos = positions[i];
-              if (!pos) return null;
-              const hex = STATUS_HEX[c.status];
-              return (
-                <g key={c.name} transform={`translate(${pos.x},${pos.y})`}>
-                  <title>{c.name} ({c.status})</title>
-                  <circle r={AVT_R} fill={hex + '28'} stroke={hex} strokeWidth="1.5" />
-                  <text textAnchor="middle" dominantBaseline="central" fontSize="5.5" fontWeight="700" fill={hex}>
-                    {initials(c.name)}
-                  </text>
-                </g>
-              );
-            })}
-            {extra > 0 && positions[MAX_SHOW] && (
-              <g transform={`translate(${positions[MAX_SHOW].x},${positions[MAX_SHOW].y})`}>
-                <circle r={AVT_R} fill="#27272a" stroke="#52525b" strokeWidth="1" />
-                <text textAnchor="middle" dominantBaseline="central" fontSize="5" fill="#a1a1aa">+{extra}</text>
-              </g>
-            )}
-
-            {/* Station marker */}
-            <g filter="url(#sm-glow)">
-              <circle cx={n.x} cy={n.y} r={r + 3} fill={primaryColor} opacity={0.2} />
-              <circle cx={n.x} cy={n.y} r={r} fill="#18181b" stroke={primaryColor} strokeWidth={2.5} />
-            </g>
-
-            {/* Station name */}
-            <text
-              x={labelX} y={labelY}
-              textAnchor={labelAnchor}
-              dominantBaseline={labelBaseline}
-              fontSize="9.5" fontWeight="600" fill="#e4e4e7"
-              style={{ textShadow: '0 1px 4px #000, 0 0 8px #000' }}
-            >
-              {n.id.length > 22 ? n.id.slice(0, 20) + '…' : n.id}
+          <g
+            key={name}
+            style={{
+              transform: `translate(${x}px, ${y}px)`,
+              transition: settled ? 'transform 0.65s cubic-bezier(0.4, 0, 0.2, 1)' : 'none',
+            }}
+          >
+            <title>{name} ({status})</title>
+            <circle r={AVT_R} fill={hex + '28'} stroke={hex} strokeWidth="1.5" />
+            <text textAnchor="middle" dominantBaseline="central" fontSize="5.5" fontWeight="700" fill={hex}>
+              {initials(name)}
             </text>
           </g>
         );
