@@ -80,6 +80,39 @@ function saveMapState(title: string, author: string, state: MapState) {
   } catch { /* ignore */ }
 }
 
+interface EtbookExport {
+  version: 2;
+  title: string;
+  author: string;
+  state: StoredBookState;
+  mapState: MapState | null;
+}
+
+function exportBook(title: string, author: string) {
+  const state = loadStored(title, author);
+  if (!state) return;
+  const mapState = loadMapState(title, author);
+  const payload: EtbookExport = { version: 2, title, author, state, mapState };
+  const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${title} — ${author}.etbook`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importEtbook(file: File): Promise<{ title: string; author: string }> {
+  const text = await file.text();
+  const payload = JSON.parse(text) as Partial<EtbookExport>;
+  if (!payload.title || !payload.author || !payload.state?.bookMeta) {
+    throw new Error('Invalid or unrecognised .etbook file.');
+  }
+  saveStored(payload.title, payload.author, payload.state);
+  if (payload.mapState) saveMapState(payload.title, payload.author, payload.mapState);
+  return { title: payload.title, author: payload.author };
+}
+
 /** Find the snapshot with the highest index ≤ targetIndex */
 function bestSnapshot(snapshots: Snapshot[], targetIndex: number): Snapshot | null {
   let best: Snapshot | null = null;
@@ -148,6 +181,17 @@ export default function Home() {
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
 
   const [uploadTab, setUploadTab] = useState<'file' | 'calibre' | 'mybooks'>('file');
+  const [importError, setImportError] = useState<string | null>(null);
+
+  async function handleImport(file: File) {
+    setImportError(null);
+    try {
+      const { title, author } = await importEtbook(file);
+      loadBookFromMeta(title, author);
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : 'Import failed.');
+    }
+  }
 
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildProgress, setRebuildProgress] = useState<{ current: number; total: number } | null>(null);
@@ -234,6 +278,11 @@ export default function Home() {
   }
 
   const handleFile = useCallback(async (file: File) => {
+    // .etbook import shortcut
+    if (file.name.endsWith('.etbook')) {
+      await handleImport(file);
+      return;
+    }
     setParsing(true);
     setParseError(null);
     setBook(null);
@@ -410,50 +459,79 @@ export default function Home() {
             <CalibreLibrary onFile={handleFile} />
           ) : (
             /* My Books */
-            savedBooks.length === 0 ? (
-              <div className="flex flex-col items-center justify-center min-h-[40vh] gap-3 text-center">
-                <span className="text-4xl opacity-30">📚</span>
-                <p className="text-zinc-400 font-medium">No books yet</p>
-                <p className="text-sm text-zinc-600">Books you open will appear here for quick access.</p>
+            <div className="max-w-2xl">
+              {/* Import */}
+              <div className="mb-5 flex items-center gap-3">
+                <label
+                  htmlFor="etbook-import"
+                  className="px-3 py-1.5 bg-zinc-800 text-zinc-300 text-xs font-medium rounded-lg cursor-pointer hover:bg-zinc-700 transition-colors border border-zinc-700"
+                >
+                  Import .etbook
+                </label>
+                <input
+                  id="etbook-import"
+                  type="file"
+                  accept=".etbook"
+                  className="sr-only"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.target.value = ''; }}
+                />
+                {importError && <p className="text-xs text-red-400">{importError}</p>}
               </div>
-            ) : (
-              <div className="max-w-2xl">
-                <p className="text-xs font-medium text-zinc-600 uppercase tracking-wider mb-4">
-                  {savedBooks.length} saved book{savedBooks.length !== 1 ? 's' : ''}
-                </p>
-                <ul className="space-y-2">
-                  {savedBooks.map((entry) => {
-                    const hasText = loadStored(entry.title, entry.author)?.bookMeta !== undefined;
-                    const analyzed = entry.lastAnalyzedIndex >= 0;
-                    return (
-                      <li key={`${entry.title}::${entry.author}`}>
-                        <button
-                          onClick={() => loadBookFromMeta(entry.title, entry.author)}
-                          disabled={!hasText}
-                          className="w-full text-left px-4 py-3 bg-zinc-900 border border-zinc-800 rounded-xl hover:border-zinc-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="font-medium text-zinc-200 truncate">{entry.title}</p>
-                              <p className="text-xs text-zinc-500 truncate mt-0.5">{entry.author}</p>
+
+              {savedBooks.length === 0 ? (
+                <div className="flex flex-col items-center justify-center min-h-[30vh] gap-3 text-center">
+                  <span className="text-4xl opacity-30">📚</span>
+                  <p className="text-zinc-400 font-medium">No books yet</p>
+                  <p className="text-sm text-zinc-600">Books you open will appear here for quick access.</p>
+                </div>
+              ) : (
+                <>
+                  <p className="text-xs font-medium text-zinc-600 uppercase tracking-wider mb-3">
+                    {savedBooks.length} saved book{savedBooks.length !== 1 ? 's' : ''}
+                  </p>
+                  <ul className="space-y-2">
+                    {savedBooks.map((entry) => {
+                      const hasMeta = loadStored(entry.title, entry.author)?.bookMeta !== undefined;
+                      const analyzed = entry.lastAnalyzedIndex >= 0;
+                      return (
+                        <li key={`${entry.title}::${entry.author}`} className="flex items-center gap-2">
+                          <button
+                            onClick={() => loadBookFromMeta(entry.title, entry.author)}
+                            disabled={!hasMeta}
+                            className="flex-1 text-left px-4 py-3 bg-zinc-900 border border-zinc-800 rounded-xl hover:border-zinc-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="font-medium text-zinc-200 truncate">{entry.title}</p>
+                                <p className="text-xs text-zinc-500 truncate mt-0.5">{entry.author}</p>
+                              </div>
+                              <div className="flex-shrink-0 text-right">
+                                {analyzed ? (
+                                  <span className="text-xs text-amber-500/80">
+                                    Ch. {entry.lastAnalyzedIndex + 1}{entry.chapterCount ? ` / ${entry.chapterCount}` : ''} analyzed
+                                  </span>
+                                ) : (
+                                  <span className="text-xs text-zinc-600">Not analyzed</span>
+                                )}
+                              </div>
                             </div>
-                            <div className="flex-shrink-0 text-right">
-                              {analyzed ? (
-                                <span className="text-xs text-amber-500/80">
-                                  Ch. {entry.lastAnalyzedIndex + 1}{entry.chapterCount ? ` / ${entry.chapterCount}` : ''} analyzed
-                                </span>
-                              ) : (
-                                <span className="text-xs text-zinc-600">Not analyzed</span>
-                              )}
-                            </div>
-                          </div>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            )
+                          </button>
+                          {analyzed && (
+                            <button
+                              onClick={() => exportBook(entry.title, entry.author)}
+                              title="Export .etbook"
+                              className="flex-shrink-0 p-2 text-zinc-600 hover:text-zinc-300 transition-colors"
+                            >
+                              ↓
+                            </button>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
+              )}
+            </div>
           )}
         </div>
       </main>
@@ -483,6 +561,15 @@ export default function Home() {
           {isSeriesContinuation && <span className="text-xs text-violet-400 font-medium">Series mode</span>}
           {hasStoredState && (
             <span className="text-xs text-zinc-600">Saved · ch.{stored.lastAnalyzedIndex + 1}</span>
+          )}
+          {hasStoredState && (
+            <button
+              onClick={() => exportBook(book.title, book.author)}
+              className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+              title="Export .etbook file"
+            >
+              Export
+            </button>
           )}
           <button
             onClick={() => { setBook(null); setResult(null); storedRef.current = null; seriesBaseRef.current = null; }}
