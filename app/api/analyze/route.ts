@@ -66,6 +66,33 @@ Return ONLY a JSON object matching this exact schema (no markdown fences, no exp
 ${SCHEMA}`;
 }
 
+// Compact representation of previous characters for the delta prompt
+function compactCharacterList(chars: AnalysisResult['characters']): string {
+  return chars
+    .map((c) => `- ${c.name} (${c.status}, last: ${c.lastSeen ?? '?'}, loc: ${c.currentLocation ?? '?'})`)
+    .join('\n');
+}
+
+// Delta schema — only new/changed characters
+const DELTA_SCHEMA = `{
+  "updatedCharacters": [
+    {
+      "name": "Full character name",
+      "aliases": ["nickname", "title", "other names"],
+      "importance": "main" | "secondary" | "minor",
+      "status": "alive" | "dead" | "unknown" | "uncertain",
+      "lastSeen": "Chapter title where they last appeared",
+      "currentLocation": "Last known location, or 'Unknown'",
+      "description": "1–2 sentence description (carry forward from existing state if unchanged)",
+      "relationships": [
+        { "character": "Other character's name", "relationship": "How they relate" }
+      ],
+      "recentEvents": "Key things that happened in the NEW chapter only"
+    }
+  ],
+  "summary": "2–3 sentence summary of where the story stands as of the current chapter"
+}`;
+
 function buildUpdatePrompt(
   bookTitle: string,
   bookAuthor: string,
@@ -76,22 +103,39 @@ function buildUpdatePrompt(
   const prevCount = previousResult.characters.length;
   return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${currentChapterTitle}".
 
-EXISTING CHARACTER STATE (${prevCount} characters — you MUST preserve all ${prevCount} of them):
-${JSON.stringify(previousResult, null, 2)}
+EXISTING CHARACTERS (${prevCount} already tracked — DO NOT reproduce this list in your output):
+${compactCharacterList(previousResult.characters)}
 
 NEW CHAPTER TEXT TO PROCESS:
 ${newChaptersText}
 
-INSTRUCTIONS — THIS IS A MERGE OPERATION, NOT A REWRITE:
-1. Start with the COMPLETE existing character list above. Copy every one of the ${prevCount} characters into your output unchanged unless the new chapter modifies them.
-2. For each character who appears in the new chapter: update only the fields that changed (status, currentLocation, recentEvents, relationships, lastSeen). Keep all other fields as-is.
-3. Add any brand-new named characters introduced in the new chapter.
-4. Update the summary to reflect the story as of the current chapter.
-5. Your output MUST contain at least ${prevCount} characters. If you output fewer than ${prevCount}, you have incorrectly dropped characters.
-6. Do NOT use any knowledge of this book beyond what is in the existing state and the new chapter text above.
+INSTRUCTIONS — RETURN ONLY CHANGES, NOT THE FULL LIST:
+1. Read the new chapter text carefully.
+2. For each character who APPEARS in the new chapter: include them in "updatedCharacters" with updated fields (status, currentLocation, recentEvents, lastSeen). Keep description/relationships from existing state unless the chapter changes them.
+3. For any BRAND NEW named character introduced in this chapter: include them in "updatedCharacters" with all fields filled in.
+4. Do NOT include characters from the existing list who do not appear in the new chapter.
+5. Update the summary to reflect the story as of the current chapter.
+6. Do NOT use any knowledge of this book beyond what is listed above and the new chapter text.
 
-Return ONLY the complete updated JSON object (same schema, no markdown fences, no explanation):
-${SCHEMA}`;
+Return ONLY a JSON object with "updatedCharacters" and "summary" (no markdown fences, no explanation):
+${DELTA_SCHEMA}`;
+}
+
+// Merge a delta result into the previous full result
+function mergeDelta(
+  previous: AnalysisResult,
+  delta: { updatedCharacters?: AnalysisResult['characters']; summary?: string },
+): AnalysisResult {
+  const merged = previous.characters.map((c) => ({ ...c }));
+  for (const updated of delta.updatedCharacters ?? []) {
+    const idx = merged.findIndex((c) => c.name.toLowerCase() === updated.name.toLowerCase());
+    if (idx >= 0) {
+      merged[idx] = { ...merged[idx], ...updated };
+    } else {
+      merged.push(updated);
+    }
+  }
+  return { characters: merged, summary: delta.summary ?? previous.summary };
 }
 
 // Attempt to recover partial/truncated JSON by extracting complete character objects
@@ -168,9 +212,14 @@ async function callLocal(system: string, userPrompt: string): Promise<string> {
   const baseUrl = process.env.LOCAL_MODEL_URL ?? 'http://localhost:11434/v1';
   const model = process.env.LOCAL_MODEL_NAME ?? 'llama3.1:8b';
 
+  // Use a 10-minute AbortController timeout to avoid undici's default 300s headers timeout
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10 * 60 * 1000);
+
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: controller.signal,
     body: JSON.stringify({
       model,
       max_tokens: 32768,
@@ -179,7 +228,7 @@ async function callLocal(system: string, userPrompt: string): Promise<string> {
         { role: 'user', content: userPrompt },
       ],
     }),
-  });
+  }).finally(() => clearTimeout(timer));
 
   if (!res.ok) {
     const err = await res.text();
@@ -204,17 +253,20 @@ export async function POST(req: NextRequest) {
         previousResult?: AnalysisResult;
       };
 
+    const useLocal = process.env.USE_LOCAL_MODEL === 'true';
+    const isDelta = !!(previousResult && newChapters?.length);
+
     let userPrompt: string;
 
-    if (previousResult && newChapters?.length) {
-      // Incremental mode: only send new chapters + existing state
-      const newText = newChapters
+    if (isDelta) {
+      // Delta mode: ask only for new/changed characters, merge server-side
+      const newText = newChapters!
         .map((ch) => `=== ${ch.title} ===\n\n${ch.text}`)
         .join('\n\n---\n\n');
       const truncatedNew = newText.length > MAX_NEW_CHARS
         ? newText.slice(-MAX_NEW_CHARS)
         : newText;
-      userPrompt = buildUpdatePrompt(bookTitle, bookAuthor, currentChapterTitle, previousResult, truncatedNew);
+      userPrompt = buildUpdatePrompt(bookTitle, bookAuthor, currentChapterTitle, previousResult!, truncatedNew);
     } else {
       // Full analysis mode
       if (!chaptersRead?.length) {
@@ -232,7 +284,6 @@ export async function POST(req: NextRequest) {
       userPrompt = buildFullPrompt(bookTitle, bookAuthor, currentChapterTitle, truncated);
     }
 
-    const useLocal = process.env.USE_LOCAL_MODEL === 'true';
     const raw = useLocal
       ? await callLocal(SYSTEM_PROMPT, userPrompt)
       : await callAnthropic(SYSTEM_PROMPT, userPrompt);
@@ -240,31 +291,30 @@ export async function POST(req: NextRequest) {
     // Strip markdown code fences if the model wraps output in them
     const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
 
-    let result: AnalysisResult;
+    let parsed: Record<string, unknown>;
     try {
-      result = JSON.parse(cleaned);
+      parsed = JSON.parse(cleaned);
     } catch {
-      // Attempt to recover from truncated JSON by extracting the characters array
       const recovered = recoverPartialJson(cleaned, previousResult);
       if (!recovered) {
         console.error('[analyze] Unrecoverable JSON. Raw length:', cleaned.length, 'Preview:', cleaned.slice(-200));
-        return NextResponse.json(
-          { error: 'Model returned malformed JSON. Try again.' },
-          { status: 500 },
-        );
+        return NextResponse.json({ error: 'Model returned malformed JSON. Try again.' }, { status: 500 });
       }
       console.warn('[analyze] Recovered from truncated JSON — kept', recovered.characters.length, 'characters');
-      result = recovered;
+      // Treat recovered result as a full result (not delta)
+      return NextResponse.json(
+        isDelta ? mergeDelta(previousResult!, { updatedCharacters: recovered.characters, summary: recovered.summary }) : recovered
+      );
     }
 
-    // Safety net: if the model dropped characters from a previous state, merge them back in
-    if (previousResult && Array.isArray(result.characters) && Array.isArray(previousResult.characters)) {
-      const returnedNames = new Set(result.characters.map((c) => c.name.toLowerCase()));
-      const dropped = previousResult.characters.filter((c) => !returnedNames.has(c.name.toLowerCase()));
-      if (dropped.length > 0) {
-        console.warn(`[analyze] Model dropped ${dropped.length} characters — merging back:`, dropped.map((c) => c.name));
-        result.characters = [...result.characters, ...dropped];
-      }
+    let result: AnalysisResult;
+    if (isDelta) {
+      // Delta response: merge updated/new characters into previous full state
+      const delta = parsed as { updatedCharacters?: AnalysisResult['characters']; summary?: string };
+      result = mergeDelta(previousResult!, delta);
+      console.log(`[analyze] Delta merge: ${delta.updatedCharacters?.length ?? 0} changes → ${result.characters.length} total characters`);
+    } else {
+      result = parsed as unknown as AnalysisResult;
     }
 
     return NextResponse.json(result);
