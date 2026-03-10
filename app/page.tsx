@@ -445,11 +445,12 @@ export default function Home() {
           {([
             { key: 'file', label: 'Upload EPUB' },
             ...(!IS_MOBILE ? [{ key: 'calibre' as const, label: 'Calibre' }] : []),
-            { key: 'mybooks', label: `My Books${savedBooks.length > 0 ? ` (${savedBooks.length})` : ''}` },
-          ] as const).map(({ key, label }) => (
+            { key: 'mybooks', label: `My Books${savedBooks.length > 0 ? ` (${savedBooks.length})` : ''}`, suppressHydration: true },
+          ] as const).map(({ key, label, suppressHydration }) => (
             <button
               key={key}
               onClick={() => setUploadTab(key)}
+              suppressHydrationWarning={suppressHydration}
               className={`px-3 sm:px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 transition-colors -mb-px whitespace-nowrap ${
                 uploadTab === key
                   ? 'border-amber-500 text-amber-400'
