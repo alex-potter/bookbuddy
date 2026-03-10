@@ -103,16 +103,53 @@ export default function ChapterSelector({
                 onChange={(e) => onChange(Number(e.target.value))}
                 className="w-full appearance-none bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 pr-8 text-zinc-200 text-sm focus:outline-none focus:border-zinc-500 cursor-pointer"
               >
-                {chapters.map((ch, i) => (
-                  <option key={ch.id} value={i}>{i + 1}. {ch.title}</option>
-                ))}
+                {(() => {
+                  const isOmnibus = chapters.some((ch) => ch.bookIndex !== undefined);
+                  if (!isOmnibus) {
+                    return chapters.map((ch, i) => (
+                      <option key={ch.id} value={i}>{i + 1}. {ch.title}</option>
+                    ));
+                  }
+                  // Group by book, reset chapter numbering per book
+                  const groups = new Map<number, { bookTitle: string; items: Array<{ ch: typeof chapters[0]; globalIndex: number; chapterNum: number }> }>();
+                  const chapterCounters = new Map<number, number>();
+                  for (let i = 0; i < chapters.length; i++) {
+                    const ch = chapters[i];
+                    const bookIdx = ch.bookIndex ?? 0;
+                    const bookTitle = ch.bookTitle ?? '';
+                    if (!groups.has(bookIdx)) groups.set(bookIdx, { bookTitle, items: [] });
+                    const num = (chapterCounters.get(bookIdx) ?? 0) + 1;
+                    chapterCounters.set(bookIdx, num);
+                    groups.get(bookIdx)!.items.push({ ch, globalIndex: i, chapterNum: num });
+                  }
+                  return [...groups.entries()].map(([bookIdx, { bookTitle, items }]) => (
+                    <optgroup key={bookIdx} label={bookTitle}>
+                      {items.map(({ ch, globalIndex, chapterNum }) => (
+                        <option key={ch.id} value={globalIndex}>Ch. {chapterNum} — {ch.title}</option>
+                      ))}
+                    </optgroup>
+                  ));
+                })()}
               </select>
               <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-zinc-500">
                 ▾
               </div>
             </div>
             <p className="mt-1.5 text-xs text-zinc-600">
-              {currentIndex + 1} of {chapters.length} chapters
+              {(() => {
+                const ch = chapters[currentIndex];
+                if (ch?.bookIndex === undefined) return `${currentIndex + 1} of ${chapters.length} chapters`;
+                // Count chapter number within its book
+                let num = 0;
+                let bookTotal = 0;
+                for (const c of chapters) {
+                  if (c.bookIndex === ch.bookIndex) {
+                    bookTotal++;
+                    if (c.order <= ch.order) num++;
+                  }
+                }
+                return `Ch. ${num} of ${bookTotal} · ${ch.bookTitle}`;
+              })()}
             </p>
           </>
         ) : (
