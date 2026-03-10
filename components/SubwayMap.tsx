@@ -1,14 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { Snapshot } from '@/types';
+import type { Character, Snapshot } from '@/types';
 
 /* ── Types ────────────────────────────────────────────────────────────── */
-
-interface CharAvatar {
-  name: string;
-  status: 'alive' | 'dead' | 'unknown' | 'uncertain';
-}
 
 interface Node {
   id: string;
@@ -16,7 +11,6 @@ interface Node {
   y: number;
   vx: number;
   vy: number;
-  characters: CharAvatar[];
 }
 
 interface Edge {
@@ -26,6 +20,11 @@ interface Edge {
   color: string;
 }
 
+interface CharAvatar {
+  name: string;
+  status: Character['status'];
+}
+
 /* ── Constants ────────────────────────────────────────────────────────── */
 
 const LINE_COLORS = [
@@ -33,7 +32,7 @@ const LINE_COLORS = [
   '#fb7185', '#f472b6', '#2dd4bf', '#818cf8',
 ];
 
-const STATUS_HEX: Record<CharAvatar['status'], string> = {
+const STATUS_HEX: Record<Character['status'], string> = {
   alive: '#10b981',
   dead: '#ef4444',
   unknown: '#71717a',
@@ -45,10 +44,10 @@ const H = 420;
 const CX = W / 2;
 const CY = H / 2;
 
-const AVT_R = 7;       // avatar circle radius
-const AVT_GAP = 2;     // gap between avatars
+const AVT_R = 7;
+const AVT_GAP = 2;
 const AVT_STEP = AVT_R * 2 + AVT_GAP;
-const MAX_SHOW = 7;    // max avatars before "+N"
+const MAX_SHOW = 7;
 
 /* ── Helpers ──────────────────────────────────────────────────────────── */
 
@@ -56,7 +55,6 @@ function initials(name: string): string {
   return name.split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? '').join('');
 }
 
-/** Grid positions for a cluster of `count` avatars centred on (cx, cy). */
 function clusterPositions(count: number, cx: number, cy: number): Array<{ x: number; y: number }> {
   const cols = Math.min(count, 3);
   const rows = Math.ceil(count / cols);
@@ -75,31 +73,27 @@ function clusterPositions(count: number, cx: number, cy: number): Array<{ x: num
   return positions;
 }
 
-/** Centre point for an avatar cluster placed `dist` from node in `angle` direction. */
-function clusterCenter(nodeX: number, nodeY: number, nodeR: number, angle: number, rows: number): { cx: number; cy: number } {
+function clusterCenter(nx: number, ny: number, nodeR: number, angle: number, rows: number) {
   const dist = nodeR + AVT_R + 5 + ((rows - 1) / 2) * AVT_STEP;
-  return {
-    cx: nodeX + Math.cos(angle) * dist,
-    cy: nodeY + Math.sin(angle) * dist,
-  };
+  return { cx: nx + Math.cos(angle) * dist, cy: ny + Math.sin(angle) * dist };
 }
 
-/* ── Graph extraction ─────────────────────────────────────────────────── */
+/* ── Graph extraction (structure only — no character data) ────────────── */
 
 function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[] } {
   const sorted = [...snapshots].sort((a, b) => a.index - b.index);
   if (sorted.length === 0) return { nodes: [], edges: [] };
 
-  const latest = sorted[sorted.length - 1];
-  const charData = new Map<string, CharAvatar[]>();
-  for (const c of latest.result.characters) {
-    const loc = c.currentLocation?.trim();
-    if (loc && loc !== 'Unknown') {
-      if (!charData.has(loc)) charData.set(loc, []);
-      charData.get(loc)!.push({ name: c.name, status: c.status });
+  // Collect all location names ever seen
+  const allLocs = new Set<string>();
+  for (const snap of sorted) {
+    for (const c of snap.result.characters) {
+      const loc = c.currentLocation?.trim();
+      if (loc && loc !== 'Unknown') allLocs.add(loc);
     }
   }
 
+  // Edges from character movement between consecutive snapshots
   const edgeCounts = new Map<string, number>();
   for (let i = 1; i < sorted.length; i++) {
     const prevMap = new Map<string, string>();
@@ -110,7 +104,8 @@ function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[] } {
       const newLoc = c.currentLocation?.trim();
       const oldLoc = prevMap.get(c.name);
       if (!newLoc || newLoc === 'Unknown' || !oldLoc || oldLoc === 'Unknown' || newLoc === oldLoc) continue;
-      edgeCounts.set([oldLoc, newLoc].sort().join('\x00'), (edgeCounts.get([oldLoc, newLoc].sort().join('\x00')) ?? 0) + 1);
+      const key = [oldLoc, newLoc].sort().join('\x00');
+      edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
     }
   }
 
@@ -120,9 +115,10 @@ function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[] } {
     return { source, target, weight, color: LINE_COLORS[i % LINE_COLORS.length] };
   });
 
+  // Nodes = locations with edges + any location seen in any snapshot
   const nodeIds = new Set<string>();
   for (const e of edges) { nodeIds.add(e.source); nodeIds.add(e.target); }
-  for (const [loc] of charData.entries()) nodeIds.add(loc);
+  for (const loc of allLocs) nodeIds.add(loc);
 
   const nodes: Node[] = Array.from(nodeIds).map((id) => ({
     id,
@@ -130,7 +126,6 @@ function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[] } {
     y: CY + (Math.random() - 0.5) * 280,
     vx: 0,
     vy: 0,
-    characters: charData.get(id) ?? [],
   }));
 
   return { nodes, edges };
@@ -227,13 +222,15 @@ function subwayPath(x1: number, y1: number, x2: number, y2: number): string {
 
 interface Props {
   snapshots: Snapshot[];
+  currentCharacters?: Character[];  // characters at the currently viewed snapshot
 }
 
-export default function SubwayMap({ snapshots }: Props) {
+export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) {
   const [graph, setGraph] = useState<{ nodes: Node[]; edges: Edge[] }>(() => buildGraph(snapshots));
   const [settled, setSettled] = useState(false);
   const frameRef = useRef<number>(0);
 
+  // Rebuild graph structure when snapshots change (new chapters analyzed)
   useEffect(() => {
     setGraph(buildGraph(snapshots));
     setSettled(false);
@@ -266,15 +263,21 @@ export default function SubwayMap({ snapshots }: Props) {
     );
   }
 
+  // Build live character→location map from currentCharacters (updates with snapshot nav)
+  const liveByLoc = new Map<string, CharAvatar[]>();
+  for (const c of currentCharacters) {
+    const loc = c.currentLocation?.trim();
+    if (loc && loc !== 'Unknown') {
+      if (!liveByLoc.has(loc)) liveByLoc.set(loc, []);
+      liveByLoc.get(loc)!.push({ name: c.name, status: c.status });
+    }
+  }
+
   const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
   const maxW = Math.max(...graph.edges.map((e) => e.weight), 1);
 
   return (
-    <svg
-      viewBox={`0 0 ${W} ${H}`}
-      className="w-full"
-      style={{ height: '100%', display: 'block' }}
-    >
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: '100%', display: 'block' }}>
       <defs>
         <pattern id="sm-grid" width="30" height="30" patternUnits="userSpaceOnUse">
           <path d="M 30 0 L 0 0 0 30" fill="none" stroke="#27272a" strokeWidth="0.5" />
@@ -309,13 +312,16 @@ export default function SubwayMap({ snapshots }: Props) {
         })}
       </g>
 
-      {/* Stations + labels + character avatars */}
+      {/* Stations + character avatars + labels */}
       {graph.nodes.map((n) => {
         const colors = graph.edges
           .filter((e) => e.source === n.id || e.target === n.id)
           .map((e) => e.color);
         const primaryColor = colors[0] ?? '#71717a';
-        const r = n.characters.length > 0 ? 9 : 6;
+
+        // Live characters at this location in the current snapshot
+        const chars = liveByLoc.get(n.id) ?? [];
+        const r = chars.length > 0 ? 9 : 6;
 
         const labelAngle = pickLabelAngle(n, graph.edges, nodeMap);
         const labelDist = r + 12;
@@ -324,10 +330,10 @@ export default function SubwayMap({ snapshots }: Props) {
         const labelAnchor = Math.cos(labelAngle) > 0.3 ? 'start' : Math.cos(labelAngle) < -0.3 ? 'end' : 'middle';
         const labelBaseline = Math.sin(labelAngle) > 0.3 ? 'hanging' : Math.sin(labelAngle) < -0.3 ? 'auto' : 'central';
 
-        // Character avatars: opposite side from label
+        // Avatars on the opposite side of the label
         const charAngle = labelAngle + Math.PI;
-        const displayChars = n.characters.slice(0, MAX_SHOW);
-        const extra = n.characters.length - MAX_SHOW;
+        const displayChars = chars.slice(0, MAX_SHOW);
+        const extra = chars.length - MAX_SHOW;
         const showCount = displayChars.length + (extra > 0 ? 1 : 0);
         const avatarRows = Math.ceil(showCount / 3);
         const { cx: avatarCX, cy: avatarCY } = clusterCenter(n.x, n.y, r, charAngle, avatarRows);
@@ -344,10 +350,7 @@ export default function SubwayMap({ snapshots }: Props) {
                 <g key={c.name} transform={`translate(${pos.x},${pos.y})`}>
                   <title>{c.name} ({c.status})</title>
                   <circle r={AVT_R} fill={hex + '28'} stroke={hex} strokeWidth="1.5" />
-                  <text
-                    textAnchor="middle" dominantBaseline="central"
-                    fontSize="5.5" fontWeight="700" fill={hex}
-                  >
+                  <text textAnchor="middle" dominantBaseline="central" fontSize="5.5" fontWeight="700" fill={hex}>
                     {initials(c.name)}
                   </text>
                 </g>
@@ -356,9 +359,7 @@ export default function SubwayMap({ snapshots }: Props) {
             {extra > 0 && positions[MAX_SHOW] && (
               <g transform={`translate(${positions[MAX_SHOW].x},${positions[MAX_SHOW].y})`}>
                 <circle r={AVT_R} fill="#27272a" stroke="#52525b" strokeWidth="1" />
-                <text textAnchor="middle" dominantBaseline="central" fontSize="5" fill="#a1a1aa">
-                  +{extra}
-                </text>
+                <text textAnchor="middle" dominantBaseline="central" fontSize="5" fill="#a1a1aa">+{extra}</text>
               </g>
             )}
 
@@ -373,9 +374,7 @@ export default function SubwayMap({ snapshots }: Props) {
               x={labelX} y={labelY}
               textAnchor={labelAnchor}
               dominantBaseline={labelBaseline}
-              fontSize="9.5"
-              fontWeight="600"
-              fill="#e4e4e7"
+              fontSize="9.5" fontWeight="600" fill="#e4e4e7"
               style={{ textShadow: '0 1px 4px #000, 0 0 8px #000' }}
             >
               {n.id.length > 22 ? n.id.slice(0, 20) + '…' : n.id}

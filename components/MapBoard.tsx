@@ -347,7 +347,7 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
       >
         {/* Subway map fills full height */}
         <div className="h-full bg-zinc-900">
-          <SubwayMap snapshots={snapshots} />
+          <SubwayMap snapshots={snapshots} currentCharacters={characters} />
         </div>
 
         {/* Upload panel — bottom-right overlay */}

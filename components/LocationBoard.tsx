@@ -143,7 +143,7 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
         </button>
       </div>
 
-      {view === 'graph' && <LocationGraph snapshots={snapshots} />}
+      {view === 'graph' && <LocationGraph snapshots={snapshots} currentCharacters={characters} />}
 
       {view === 'list' && (
         <>
@@ -177,7 +177,7 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
               <>
                 {/* Subway map fills the card */}
                 <div className="h-64 sm:h-72">
-                  <SubwayMap snapshots={snapshots} />
+                  <SubwayMap snapshots={snapshots} currentCharacters={characters} />
                 </div>
 
                 {/* Upload overlay button — bottom-right */}

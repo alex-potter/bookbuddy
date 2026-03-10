@@ -1,11 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Snapshot } from '@/types';
+import type { Character, Snapshot } from '@/types';
 
 interface CharAvatar {
   name: string;
-  status: 'alive' | 'dead' | 'unknown' | 'uncertain';
+  status: Character['status'];
 }
 
 interface Node {
@@ -14,8 +14,6 @@ interface Node {
   y: number;
   vx: number;
   vy: number;
-  characterCount: number;
-  characters: CharAvatar[];
 }
 
 interface Edge {
@@ -31,21 +29,6 @@ interface GraphData {
 
 function buildGraph(snapshots: Snapshot[]): GraphData {
   const sorted = [...snapshots].sort((a, b) => a.index - b.index);
-
-  // Characters per location in latest snapshot
-  const latest = sorted[sorted.length - 1];
-  const latestCounts = new Map<string, number>();
-  const charData = new Map<string, CharAvatar[]>();
-  if (latest) {
-    for (const c of latest.result.characters) {
-      const loc = c.currentLocation?.trim();
-      if (loc && loc !== 'Unknown') {
-        latestCounts.set(loc, (latestCounts.get(loc) ?? 0) + 1);
-        if (!charData.has(loc)) charData.set(loc, []);
-        charData.get(loc)!.push({ name: c.name, status: c.status });
-      }
-    }
-  }
 
   // Build edges from character movements between consecutive snapshots
   const edgeCounts = new Map<string, number>();
@@ -79,10 +62,15 @@ function buildGraph(snapshots: Snapshot[]): GraphData {
     edges.push({ source, target, weight });
   }
 
-  // Collect all nodes referenced in edges + those with characters in latest snapshot
+  // Collect all nodes referenced in edges + all locations ever seen
   const usedNodes = new Set<string>();
   for (const e of edges) { usedNodes.add(e.source); usedNodes.add(e.target); }
-  for (const [loc] of latestCounts.entries()) usedNodes.add(loc);
+  for (const snap of sorted) {
+    for (const c of snap.result.characters) {
+      const loc = c.currentLocation?.trim();
+      if (loc && loc !== 'Unknown') usedNodes.add(loc);
+    }
+  }
 
   const nodes: Node[] = Array.from(usedNodes).map((id) => ({
     id,
@@ -90,8 +78,6 @@ function buildGraph(snapshots: Snapshot[]): GraphData {
     y: Math.random() * 400 + 100,
     vx: 0,
     vy: 0,
-    characterCount: latestCounts.get(id) ?? 0,
-    characters: charData.get(id) ?? [],
   }));
 
   return { nodes, edges };
@@ -205,9 +191,10 @@ function pickAngle(nodeId: string, nodes: { id: string; x: number; y: number }[]
 
 interface Props {
   snapshots: Snapshot[];
+  currentCharacters?: Character[];
 }
 
-export default function LocationGraph({ snapshots }: Props) {
+export default function LocationGraph({ snapshots, currentCharacters = [] }: Props) {
   const [graph, setGraph] = useState<GraphData>(() => buildGraph(snapshots));
   const [running, setRunning] = useState(true);
   const [dragging, setDragging] = useState<string | null>(null);
@@ -284,6 +271,16 @@ export default function LocationGraph({ snapshots }: Props) {
         No location data yet — analyze some chapters first.
       </div>
     );
+  }
+
+  // Build live character→location map from currentCharacters
+  const liveByLoc = new Map<string, CharAvatar[]>();
+  for (const c of currentCharacters) {
+    const loc = c.currentLocation?.trim();
+    if (loc && loc !== 'Unknown') {
+      if (!liveByLoc.has(loc)) liveByLoc.set(loc, []);
+      liveByLoc.get(loc)!.push({ name: c.name, status: c.status });
+    }
   }
 
   // Build edge weight scale for opacity
@@ -381,7 +378,9 @@ export default function LocationGraph({ snapshots }: Props) {
           {/* Nodes */}
           {graph.nodes.map((n) => {
             const ci = nodeColor(n.id);
-            const r = Math.max(16, Math.min(28, 16 + n.characterCount * 2));
+            // Live characters at this location in the current snapshot
+            const chars = liveByLoc.get(n.id) ?? [];
+            const r = Math.max(16, Math.min(28, 16 + chars.length * 2));
             const fills = ['#f43f5e22','#0ea5e922','#8b5cf622','#10b98122','#f59e0b22','#ec489922','#14b8a622','#6366f122'];
             const strokes = ['#f43f5e99','#0ea5e999','#8b5cf699','#10b98199','#f59e0b99','#ec489999','#14b8a699','#6366f199'];
             const labelFills = ['#fb7185','#38bdf8','#a78bfa','#34d399','#fbbf24','#f472b6','#2dd4bf','#818cf8'];
@@ -393,12 +392,9 @@ export default function LocationGraph({ snapshots }: Props) {
             const anchor = Math.cos(labelAngle) > 0.3 ? 'start' : Math.cos(labelAngle) < -0.3 ? 'end' : 'middle';
             const baseline = Math.sin(labelAngle) > 0.3 ? 'hanging' : Math.sin(labelAngle) < -0.3 ? 'auto' : 'central';
 
-            // Place avatars in a ring just outside the node, evenly spaced
-            const chars = n.characters;
-            const AVT = 7; // avatar radius
+            const AVT = 7;
             const ringR = r + AVT + 4;
             const step = chars.length > 0 ? (2 * Math.PI) / chars.length : 0;
-            // Start avatars opposite the label direction to avoid overlap
             const startAngle = labelAngle + Math.PI;
 
             return (
