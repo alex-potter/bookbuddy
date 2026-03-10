@@ -174,6 +174,11 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
     onMapStateChange({ imageDataUrl: mapState.imageDataUrl, pins });
   }
 
+  function isPlaceName(name: string): boolean {
+    // Exclude narrative descriptions and vague locations
+    return !/^(unknown|travelling|traveling|on the|on a|on his|on her|near |inside |a camp|the site|road near|referenced|unnamed|in the|heading|moving|sailing|riding|returning|fleeing|escaping|somewhere|various)/i.test(name.trim());
+  }
+
   async function handleAutoDetect() {
     if (!mapState || !locations.length) return;
     setDetecting(true);
@@ -188,7 +193,7 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
           imageDataUrl,
           imageWidth,
           imageHeight,
-          locations: locations.map(([name]) => name),
+          locations: locations.map(([name]) => name).filter(isPlaceName),
         }),
       });
       const data = await res.json();
