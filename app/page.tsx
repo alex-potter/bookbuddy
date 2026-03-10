@@ -112,7 +112,7 @@ function exportBook(title: string, author: string) {
 async function importEtbook(file: File): Promise<{ title: string; author: string }> {
   const text = await file.text();
   const payload = JSON.parse(text) as Partial<EtbookExport>;
-  if (!payload.title || !payload.author || !payload.state?.bookMeta) {
+  if (!payload.title || !payload.author || !payload.state) {
     throw new Error('Invalid or unrecognised .etbook file.');
   }
   saveStored(payload.title, payload.author, payload.state);
