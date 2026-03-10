@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { Character, Snapshot } from '@/types';
+import { withResolvedLocations } from '@/lib/resolve-locations';
 
 /* ── Types ────────────────────────────────────────────────────────────── */
 
@@ -263,9 +264,11 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
     );
   }
 
-  // Build live character→location map from currentCharacters (updates with snapshot nav)
+  // Build live character→location map from currentCharacters (updates with snapshot nav).
+  // Characters with unknown locations fall back to their last confirmed location.
+  const resolvedCharacters = withResolvedLocations(currentCharacters, snapshots);
   const liveByLoc = new Map<string, CharAvatar[]>();
-  for (const c of currentCharacters) {
+  for (const c of resolvedCharacters) {
     const loc = c.currentLocation?.trim();
     if (loc && loc !== 'Unknown') {
       if (!liveByLoc.has(loc)) liveByLoc.set(loc, []);

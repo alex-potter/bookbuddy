@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import type { Character, LocationInfo, Snapshot } from '@/types';
 import LocationGraph from './LocationGraph';
 import SubwayMap from './SubwayMap';
+import { withResolvedLocations } from '@/lib/resolve-locations';
 
 interface LocationGroup {
   location: string;
@@ -57,9 +58,11 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
 
   const locationDescMap = new Map((locations ?? []).map((l) => [l.name.toLowerCase(), l.description]));
 
+  const resolvedCharacters = withResolvedLocations(characters, snapshots);
+
   const groups: LocationGroup[] = [];
   const seen = new Map<string, Character[]>();
-  for (const c of characters) {
+  for (const c of resolvedCharacters) {
     const loc = c.currentLocation?.trim() || 'Unknown';
     if (!seen.has(loc)) seen.set(loc, []);
     seen.get(loc)!.push(c);

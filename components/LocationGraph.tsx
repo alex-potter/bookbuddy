@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Character, Snapshot } from '@/types';
+import { withResolvedLocations } from '@/lib/resolve-locations';
 
 interface CharAvatar {
   name: string;
@@ -273,9 +274,11 @@ export default function LocationGraph({ snapshots, currentCharacters = [] }: Pro
     );
   }
 
-  // Build live character→location map from currentCharacters
+  // Build live character→location map from currentCharacters.
+  // Characters with unknown locations fall back to their last confirmed location.
+  const resolvedCharacters = withResolvedLocations(currentCharacters, snapshots);
   const liveByLoc = new Map<string, CharAvatar[]>();
-  for (const c of currentCharacters) {
+  for (const c of resolvedCharacters) {
     const loc = c.currentLocation?.trim();
     if (loc && loc !== 'Unknown') {
       if (!liveByLoc.has(loc)) liveByLoc.set(loc, []);

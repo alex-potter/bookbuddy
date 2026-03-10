@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Character, LocationPin, MapState, Snapshot } from '@/types';
 import SubwayMap from './SubwayMap';
+import { withResolvedLocations } from '@/lib/resolve-locations';
 
 interface Props {
   characters: Character[];
@@ -164,14 +165,17 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
   const mapRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const locationMap = buildLocationMap(characters);
+  // Resolve last-known locations for characters currently marked 'Unknown'
+  const resolvedChars = withResolvedLocations(characters, snapshots);
+
+  const locationMap = buildLocationMap(resolvedChars);
   const locations = [...locationMap.entries()];
   const pinnedCount = mapState ? Object.keys(mapState.pins).length : 0;
 
   // Character filter helpers
   const displayedChars = trackedCharNames === null
-    ? characters
-    : characters.filter((c) => trackedCharNames.has(c.name));
+    ? resolvedChars
+    : resolvedChars.filter((c) => trackedCharNames.has(c.name));
   const displayedLocationMap = buildLocationMap(displayedChars);
 
   function toggleChar(name: string) {
