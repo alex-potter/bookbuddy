@@ -16,6 +16,8 @@ interface Props {
   canIncrement: boolean;
   lastAnalyzedIndex: number | null;
   snapshotIndices?: Set<number>;
+  excludedBooks?: Set<number>;
+  onToggleBook?: (bookIndex: number) => void;
 }
 
 const BYTES_PER_LOCATION = 128;
@@ -49,6 +51,8 @@ export default function ChapterSelector({
   canIncrement,
   lastAnalyzedIndex,
   snapshotIndices,
+  excludedBooks,
+  onToggleBook,
 }: Props) {
   const [mode, setMode] = useState<'chapter' | 'location'>('chapter');
   const [locationInput, setLocationInput] = useState('');
@@ -191,6 +195,39 @@ export default function ChapterSelector({
         )}
       </div>
 
+      {/* Book filter pills — omnibus only */}
+      {(() => {
+        const books = new Map<number, string>();
+        for (const ch of chapters) {
+          if (ch.bookIndex !== undefined && ch.bookTitle && !books.has(ch.bookIndex))
+            books.set(ch.bookIndex, ch.bookTitle);
+        }
+        if (books.size < 2) return null;
+        return (
+          <div className="mt-4">
+            <p className="text-xs font-medium text-zinc-600 uppercase tracking-wider mb-1.5">Include books</p>
+            <div className="flex flex-col gap-1">
+              {[...books.entries()].map(([idx, title]) => {
+                const excluded = excludedBooks?.has(idx) ?? false;
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => onToggleBook?.(idx)}
+                    className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors border ${
+                      excluded
+                        ? 'border-zinc-800 text-zinc-700 line-through'
+                        : 'border-zinc-700 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'
+                    }`}
+                  >
+                    {excluded ? '✗' : '✓'} {title}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Chapter list */}
       <div className="mt-5 flex-1 overflow-y-auto">
         <p className="text-xs font-medium text-zinc-600 uppercase tracking-wider mb-2">Chapters</p>
@@ -200,18 +237,25 @@ export default function ChapterSelector({
             const hasSnapshot = snapshotIndices?.has(i) ?? false;
             const isLastAnalyzed = lastAnalyzedIndex !== null && i === lastAnalyzedIndex;
             const isAnalyzed = lastAnalyzedIndex !== null && i < lastAnalyzedIndex;
+            const isExcluded = ch.bookIndex !== undefined && (excludedBooks?.has(ch.bookIndex) ?? false);
             const prevCh = chapters[i - 1];
             const showBookDivider = ch.bookTitle !== undefined && ch.bookIndex !== prevCh?.bookIndex;
             return (
               <li key={ch.id}>
                 {showBookDivider && (
-                  <div className="mt-3 mb-1 px-2 flex items-center gap-2">
+                  <button
+                    onClick={() => ch.bookIndex !== undefined && onToggleBook?.(ch.bookIndex)}
+                    className="mt-3 mb-1 w-full flex items-center gap-2 group"
+                    title={isExcluded ? 'Click to include this book' : 'Click to exclude this book'}
+                  >
                     <div className="flex-1 h-px bg-zinc-800" />
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-600 whitespace-nowrap">
+                    <span className={`text-[10px] font-semibold uppercase tracking-wider whitespace-nowrap transition-colors ${
+                      isExcluded ? 'text-zinc-700 line-through' : 'text-zinc-600 group-hover:text-zinc-500'
+                    }`}>
                       {ch.bookTitle}
                     </span>
                     <div className="flex-1 h-px bg-zinc-800" />
-                  </div>
+                  </button>
                 )}
                 <button
                   onClick={() => {
@@ -220,7 +264,9 @@ export default function ChapterSelector({
                   }}
                   className={`
                     w-full text-left px-2.5 py-1.5 rounded-md text-xs transition-colors
-                    ${isRebuildingThis
+                    ${isExcluded
+                      ? 'text-zinc-800 cursor-default'
+                      : isRebuildingThis
                       ? 'bg-violet-500/10 text-violet-400'
                       : i === currentIndex
                       ? 'bg-zinc-800 text-zinc-100 font-medium'
@@ -233,11 +279,13 @@ export default function ChapterSelector({
                       : 'text-zinc-700 cursor-default'
                     }
                   `}
-                  disabled={i > currentIndex}
+                  disabled={i > currentIndex || isExcluded}
                   title={hasSnapshot ? 'Snapshot saved — click to view' : undefined}
                 >
                   <span className="mr-1.5 text-[10px]">
-                    {isRebuildingThis
+                    {isExcluded
+                      ? '✗'
+                      : isRebuildingThis
                       ? '↻'
                       : isLastAnalyzed
                       ? '★'

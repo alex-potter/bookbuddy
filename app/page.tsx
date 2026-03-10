@@ -19,9 +19,15 @@ const IMPORTANCE_ORDER: Record<Character['importance'], number> = {
   minor: 2,
 };
 
-interface StoredBookState {
-  lastAnalyzedIndex: number;
+interface Snapshot {
+  index: number;
   result: AnalysisResult;
+}
+
+interface StoredBookState {
+  lastAnalyzedIndex: number; // -1 = series carry-forward
+  result: AnalysisResult;
+  snapshots: Snapshot[];
 }
 
 interface SavedBookEntry {
@@ -37,7 +43,11 @@ function storageKey(title: string, author: string) {
 function loadStored(title: string, author: string): StoredBookState | null {
   try {
     const raw = localStorage.getItem(storageKey(title, author));
-    return raw ? (JSON.parse(raw) as StoredBookState) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredBookState;
+    // Back-compat: old saves without snapshots
+    if (!parsed.snapshots) parsed.snapshots = [];
+    return parsed;
   } catch {
     return null;
   }
@@ -47,6 +57,21 @@ function saveStored(title: string, author: string, state: StoredBookState) {
   try {
     localStorage.setItem(storageKey(title, author), JSON.stringify(state));
   } catch { /* ignore */ }
+}
+
+/** Find the snapshot with the highest index ≤ targetIndex */
+function bestSnapshot(snapshots: Snapshot[], targetIndex: number): Snapshot | null {
+  let best: Snapshot | null = null;
+  for (const s of snapshots) {
+    if (s.index <= targetIndex && (best === null || s.index > best.index)) best = s;
+  }
+  return best;
+}
+
+/** Add/replace a snapshot for this index */
+function upsertSnapshot(snapshots: Snapshot[], index: number, result: AnalysisResult): Snapshot[] {
+  const without = snapshots.filter((s) => s.index !== index);
+  return [...without, { index, result }];
 }
 
 function listSavedBooks(excludeTitle: string, excludeAuthor: string): SavedBookEntry[] {
@@ -96,6 +121,8 @@ export default function Home() {
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [result, setResult] = useState<AnalysisResult | null>(null);
+  // Which chapter index the currently displayed result corresponds to (null = latest)
+  const [viewingSnapshotIndex, setViewingSnapshotIndex] = useState<number | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [analysisMode, setAnalysisMode] = useState<'full' | 'incremental' | null>(null);
@@ -105,6 +132,16 @@ export default function Home() {
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildProgress, setRebuildProgress] = useState<{ current: number; total: number } | null>(null);
   const rebuildCancelRef = useRef(false);
+
+  const [excludedBooks, setExcludedBooks] = useState<Set<number>>(new Set());
+
+  function toggleBook(bookIndex: number) {
+    setExcludedBooks((prev) => {
+      const next = new Set(prev);
+      if (next.has(bookIndex)) next.delete(bookIndex); else next.add(bookIndex);
+      return next;
+    });
+  }
 
   const [tab, setTab] = useState<MainTab>('characters');
   const [sortKey, setSortKey] = useState<SortKey>('importance');
@@ -117,11 +154,34 @@ export default function Home() {
   function activateBook(parsed: ParsedEbook, initialStored: StoredBookState | null) {
     storedRef.current = initialStored;
     seriesBaseRef.current = initialStored?.lastAnalyzedIndex === -1 ? initialStored.result : null;
+    setExcludedBooks(new Set());
     setBook(parsed);
+    setViewingSnapshotIndex(null);
     setCurrentIndex(0);
     if (initialStored && initialStored.lastAnalyzedIndex >= 0) {
       setResult(initialStored.result);
       setCurrentIndex(initialStored.lastAnalyzedIndex);
+    }
+  }
+
+  /** Called whenever the user selects a chapter in the sidebar */
+  function handleChapterChange(i: number) {
+    setCurrentIndex(i);
+    const stored = storedRef.current;
+    if (!stored || stored.lastAnalyzedIndex < 0) return;
+
+    if (i >= stored.lastAnalyzedIndex) {
+      // At or beyond the latest analyzed chapter — show the latest result
+      setResult(stored.result);
+      setViewingSnapshotIndex(null);
+    } else {
+      // Earlier chapter — look up nearest snapshot
+      const snap = bestSnapshot(stored.snapshots, i);
+      if (snap) {
+        setResult(snap.result);
+        setViewingSnapshotIndex(snap.index);
+      }
+      // If no snapshot exists yet for this range, keep the current display
     }
   }
 
@@ -137,10 +197,7 @@ export default function Home() {
     try {
       const parsed = await parseEpub(file);
       const ownStored = loadStored(parsed.title, parsed.author);
-      if (ownStored) {
-        activateBook(parsed, ownStored);
-        return;
-      }
+      if (ownStored) { activateBook(parsed, ownStored); return; }
       const others = listSavedBooks(parsed.title, parsed.author);
       if (others.length > 0) {
         setPendingBook(parsed);
@@ -159,7 +216,7 @@ export default function Home() {
     if (!pendingBook) return;
     const prevStored = loadStored(prevTitle, prevAuthor);
     if (!prevStored) { activateBook(pendingBook, null); return; }
-    const carried: StoredBookState = { lastAnalyzedIndex: -1, result: prevStored.result };
+    const carried: StoredBookState = { lastAnalyzedIndex: -1, result: prevStored.result, snapshots: [] };
     setPendingBook(null);
     setSeriesOptions([]);
     activateBook(pendingBook, carried);
@@ -183,13 +240,16 @@ export default function Home() {
       const canIncrement = stored && currentIndex > stored.lastAnalyzedIndex;
       let body: Record<string, unknown>;
 
+      const included = (ch: typeof book.chapters[0]) =>
+        ch.bookIndex === undefined || !excludedBooks.has(ch.bookIndex);
+
       if (canIncrement) {
         const fromIndex = stored.lastAnalyzedIndex + 1;
-        const newChapters = book.chapters.slice(fromIndex, currentIndex + 1).map((ch) => ({ title: ch.title, text: ch.text }));
+        const newChapters = book.chapters.slice(fromIndex, currentIndex + 1).filter(included).map((ch) => ({ title: ch.title, text: ch.text }));
         body = { newChapters, previousResult: stored.result, currentChapterTitle: book.chapters[currentIndex].title, bookTitle: book.title, bookAuthor: book.author };
         setAnalysisMode('incremental');
       } else {
-        const chaptersRead = book.chapters.slice(0, currentIndex + 1).map((ch) => ({ title: ch.title, text: ch.text }));
+        const chaptersRead = book.chapters.slice(0, currentIndex + 1).filter(included).map((ch) => ({ title: ch.title, text: ch.text }));
         body = { chaptersRead, currentChapterTitle: book.chapters[currentIndex].title, bookTitle: book.title, bookAuthor: book.author };
         setAnalysisMode('full');
       }
@@ -200,7 +260,14 @@ export default function Home() {
 
       const newResult = data as AnalysisResult;
       setResult(newResult);
-      const newStored: StoredBookState = { lastAnalyzedIndex: currentIndex, result: newResult };
+      setViewingSnapshotIndex(null);
+
+      const prevSnapshots = storedRef.current?.snapshots ?? [];
+      const newStored: StoredBookState = {
+        lastAnalyzedIndex: currentIndex,
+        result: newResult,
+        snapshots: upsertSnapshot(prevSnapshots, currentIndex, newResult),
+      };
       storedRef.current = newStored;
       saveStored(book.title, book.author, newStored);
     } catch (err) {
@@ -218,16 +285,22 @@ export default function Home() {
     setRebuildProgress({ current: 0, total: currentIndex + 1 });
 
     let accumulated: AnalysisResult | null = seriesBaseRef.current;
+    let snapshots: Snapshot[] = storedRef.current?.snapshots ?? [];
+
     try {
       for (let i = 0; i <= currentIndex; i++) {
         if (rebuildCancelRef.current) break;
         setRebuildProgress({ current: i + 1, total: currentIndex + 1 });
-        const chapter = { title: book.chapters[i].title, text: book.chapters[i].text };
+        const ch = book.chapters[i];
+        if (ch.bookIndex !== undefined && excludedBooks.has(ch.bookIndex)) continue;
+        const chapter = { title: ch.title, text: ch.text };
         accumulated = await analyzeChapter(book.title, book.author, chapter, accumulated);
-        const partial: StoredBookState = { lastAnalyzedIndex: i, result: accumulated };
+        snapshots = upsertSnapshot(snapshots, i, accumulated);
+        const partial: StoredBookState = { lastAnalyzedIndex: i, result: accumulated, snapshots };
         storedRef.current = partial;
         saveStored(book.title, book.author, partial);
         setResult(accumulated);
+        setViewingSnapshotIndex(null);
       }
     } catch (err) {
       setAnalyzeError(err instanceof Error ? err.message : 'Rebuild failed.');
@@ -269,7 +342,6 @@ export default function Home() {
   if (!book) {
     return (
       <main className="min-h-screen flex flex-col">
-        {/* Tab bar */}
         <div className="flex border-b border-zinc-800 px-6 pt-6 gap-1">
           {([
             { key: 'file', label: 'Upload EPUB' },
@@ -288,7 +360,6 @@ export default function Home() {
             </button>
           ))}
         </div>
-
         <div className="flex-1 p-6">
           {uploadTab === 'file' ? (
             <>
@@ -308,10 +379,12 @@ export default function Home() {
   const isSeriesContinuation = stored?.lastAnalyzedIndex === -1;
   const canIncrement = stored && currentIndex > stored.lastAnalyzedIndex;
   const busy = analyzing || rebuilding;
+  const snapshotIndices = new Set((stored?.snapshots ?? []).map((s) => s.index));
+  // Whether the displayed result is from a historical snapshot rather than the latest
+  const isViewingHistory = viewingSnapshotIndex !== null;
 
   return (
     <main className="min-h-screen flex flex-col">
-      {/* Header */}
       <header className="bg-zinc-900 border-b border-zinc-800 px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <span className="text-xl">📖</span>
@@ -321,13 +394,9 @@ export default function Home() {
           </div>
         </div>
         <div className="flex items-center gap-4">
-          {isSeriesContinuation && (
-            <span className="text-xs text-violet-400 font-medium">Series mode</span>
-          )}
+          {isSeriesContinuation && <span className="text-xs text-violet-400 font-medium">Series mode</span>}
           {hasStoredState && (
-            <span className="text-xs text-zinc-600">
-              Saved · ch.{stored.lastAnalyzedIndex + 1}
-            </span>
+            <span className="text-xs text-zinc-600">Saved · ch.{stored.lastAnalyzedIndex + 1}</span>
           )}
           <button
             onClick={() => { setBook(null); setResult(null); storedRef.current = null; seriesBaseRef.current = null; }}
@@ -339,12 +408,11 @@ export default function Home() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
         <aside className="w-64 flex-shrink-0 bg-zinc-900 border-r border-zinc-800 p-4 overflow-y-auto">
           <ChapterSelector
             chapters={book.chapters}
             currentIndex={currentIndex}
-            onChange={setCurrentIndex}
+            onChange={handleChapterChange}
             onAnalyze={handleAnalyze}
             onRebuild={handleRebuild}
             onCancelRebuild={() => { rebuildCancelRef.current = true; }}
@@ -353,14 +421,37 @@ export default function Home() {
             rebuildProgress={rebuildProgress}
             canIncrement={!!canIncrement}
             lastAnalyzedIndex={stored?.lastAnalyzedIndex ?? null}
+            snapshotIndices={snapshotIndices}
+            excludedBooks={excludedBooks}
+            onToggleBook={toggleBook}
           />
-          {analyzeError && (
-            <p className="mt-3 text-xs text-red-500 text-center">{analyzeError}</p>
-          )}
+          {analyzeError && <p className="mt-3 text-xs text-red-500 text-center">{analyzeError}</p>}
         </aside>
 
-        {/* Main */}
         <div className="flex-1 overflow-y-auto p-6">
+          {/* History banner */}
+          {isViewingHistory && !busy && (
+            <div className="mb-4 flex items-center justify-between px-4 py-2.5 bg-zinc-800/60 rounded-xl border border-zinc-700/50">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-zinc-400">
+                  Viewing saved state from <span className="text-zinc-200 font-medium">ch.{viewingSnapshotIndex + 1} — {book.chapters[viewingSnapshotIndex]?.title}</span>
+                </span>
+              </div>
+              <button
+                onClick={() => {
+                  if (stored && stored.lastAnalyzedIndex >= 0) {
+                    setCurrentIndex(stored.lastAnalyzedIndex);
+                    setResult(stored.result);
+                    setViewingSnapshotIndex(null);
+                  }
+                }}
+                className="text-xs text-amber-500 hover:text-amber-400 font-medium transition-colors whitespace-nowrap ml-4"
+              >
+                Jump to latest →
+              </button>
+            </div>
+          )}
+
           {!result && !busy && (
             <div className="flex flex-col items-center justify-center h-full text-center gap-3">
               <span className="text-5xl opacity-20">{isSeriesContinuation ? '📚' : '⌖'}</span>
@@ -411,7 +502,6 @@ export default function Home() {
 
           {result && (
             <div>
-              {/* Summary */}
               {result.summary && (
                 <div className="mb-5 p-4 bg-zinc-900 rounded-xl border border-zinc-800">
                   <p className="text-xs font-medium text-zinc-600 uppercase tracking-wider mb-2">Story so far</p>
@@ -419,7 +509,6 @@ export default function Home() {
                 </div>
               )}
 
-              {/* Tabs */}
               <div className="flex rounded-lg overflow-hidden border border-zinc-800 mb-5 w-fit">
                 {([
                   { key: 'characters', label: 'Characters' },
@@ -439,7 +528,6 @@ export default function Home() {
 
               {tab === 'characters' && (
                 <>
-                  {/* Controls */}
                   <div className="flex flex-wrap items-center gap-2 mb-4">
                     <input
                       type="search"
@@ -474,7 +562,6 @@ export default function Home() {
                     </select>
                   </div>
 
-                  {/* Stats */}
                   <div className="flex gap-4 mb-4 text-xs text-zinc-600">
                     <span>{characters.length} characters</span>
                     <span>·</span>
