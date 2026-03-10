@@ -4,6 +4,9 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'Chapter Companion',
   description: 'Track characters as you read your ebook — spoiler-free.',
+  manifest: '/manifest.json',
+  appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'ChCompanion' },
+  icons: { apple: '/icon-192.png' },
 };
 
 export const viewport: Viewport = {

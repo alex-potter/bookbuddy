@@ -9,6 +9,7 @@ import ChapterSelector from '@/components/ChapterSelector';
 import LocationBoard from '@/components/LocationBoard';
 import MapBoard from '@/components/MapBoard';
 import SeriesPicker from '@/components/SeriesPicker';
+import SettingsModal from '@/components/SettingsModal';
 import UploadZone from '@/components/UploadZone';
 
 type SortKey = 'importance' | 'name' | 'status';
@@ -145,12 +146,18 @@ function listSavedBooks(excludeTitle?: string, excludeAuthor?: string): SavedBoo
   return results.sort((a, b) => b.lastAnalyzedIndex - a.lastAnalyzedIndex);
 }
 
+const IS_MOBILE = process.env.NEXT_PUBLIC_MOBILE === 'true';
+
 async function analyzeChapter(
   bookTitle: string,
   bookAuthor: string,
   chapter: { title: string; text: string },
   previousResult: AnalysisResult | null,
 ): Promise<AnalysisResult> {
+  if (IS_MOBILE) {
+    const { analyzeChapterClient } = await import('@/lib/ai-client');
+    return analyzeChapterClient(bookTitle, bookAuthor, chapter, previousResult);
+  }
   const body = previousResult
     ? { newChapters: [chapter], previousResult, currentChapterTitle: chapter.title, bookTitle, bookAuthor }
     : { chaptersRead: [chapter], currentChapterTitle: chapter.title, bookTitle, bookAuthor };
@@ -183,6 +190,7 @@ export default function Home() {
   const [uploadTab, setUploadTab] = useState<'file' | 'calibre' | 'mybooks'>('file');
   const [importError, setImportError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   async function handleImport(file: File) {
     setImportError(null);
@@ -431,10 +439,12 @@ export default function Home() {
     const savedBooks = listSavedBooks();
     return (
       <main className="min-h-screen flex flex-col">
-        <div className="flex border-b border-zinc-800 px-4 sm:px-6 pt-4 sm:pt-6 gap-0.5 overflow-x-auto">
+        {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+        <div className="flex items-center justify-between border-b border-zinc-800 px-4 sm:px-6 pt-4 sm:pt-6">
+          <div className="flex gap-0.5 overflow-x-auto">
           {([
             { key: 'file', label: 'Upload EPUB' },
-            { key: 'calibre', label: 'Calibre' },
+            ...(!IS_MOBILE ? [{ key: 'calibre' as const, label: 'Calibre' }] : []),
             { key: 'mybooks', label: `My Books${savedBooks.length > 0 ? ` (${savedBooks.length})` : ''}` },
           ] as const).map(({ key, label }) => (
             <button
@@ -449,6 +459,16 @@ export default function Home() {
               {label}
             </button>
           ))}
+          </div>
+          {IS_MOBILE && (
+            <button
+              onClick={() => setShowSettings(true)}
+              className="flex-shrink-0 pb-2 pl-3 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+              title="AI Settings"
+            >
+              ⚙ Settings
+            </button>
+          )}
         </div>
         <div className="flex-1 p-4 sm:p-6">
           {uploadTab === 'file' ? (
@@ -550,6 +570,7 @@ export default function Home() {
 
   return (
     <main className="min-h-screen flex flex-col">
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
       <header className="bg-zinc-900 border-b border-zinc-800 px-4 py-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           {/* Hamburger — mobile only */}
@@ -580,6 +601,15 @@ export default function Home() {
               title="Export .etbook file"
             >
               Export
+            </button>
+          )}
+          {IS_MOBILE && (
+            <button
+              onClick={() => setShowSettings(true)}
+              className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+              title="AI Settings"
+            >
+              ⚙
             </button>
           )}
           <button

@@ -5,16 +5,23 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "build:mobile": "cross-env NEXT_PUBLIC_MOBILE=true next build",
+    "cap:sync": "npm run build:mobile && npx cap sync",
+    "cap:android": "npm run build:mobile && npx cap sync && npx cap open android"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.40.0",
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/core": "^6.0.0",
+    "cross-env": "^7.0.3",
     "jszip": "^3.10.1",
     "next": "^14.2.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0"
   },
   "devDependencies": {
+    "@capacitor/cli": "^6.0.0",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
