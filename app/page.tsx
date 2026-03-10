@@ -1034,7 +1034,7 @@ export default function Home() {
                   )}
 
                   {tab === 'locations' && (
-                    <LocationBoard characters={characters} locations={result.locations} bookTitle={book.title} />
+                    <LocationBoard characters={characters} locations={result.locations} bookTitle={book.title} snapshots={stored?.snapshots ?? []} />
                   )}
                 </div>
               )}

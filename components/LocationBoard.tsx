@@ -1,7 +1,8 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import type { Character, LocationInfo } from '@/types';
+import type { Character, LocationInfo, Snapshot } from '@/types';
+import LocationGraph from './LocationGraph';
 
 interface LocationGroup {
   location: string;
@@ -40,9 +41,11 @@ interface Props {
   characters: Character[];
   locations?: LocationInfo[];
   bookTitle?: string;
+  snapshots?: Snapshot[];
 }
 
-export default function LocationBoard({ characters, locations, bookTitle }: Props) {
+export default function LocationBoard({ characters, locations, bookTitle, snapshots = [] }: Props) {
+  const [view, setView] = useState<'list' | 'graph'>('list');
   const [mapImage, setMapImage] = useState<string | null>(null);
   const [mapLabel, setMapLabel] = useState('');
   const [dragging, setDragging] = useState(false);
@@ -116,6 +119,32 @@ export default function LocationBoard({ characters, locations, bookTitle }: Prop
 
   return (
     <div className="space-y-4">
+      {/* View toggle */}
+      <div className="flex gap-1 bg-zinc-800/50 rounded-lg p-0.5 w-fit border border-zinc-800">
+        <button
+          onClick={() => setView('list')}
+          className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+            view === 'list' ? 'bg-zinc-700 text-zinc-200' : 'text-zinc-500 hover:text-zinc-300'
+          }`}
+        >
+          List
+        </button>
+        <button
+          onClick={() => setView('graph')}
+          className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+            view === 'graph' ? 'bg-zinc-700 text-zinc-200' : 'text-zinc-500 hover:text-zinc-300'
+          }`}
+        >
+          Graph
+        </button>
+      </div>
+
+      {view === 'graph' && (
+        <LocationGraph snapshots={snapshots} />
+      )}
+
+      {view === 'list' && (
+      <>
       {/* Map section */}
       <div className="bg-zinc-900 rounded-xl border border-zinc-800 overflow-hidden">
         {mapImage ? (
@@ -247,6 +276,8 @@ export default function LocationBoard({ characters, locations, bookTitle }: Prop
           ))}
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 }
