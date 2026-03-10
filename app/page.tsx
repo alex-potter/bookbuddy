@@ -604,9 +604,9 @@ export default function Home() {
   const isViewingHistory = viewingSnapshotIndex !== null;
 
   return (
-    <main className="min-h-screen flex flex-col">
+    <main className="h-screen flex flex-col overflow-hidden">
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
-      <header className="bg-zinc-900 border-b border-zinc-800 px-4 py-3 flex items-center justify-between gap-2">
+      <header className="bg-zinc-900 border-b border-zinc-800 px-4 py-3 flex items-center justify-between gap-2 flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           {/* Hamburger — mobile only */}
           <button
