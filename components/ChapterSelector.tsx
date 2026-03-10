@@ -243,7 +243,7 @@ export default function ChapterSelector({
             busy ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed' : 'bg-amber-500 text-zinc-900 hover:bg-amber-400'
           }`}
         >
-          ⌖ Analyze Characters
+          ⌖ Analyze Chapters
         </button>
       )}
       {!busy && lastAnalyzedIndex !== null && lastAnalyzedIndex >= 0 && lastAnalyzedIndex < currentIndex && (
