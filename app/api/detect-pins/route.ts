@@ -127,7 +127,10 @@ export async function POST(req: NextRequest) {
       ? await callLocal(imageDataUrl, prompt)
       : await callAnthropic(base64Data, mediaType, prompt);
 
-    return NextResponse.json({ pins: extractPins(raw) });
+    console.log('[detect-pins] raw response:', raw.slice(0, 500));
+    const pins = extractPins(raw);
+    console.log('[detect-pins] extracted pins:', Object.keys(pins));
+    return NextResponse.json({ pins });
   } catch (err) {
     console.error('[detect-pins]', err);
     return NextResponse.json({ error: String(err instanceof Error ? err.message : err) }, { status: 500 });
