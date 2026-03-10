@@ -41,7 +41,13 @@ function initials(name: string): string {
 
 /** Normalise a location name for deduplication comparison. */
 function normalizeLocation(loc: string): string {
-  return loc.toLowerCase().replace(/^the\s+/, '').split(',')[0].trim();
+  return loc.toLowerCase()
+    .replace(/^(the|a|an)\s+/, '')
+    .split(',')[0]
+    .trim()
+    .split(/\s+/)
+    .sort()
+    .join(' ');
 }
 
 function buildLocationMap(characters: Character[]): Map<string, Character[]> {
