@@ -468,6 +468,7 @@ export default function Home() {
             <div className="flex-1 min-h-0">
               <MapBoard
                 characters={characters}
+                bookTitle={book.title}
                 mapState={mapState}
                 onMapStateChange={(state) => {
                   setMapState(state);

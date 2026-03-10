@@ -5,6 +5,7 @@ import type { Character, LocationPin, MapState } from '@/types';
 
 interface Props {
   characters: Character[];
+  bookTitle?: string;
   mapState: MapState | null;
   onMapStateChange: (state: MapState) => void;
 }
@@ -31,10 +32,14 @@ function buildLocationMap(characters: Character[]): Map<string, Character[]> {
   return new Map([...map.entries()].sort((a, b) => b[1].length - a[1].length));
 }
 
-export default function MapBoard({ characters, mapState, onMapStateChange }: Props) {
+export default function MapBoard({ characters, bookTitle, mapState, onMapStateChange }: Props) {
   const [placingLocation, setPlacingLocation] = useState<string | null>(null);
   const [activePin, setActivePin] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [uploadTab, setUploadTab] = useState<'drop' | 'url'>('drop');
+  const [urlInput, setUrlInput] = useState('');
+  const [urlLoading, setUrlLoading] = useState(false);
+  const [urlError, setUrlError] = useState<string | null>(null);
 
   // Auto-detect state
   const [detecting, setDetecting] = useState(false);
@@ -76,11 +81,38 @@ export default function MapBoard({ characters, mapState, onMapStateChange }: Pro
     reader.readAsDataURL(file);
   }
 
+  async function loadFromUrl(url: string) {
+    const trimmed = url.trim();
+    if (!trimmed) return;
+    setUrlLoading(true);
+    setUrlError(null);
+    try {
+      const res = await fetch('/api/fetch-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: trimmed }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Failed to load image');
+      onMapStateChange({ imageDataUrl: data.dataUrl, pins: mapState?.pins ?? {} });
+      setSuggestions(null);
+      setUrlInput('');
+    } catch (err) {
+      setUrlError(err instanceof Error ? err.message : 'Failed to load image');
+    } finally {
+      setUrlLoading(false);
+    }
+  }
+
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     setIsDragging(false);
+    // File dragged from OS
     const file = e.dataTransfer.files[0];
-    if (file) handleImageFile(file);
+    if (file) { handleImageFile(file); return; }
+    // Image dragged from browser (passes URL)
+    const url = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
+    if (url?.match(/^https?:\/\//)) loadFromUrl(url);
   }
 
   function handleMapClick(e: React.MouseEvent<HTMLDivElement>) {
@@ -154,27 +186,86 @@ export default function MapBoard({ characters, mapState, onMapStateChange }: Pro
 
   // ── Upload prompt ─────────────────────────────────────────────────────────────
   if (!mapState) {
+    const searchQuery = encodeURIComponent(`${bookTitle ?? ''} map`.trim());
+    const searchUrl = `https://www.google.com/search?tbm=isch&q=${searchQuery}`;
+
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-6 py-16">
-        <div className="text-5xl opacity-20">🗺</div>
+      <div className="flex flex-col items-center justify-center h-full gap-5">
+        <div className="text-4xl opacity-20">🗺</div>
         <div className="text-center">
-          <p className="text-zinc-300 font-medium mb-1">Upload a map image</p>
-          <p className="text-sm text-zinc-600 max-w-xs">
-            PNG, JPG, or WEBP — place pins for each location to track where characters are.
-          </p>
+          <p className="text-zinc-300 font-medium mb-1">Add a map</p>
+          <p className="text-sm text-zinc-600">Place character pins on an image of the world.</p>
         </div>
-        <div
-          onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-          onDragLeave={() => setIsDragging(false)}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
-          className={`w-72 h-36 rounded-2xl border-2 border-dashed flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors ${
-            isDragging ? 'border-amber-500 bg-amber-500/5' : 'border-zinc-700 hover:border-zinc-600 hover:bg-zinc-800/30'
-          }`}
-        >
-          <span className="text-2xl opacity-40">↑</span>
-          <p className="text-xs text-zinc-500">Drag & drop or click to browse</p>
+
+        {/* Tabs */}
+        <div className="w-full max-w-sm">
+          <div className="flex rounded-lg overflow-hidden border border-zinc-700 mb-3">
+            {(['drop', 'url'] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => { setUploadTab(t); setUrlError(null); }}
+                className={`flex-1 py-1.5 text-xs font-medium transition-colors ${
+                  uploadTab === t ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                {t === 'drop' ? 'File / drag' : 'Image URL'}
+              </button>
+            ))}
+          </div>
+
+          {uploadTab === 'drop' ? (
+            <div
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              className={`h-32 rounded-xl border-2 border-dashed flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors ${
+                isDragging ? 'border-amber-500 bg-amber-500/5 text-amber-400' : 'border-zinc-700 hover:border-zinc-600 hover:bg-zinc-800/30 text-zinc-500'
+              }`}
+            >
+              <span className="text-xl opacity-50">↑</span>
+              <p className="text-xs">Drop a file or image from your browser</p>
+              <p className="text-[10px] text-zinc-700">or click to browse files</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  value={urlInput}
+                  onChange={(e) => { setUrlInput(e.target.value); setUrlError(null); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') loadFromUrl(urlInput); }}
+                  placeholder="https://example.com/map.jpg"
+                  className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
+                />
+                <button
+                  onClick={() => loadFromUrl(urlInput)}
+                  disabled={urlLoading || !urlInput.trim()}
+                  className="px-3 py-2 rounded-lg bg-amber-500 text-zinc-900 text-xs font-semibold hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+                >
+                  {urlLoading ? '…' : 'Load'}
+                </button>
+              </div>
+              {urlError && <p className="text-xs text-red-500">{urlError}</p>}
+              <p className="text-[10px] text-zinc-700">Right-click any image online → "Copy image address", then paste here</p>
+            </div>
+          )}
         </div>
+
+        {/* Search launcher */}
+        <div className="text-center">
+          <p className="text-xs text-zinc-700 mb-2">Need to find a map?</p>
+          <a
+            href={searchUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-zinc-700 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300 transition-colors"
+          >
+            Search "{bookTitle ?? ''} map" in Google Images ↗
+          </a>
+          <p className="text-[10px] text-zinc-700 mt-1.5">Then drag the image here, or copy its URL to the URL tab</p>
+        </div>
+
         <input ref={fileInputRef} type="file" accept="image/*" className="hidden"
           onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImageFile(f); }} />
       </div>
