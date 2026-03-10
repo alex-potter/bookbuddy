@@ -699,6 +699,26 @@ export default function Home() {
         </aside>
 
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col">
+          {/* Prompt to upload EPUB when no chapter data is available */}
+          {isMetaOnly && book.chapters.length === 0 && (
+            <label
+              htmlFor="epub-reupload"
+              className="flex items-center gap-3 mb-4 px-4 py-3 bg-amber-950/40 border border-amber-800/50 rounded-xl cursor-pointer hover:bg-amber-950/60 transition-colors flex-shrink-0"
+            >
+              <span className="text-amber-400 text-lg flex-shrink-0">📂</span>
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-amber-300">Upload EPUB to enable analysis</p>
+                <p className="text-xs text-amber-600 mt-0.5">This book was imported without chapter data. Tap to select the EPUB file.</p>
+              </div>
+              <input
+                id="epub-reupload"
+                type="file"
+                accept=".epub"
+                className="sr-only"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ''; }}
+              />
+            </label>
+          )}
           {/* Tab bar — always visible */}
           <div className="flex rounded-lg overflow-hidden border border-zinc-800 mb-5 w-full sm:w-fit flex-shrink-0">
             {([
