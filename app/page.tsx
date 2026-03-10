@@ -2,7 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react';
 import { parseEpub } from '@/lib/epub-parser';
-import type { AnalysisResult, Character, ParsedEbook } from '@/types';
+import type { AnalysisResult, Character, ParsedEbook, Snapshot } from '@/types';
 import CalibreLibrary from '@/components/CalibreLibrary';
 import CharacterCard from '@/components/CharacterCard';
 import ChapterSelector from '@/components/ChapterSelector';
@@ -18,11 +18,6 @@ const IMPORTANCE_ORDER: Record<Character['importance'], number> = {
   secondary: 1,
   minor: 2,
 };
-
-interface Snapshot {
-  index: number;
-  result: AnalysisResult;
-}
 
 interface StoredBookState {
   lastAnalyzedIndex: number; // -1 = series carry-forward
@@ -577,7 +572,12 @@ export default function Home() {
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                       {displayed.map((character) => (
-                        <CharacterCard key={character.name} character={character} />
+                        <CharacterCard
+                          key={character.name}
+                          character={character}
+                          snapshots={stored?.snapshots ?? []}
+                          chapterTitles={book.chapters.map((ch) => ch.title)}
+                        />
                       ))}
                     </div>
                   )}

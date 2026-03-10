@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { Character } from '@/types';
+import type { Character, Snapshot } from '@/types';
 import CharacterModal from './CharacterModal';
 
 const STATUS_CONFIG = {
@@ -39,9 +39,11 @@ function initials(name: string): string {
 
 interface Props {
   character: Character;
+  snapshots?: Snapshot[];
+  chapterTitles?: string[];
 }
 
-export default function CharacterCard({ character }: Props) {
+export default function CharacterCard({ character, snapshots, chapterTitles }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const status = STATUS_CONFIG[character.status] ?? STATUS_CONFIG.unknown;
@@ -49,7 +51,7 @@ export default function CharacterCard({ character }: Props) {
 
   return (
     <>
-      {modalOpen && <CharacterModal character={character} onClose={() => setModalOpen(false)} />}
+      {modalOpen && <CharacterModal character={character} snapshots={snapshots} chapterTitles={chapterTitles} onClose={() => setModalOpen(false)} />}
     <div
       onClick={() => setModalOpen(true)}
       className={`

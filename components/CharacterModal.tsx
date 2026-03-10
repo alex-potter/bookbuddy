@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect } from 'react';
-import type { Character } from '@/types';
+import { useEffect, useState } from 'react';
+import type { Character, Snapshot } from '@/types';
 
 const STATUS_CONFIG = {
   alive:     { label: 'Alive',     color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20', dot: 'bg-emerald-400' },
@@ -36,14 +36,44 @@ function initials(name: string): string {
   return name.split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? '').join('');
 }
 
+interface TimelineEntry {
+  chapterIndex: number;
+  chapterTitle: string;
+  recentEvents: string;
+}
+
 interface Props {
   character: Character;
+  snapshots?: Snapshot[];
+  chapterTitles?: string[];
   onClose: () => void;
 }
 
-export default function CharacterModal({ character, onClose }: Props) {
+export default function CharacterModal({ character, snapshots, chapterTitles, onClose }: Props) {
+  const [tab, setTab] = useState<'overview' | 'timeline'>('overview');
   const status = STATUS_CONFIG[character.status] ?? STATUS_CONFIG.unknown;
   const importance = IMPORTANCE_CONFIG[character.importance] ?? IMPORTANCE_CONFIG.minor;
+
+  // Build deduplicated event timeline from snapshots
+  const timeline: TimelineEntry[] = (() => {
+    if (!snapshots?.length) return [];
+    const entries: TimelineEntry[] = [];
+    let lastEvents = '';
+    const sorted = [...snapshots].sort((a, b) => a.index - b.index);
+    for (const snap of sorted) {
+      const ch = snap.result.characters.find(
+        (c) => c.name.toLowerCase() === character.name.toLowerCase(),
+      );
+      if (!ch?.recentEvents || ch.recentEvents === lastEvents) continue;
+      lastEvents = ch.recentEvents;
+      entries.push({
+        chapterIndex: snap.index,
+        chapterTitle: chapterTitles?.[snap.index] ?? `Chapter ${snap.index + 1}`,
+        recentEvents: ch.recentEvents,
+      });
+    }
+    return entries.reverse(); // newest first
+  })();
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose(); }
@@ -65,7 +95,7 @@ export default function CharacterModal({ character, onClose }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="p-6 border-b border-zinc-800">
+        <div className="p-6 border-b border-zinc-800 pb-0">
           <div className="flex items-start gap-4">
             <div className={`flex-shrink-0 w-14 h-14 rounded-xl flex items-center justify-center text-lg font-bold ${nameColor(character.name)}`}>
               {initials(character.name)}
@@ -96,58 +126,105 @@ export default function CharacterModal({ character, onClose }: Props) {
               </div>
             </div>
           </div>
+
+          {/* Tabs */}
+          <div className="flex gap-1 mt-5">
+            {([
+              { key: 'overview', label: 'Overview' },
+              ...(timeline.length > 0 ? [{ key: 'timeline', label: `Timeline (${timeline.length})` }] : []),
+            ] as const).map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setTab(key as 'overview' | 'timeline')}
+                className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors -mb-px ${
+                  tab === key
+                    ? 'border-amber-500 text-amber-400'
+                    : 'border-transparent text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="p-6 space-y-5">
-          {/* Description */}
-          {character.description && (
-            <section>
-              <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">About</p>
-              <p className="text-sm text-zinc-300 leading-relaxed">{character.description}</p>
-            </section>
-          )}
+          {tab === 'overview' ? (
+            <>
+              {/* Description */}
+              {character.description && (
+                <section>
+                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">About</p>
+                  <p className="text-sm text-zinc-300 leading-relaxed">{character.description}</p>
+                </section>
+              )}
 
-          {/* Location + Last seen */}
-          <section className="grid grid-cols-2 gap-3">
-            <div className="p-3 bg-zinc-800/50 rounded-lg border border-zinc-800">
-              <p className="text-[10px] font-semibold text-zinc-600 uppercase tracking-wider mb-1">Current location</p>
-              <p className="text-sm text-zinc-300">{character.currentLocation || 'Unknown'}</p>
-            </div>
-            <div className="p-3 bg-zinc-800/50 rounded-lg border border-zinc-800">
-              <p className="text-[10px] font-semibold text-zinc-600 uppercase tracking-wider mb-1">Last seen</p>
-              <p className="text-sm text-zinc-300">{character.lastSeen || '—'}</p>
-            </div>
-          </section>
+              {/* Location + Last seen */}
+              <section className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-zinc-800/50 rounded-lg border border-zinc-800">
+                  <p className="text-[10px] font-semibold text-zinc-600 uppercase tracking-wider mb-1">Current location</p>
+                  <p className="text-sm text-zinc-300">{character.currentLocation || 'Unknown'}</p>
+                </div>
+                <div className="p-3 bg-zinc-800/50 rounded-lg border border-zinc-800">
+                  <p className="text-[10px] font-semibold text-zinc-600 uppercase tracking-wider mb-1">Last seen</p>
+                  <p className="text-sm text-zinc-300">{character.lastSeen || '—'}</p>
+                </div>
+              </section>
 
-          {/* Recent events */}
-          {character.recentEvents && (
-            <section>
-              <p className="text-xs font-semibold text-amber-500/80 uppercase tracking-wider mb-1.5">Recent events</p>
-              <div className="p-3 bg-amber-500/5 border border-amber-500/10 rounded-lg">
-                <p className="text-sm text-zinc-300 leading-relaxed">{character.recentEvents}</p>
-              </div>
-            </section>
-          )}
+              {/* Recent events */}
+              {character.recentEvents && (
+                <section>
+                  <p className="text-xs font-semibold text-amber-500/80 uppercase tracking-wider mb-1.5">Recent events</p>
+                  <div className="p-3 bg-amber-500/5 border border-amber-500/10 rounded-lg">
+                    <p className="text-sm text-zinc-300 leading-relaxed">{character.recentEvents}</p>
+                  </div>
+                </section>
+              )}
 
-          {/* Relationships */}
-          {character.relationships?.length > 0 && (
+              {/* Relationships */}
+              {character.relationships?.length > 0 && (
+                <section>
+                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">
+                    Relationships ({character.relationships.length})
+                  </p>
+                  <ul className="space-y-2">
+                    {character.relationships.map((rel, i) => (
+                      <li key={i} className="flex items-start gap-3">
+                        <div className={`flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold ${nameColor(rel.character)}`}>
+                          {initials(rel.character)}
+                        </div>
+                        <div className="flex-1 min-w-0 pt-0.5">
+                          <span className="text-sm font-medium text-zinc-200">{rel.character}</span>
+                          <span className="text-sm text-zinc-500"> — {rel.relationship}</span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+            </>
+          ) : (
+            /* Timeline tab */
             <section>
-              <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">
-                Relationships ({character.relationships.length})
+              <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-4">
+                Event history · newest first
               </p>
-              <ul className="space-y-2">
-                {character.relationships.map((rel, i) => (
-                  <li key={i} className="flex items-start gap-3">
-                    <div className={`flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold ${nameColor(rel.character)}`}>
-                      {initials(rel.character)}
-                    </div>
-                    <div className="flex-1 min-w-0 pt-0.5">
-                      <span className="text-sm font-medium text-zinc-200">{rel.character}</span>
-                      <span className="text-sm text-zinc-500"> — {rel.relationship}</span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
+              {timeline.length === 0 ? (
+                <p className="text-sm text-zinc-600 text-center py-6">No history yet — analyze more chapters to build a timeline.</p>
+              ) : (
+                <ol className="relative border-l border-zinc-800 space-y-0">
+                  {timeline.map((entry, i) => (
+                    <li key={i} className="pl-5 pb-6 last:pb-0 relative">
+                      {/* dot */}
+                      <span className="absolute -left-[4.5px] top-1.5 w-2 h-2 rounded-full bg-zinc-700 border border-zinc-600" />
+                      <p className="text-[11px] font-semibold text-zinc-500 mb-1">
+                        Ch. {entry.chapterIndex + 1} — {entry.chapterTitle}
+                      </p>
+                      <p className="text-sm text-zinc-300 leading-relaxed">{entry.recentEvents}</p>
+                    </li>
+                  ))}
+                </ol>
+              )}
             </section>
           )}
         </div>

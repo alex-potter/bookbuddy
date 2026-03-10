@@ -35,3 +35,8 @@ export interface AnalysisResult {
   characters: Character[];
   summary: string;
 }
+
+export interface Snapshot {
+  index: number;         // chapter index (0-based)
+  result: AnalysisResult;
+}
