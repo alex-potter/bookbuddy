@@ -66,14 +66,200 @@ export async function parseEpub(file: File): Promise<ParsedEbook> {
     const rawTitle = headingMatch?.[1] ? extractText(headingMatch[1]) : '';
     const chapterTitle = rawTitle.trim() || `Part ${order + 1}`;
 
-    chapters.push({ id: itemId, title: chapterTitle, text: text.trim(), order: order++ });
+    // Store the resolved href so we can map it during omnibus detection
+    chapters.push({ id: itemId, title: chapterTitle, text: text.trim(), order: order++, _href: candidates[0] } as EbookChapter & { _href: string });
   }
 
   if (chapters.length === 0) {
     throw new Error('Could not extract any chapters from this EPUB. The file may be DRM-protected or use an unsupported format.');
   }
 
-  return { title, author, chapters };
+  // 4. Detect omnibus structure (NCX hierarchy or title patterns)
+  const bookMap = await detectOmnibusStructure(zip, opfDir, opfXml, chapters as Array<EbookChapter & { _href: string }>);
+  const books: string[] = [];
+  if (bookMap.size > 0) {
+    for (const ch of chapters) {
+      const info = bookMap.get(ch.id);
+      if (info) {
+        ch.bookIndex = info.bookIndex;
+        ch.bookTitle = info.bookTitle;
+        if (!books[info.bookIndex]) books[info.bookIndex] = info.bookTitle;
+      }
+    }
+    // Fill forward: chapters without an explicit mapping inherit the last seen bookIndex
+    let lastBookIndex = 0;
+    let lastBookTitle = books[0] ?? '';
+    for (const ch of chapters) {
+      if (ch.bookIndex !== undefined) {
+        lastBookIndex = ch.bookIndex;
+        lastBookTitle = ch.bookTitle ?? lastBookTitle;
+      } else {
+        ch.bookIndex = lastBookIndex;
+        ch.bookTitle = lastBookTitle;
+      }
+    }
+  }
+
+  // Clean up the internal _href field
+  for (const ch of chapters) delete (ch as unknown as Record<string, unknown>)._href;
+
+  return { title, author, chapters, books: books.length > 1 ? books : undefined };
+}
+
+// ---- Omnibus detection ----
+
+type ZipLike = { file: (name: string) => ({ async: (type: 'text') => Promise<string> } | null) };
+
+/** Attempt to detect individual books within an omnibus EPUB.
+ *  Returns a map from chapter id → { bookIndex, bookTitle }, or empty map if not an omnibus. */
+async function detectOmnibusStructure(
+  zip: ZipLike,
+  opfDir: string,
+  opfXml: string,
+  chapters: Array<EbookChapter & { _href: string }>,
+): Promise<Map<string, { bookIndex: number; bookTitle: string }>> {
+  // Try NCX first (EPUB2)
+  const ncxResult = await tryNcxDetection(zip, opfDir, opfXml, chapters);
+  if (ncxResult.size > 0) return ncxResult;
+
+  // Fall back to chapter title pattern matching
+  return titlePatternDetection(chapters);
+}
+
+interface NcxNavItem { depth: number; label: string; src: string; }
+
+/** Parse NCX navPoints into a flat list with depth information. */
+function parseNcxItems(ncxXml: string): NcxNavItem[] {
+  const items: NcxNavItem[] = [];
+  let pos = 0;
+  let depth = 0;
+  let pendingLabel = '';
+
+  while (pos < ncxXml.length) {
+    // Find the next relevant tag
+    const candidates: Array<{ pos: number; type: string }> = [];
+    const openPos = ncxXml.indexOf('<navPoint', pos);
+    const closePos = ncxXml.indexOf('</navPoint', pos);
+    const labelPos = ncxXml.indexOf('<navLabel', pos);
+    const contentPos = ncxXml.indexOf('<content', pos);
+    if (openPos >= 0) candidates.push({ pos: openPos, type: 'open' });
+    if (closePos >= 0) candidates.push({ pos: closePos, type: 'close' });
+    if (labelPos >= 0) candidates.push({ pos: labelPos, type: 'label' });
+    if (contentPos >= 0) candidates.push({ pos: contentPos, type: 'content' });
+    if (candidates.length === 0) break;
+    candidates.sort((a, b) => a.pos - b.pos);
+    const next = candidates[0];
+
+    if (next.type === 'open') {
+      depth++;
+      pos = next.pos + 9;
+    } else if (next.type === 'close') {
+      depth--;
+      pos = next.pos + 10;
+    } else if (next.type === 'label') {
+      const end = ncxXml.indexOf('</navLabel>', next.pos);
+      if (end > 0) {
+        const inner = ncxXml.slice(next.pos, end);
+        const textMatch = inner.match(/<text[^>]*>([\s\S]*?)<\/text>/i);
+        pendingLabel = textMatch ? extractText(textMatch[1]) : '';
+        pos = end + 11;
+      } else {
+        pos = next.pos + 9;
+      }
+    } else if (next.type === 'content') {
+      const tagEnd = ncxXml.indexOf('>', next.pos);
+      if (tagEnd > 0) {
+        const tag = ncxXml.slice(next.pos, tagEnd + 1);
+        const srcMatch = tag.match(/src="([^"#]+)/);
+        if (srcMatch) {
+          items.push({ depth, label: pendingLabel, src: srcMatch[1].trim() });
+          pendingLabel = '';
+        }
+        pos = tagEnd + 1;
+      } else {
+        pos = next.pos + 8;
+      }
+    }
+  }
+  return items;
+}
+
+async function tryNcxDetection(
+  zip: ZipLike,
+  opfDir: string,
+  opfXml: string,
+  chapters: Array<EbookChapter & { _href: string }>,
+): Promise<Map<string, { bookIndex: number; bookTitle: string }>> {
+  const empty = new Map<string, { bookIndex: number; bookTitle: string }>();
+
+  // Find NCX href in manifest
+  const ncxMatch =
+    opfXml.match(/<item[^>]+media-type="application\/x-dtbncx\+xml"[^>]+href="([^"]+)"/i) ||
+    opfXml.match(/<item[^>]+href="([^"]+)"[^>]+media-type="application\/x-dtbncx\+xml"/i);
+  if (!ncxMatch) return empty;
+
+  const ncxPath = opfDir + ncxMatch[1];
+  const ncxXml = await zip.file(ncxPath)?.async('text');
+  if (!ncxXml) return empty;
+
+  const items = parseNcxItems(ncxXml);
+
+  // Check if there are depth-1 entries that act as book headings (they have depth-2 children)
+  const depth1Items = items.filter((it) => it.depth === 1);
+  const depth2Items = items.filter((it) => it.depth === 2);
+  // Require at least 2 top-level groups, each containing at least 2 children
+  if (depth1Items.length < 2 || depth2Items.length < depth1Items.length * 2) return empty;
+
+  // Build a lookup: basename of src → chapter id
+  const hrefToId = new Map<string, string>();
+  for (const ch of chapters) {
+    const basename = ch._href.split('/').pop()!;
+    hrefToId.set(basename, ch.id);
+    hrefToId.set(ch._href, ch.id);
+  }
+
+  const result = new Map<string, { bookIndex: number; bookTitle: string }>();
+  let bookIndex = 0;
+  let currentBookTitle = '';
+  let currentBookIndex = 0;
+
+  for (const item of items) {
+    if (item.depth === 1) {
+      currentBookTitle = item.label;
+      currentBookIndex = bookIndex++;
+      // Map the depth-1 entry's own content file (title page) to this book
+      const id = hrefToId.get(item.src) ?? hrefToId.get(item.src.split('/').pop()!);
+      if (id) result.set(id, { bookIndex: currentBookIndex, bookTitle: currentBookTitle });
+    } else if (item.depth === 2) {
+      const id = hrefToId.get(item.src) ?? hrefToId.get(item.src.split('/').pop()!);
+      if (id) result.set(id, { bookIndex: currentBookIndex, bookTitle: currentBookTitle });
+    }
+  }
+
+  return result;
+}
+
+const BOOK_BOUNDARY_RE =
+  /^(Book|Part|Volume|Bk\.?)\s+(One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten|\d{1,2}|I{1,3}|IV|VI{0,3}|IX|X{0,2}I{0,3})([\s:—–-]|$)/i;
+
+function titlePatternDetection(
+  chapters: Array<EbookChapter & { _href: string }>,
+): Map<string, { bookIndex: number; bookTitle: string }> {
+  const empty = new Map<string, { bookIndex: number; bookTitle: string }>();
+  const boundaries: Array<{ id: string; bookIndex: number; bookTitle: string }> = [];
+  let bookIndex = 0;
+
+  for (const ch of chapters) {
+    if (BOOK_BOUNDARY_RE.test(ch.title)) {
+      boundaries.push({ id: ch.id, bookIndex: bookIndex++, bookTitle: ch.title });
+    }
+  }
+
+  if (boundaries.length < 2) return empty;
+
+  const result = new Map<string, { bookIndex: number; bookTitle: string }>();
+  for (const b of boundaries) result.set(b.id, { bookIndex: b.bookIndex, bookTitle: b.bookTitle });
+  return result;
 }
 
 function extractText(html: string): string {

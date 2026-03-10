@@ -200,8 +200,19 @@ export default function ChapterSelector({
             const hasSnapshot = snapshotIndices?.has(i) ?? false;
             const isLastAnalyzed = lastAnalyzedIndex !== null && i === lastAnalyzedIndex;
             const isAnalyzed = lastAnalyzedIndex !== null && i < lastAnalyzedIndex;
+            const prevCh = chapters[i - 1];
+            const showBookDivider = ch.bookTitle !== undefined && ch.bookIndex !== prevCh?.bookIndex;
             return (
               <li key={ch.id}>
+                {showBookDivider && (
+                  <div className="mt-3 mb-1 px-2 flex items-center gap-2">
+                    <div className="flex-1 h-px bg-zinc-800" />
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-600 whitespace-nowrap">
+                      {ch.bookTitle}
+                    </span>
+                    <div className="flex-1 h-px bg-zinc-800" />
+                  </div>
+                )}
                 <button
                   onClick={() => {
                     onChange(i);

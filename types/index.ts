@@ -3,12 +3,15 @@ export interface EbookChapter {
   title: string;
   text: string;
   order: number;
+  bookIndex?: number;   // which book in an omnibus (0-based); undefined for standalone
+  bookTitle?: string;   // title of that book within the omnibus
 }
 
 export interface ParsedEbook {
   title: string;
   author: string;
   chapters: EbookChapter[];
+  books?: string[];  // individual book titles if omnibus detected
 }
 
 export interface CharacterRelationship {
