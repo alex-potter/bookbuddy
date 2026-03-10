@@ -86,6 +86,9 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
   const [detectError, setDetectError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<Record<string, LocationPin> | null>(null); // null = no pending review
 
+  const [dragState, setDragState] = useState<{ name: string; x: number; y: number } | null>(null);
+  const wasDraggingRef = useRef(false);
+
   const mapRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -155,7 +158,32 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
     if (url?.match(/^https?:\/\//)) loadFromUrl(url);
   }
 
+  function handlePinPointerDown(e: React.PointerEvent, name: string) {
+    if (placingLocation) return;
+    e.stopPropagation();
+    e.preventDefault();
+    setActivePin(null);
+    setDragState({ name, x: mapState!.pins[name].x, y: mapState!.pins[name].y });
+    mapRef.current?.setPointerCapture(e.pointerId);
+  }
+
+  function handleMapPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!dragState || !mapRef.current) return;
+    const rect = mapRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+    const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
+    setDragState({ ...dragState, x, y });
+  }
+
+  function handleMapPointerUp() {
+    if (!dragState || !mapState) return;
+    wasDraggingRef.current = true;
+    onMapStateChange({ ...mapState, pins: { ...mapState.pins, [dragState.name]: { x: dragState.x, y: dragState.y } } });
+    setDragState(null);
+  }
+
   function handleMapClick(e: React.MouseEvent<HTMLDivElement>) {
+    if (wasDraggingRef.current) { wasDraggingRef.current = false; return; }
     if (!placingLocation || !mapRef.current || !mapState) return;
     const rect = mapRef.current.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * 100;
@@ -401,7 +429,10 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
         <div
           ref={mapRef}
           onClick={handleMapClick}
-          className={`relative border border-zinc-800 overflow-hidden select-none ${placingLocation ? 'cursor-crosshair' : 'cursor-default'}`}
+          onPointerMove={handleMapPointerMove}
+          onPointerUp={handleMapPointerUp}
+          onPointerCancel={() => setDragState(null)}
+          className={`relative border border-zinc-800 overflow-hidden select-none ${dragState ? 'cursor-grabbing' : placingLocation ? 'cursor-crosshair' : 'cursor-default'}`}
         >
           <img src={mapState.imageDataUrl} alt="Map" className="w-full block" draggable={false} />
 
@@ -411,20 +442,26 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
           )}
 
           {/* Accepted pins */}
-          {Object.entries(pins).map(([location, { x, y }]) => {
+          {Object.entries(pins).map(([location, pinPos]) => {
+            const { x, y } = dragState?.name === location ? dragState : pinPos;
             const chars = locationMap.get(location) ?? [];
             const color = pinColor(location);
             const isActive = activePin === location;
+            const isDraggingThis = dragState?.name === location;
             return (
               <div
                 key={location}
                 style={{ position: 'absolute', left: `${x}%`, top: `${y}%` }}
-                className="z-10"
-                onClick={(e) => { e.stopPropagation(); setActivePin(isActive ? null : location); }}
+                className={`z-10 ${isDraggingThis ? 'z-20' : ''}`}
+                onClick={(e) => { e.stopPropagation(); if (!wasDraggingRef.current) setActivePin(isActive ? null : location); }}
               >
-                <div className="relative -translate-x-1/2 -translate-y-full flex flex-col items-center" style={{ pointerEvents: 'all' }}>
+                <div
+                  className="relative -translate-x-1/2 -translate-y-full flex flex-col items-center"
+                  style={{ pointerEvents: 'all', touchAction: 'none' }}
+                  onPointerDown={(e) => handlePinPointerDown(e, location)}
+                >
                   <div
-                    className="px-2 py-0.5 rounded-full text-[10px] font-bold text-white shadow-lg whitespace-nowrap cursor-pointer hover:brightness-110 transition-all"
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold text-white shadow-lg whitespace-nowrap transition-all ${isDraggingThis ? 'cursor-grabbing scale-110' : 'cursor-grab hover:brightness-110'}`}
                     style={{ backgroundColor: color, boxShadow: `0 2px 8px ${color}60` }}
                   >
                     {location}{chars.length > 0 && <span className="ml-1 opacity-75">· {chars.length}</span>}
