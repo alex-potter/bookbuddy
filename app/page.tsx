@@ -10,6 +10,7 @@ import LocationBoard from '@/components/LocationBoard';
 import MapBoard from '@/components/MapBoard';
 import SeriesPicker from '@/components/SeriesPicker';
 import SettingsModal from '@/components/SettingsModal';
+import GithubLibrary from '@/components/GithubLibrary';
 import UploadZone from '@/components/UploadZone';
 
 type SortKey = 'importance' | 'name' | 'status';
@@ -192,7 +193,7 @@ export default function Home() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
 
-  const [uploadTab, setUploadTab] = useState<'file' | 'calibre' | 'mybooks'>('file');
+  const [uploadTab, setUploadTab] = useState<'file' | 'calibre' | 'mybooks' | 'library'>('file');
   const [importError, setImportError] = useState<string | null>(null);
   const [myBooksRev, setMyBooksRev] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -453,6 +454,7 @@ export default function Home() {
             { key: 'file', label: 'Upload EPUB' },
             ...(!IS_MOBILE ? [{ key: 'calibre' as const, label: 'Calibre' }] : []),
             { key: 'mybooks', label: `My Books${savedBooks.length > 0 ? ` (${savedBooks.length})` : ''}` },
+            { key: 'library', label: 'Library' },
           ] as const).map(({ key, label }) => (
             <button
               key={key}
@@ -486,6 +488,8 @@ export default function Home() {
             </>
           ) : uploadTab === 'calibre' ? (
             <CalibreLibrary onFile={handleFile} />
+          ) : uploadTab === 'library' ? (
+            <GithubLibrary onFile={handleFile} />
           ) : (
             /* My Books */
             <div className="max-w-2xl">
