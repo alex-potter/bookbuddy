@@ -4,11 +4,18 @@
 
 html {
   background-color: #09090b;
+  height: 100%;
 }
 
 body {
   background-color: #09090b;
   color: #f4f4f5;
+  height: 100%;
+}
+
+/* Remove 300ms tap delay on mobile */
+button, a, label, [role="button"] {
+  touch-action: manipulation;
 }
 
 ::-webkit-scrollbar {

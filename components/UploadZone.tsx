@@ -29,9 +29,9 @@ export default function UploadZone({ onFile, parsing }: Props) {
   );
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] gap-8">
+    <div className="flex flex-col items-center justify-center min-h-[60vh] gap-8 px-4">
       <div className="text-center">
-        <h1 className="text-4xl font-bold text-zinc-100 tracking-tight mb-2">Chapter Companion</h1>
+        <h1 className="text-3xl sm:text-4xl font-bold text-zinc-100 tracking-tight mb-2">Chapter Companion</h1>
         <p className="text-zinc-500">Track characters as you read — spoiler-free</p>
       </div>
 
@@ -41,11 +41,11 @@ export default function UploadZone({ onFile, parsing }: Props) {
         onDragLeave={() => setDragging(false)}
         onDrop={handleDrop}
         className={`
-          relative flex flex-col items-center justify-center w-80 h-52 rounded-2xl border-2 border-dashed
+          relative flex flex-col items-center justify-center w-full max-w-sm h-52 rounded-2xl border-2 border-dashed
           cursor-pointer transition-all duration-200
           ${dragging
             ? 'border-amber-500 bg-amber-500/5'
-            : 'border-zinc-700 bg-zinc-900 hover:border-zinc-500 hover:bg-zinc-800/60'
+            : 'border-zinc-700 bg-zinc-900 hover:border-zinc-500 active:bg-zinc-800/60'
           }
           ${parsing ? 'pointer-events-none opacity-50' : ''}
         `}
@@ -58,14 +58,14 @@ export default function UploadZone({ onFile, parsing }: Props) {
         ) : (
           <>
             <span className="text-4xl mb-3">📖</span>
-            <p className="text-zinc-300 font-semibold text-center px-4">Drop your EPUB here</p>
-            <p className="text-zinc-600 text-sm mt-1">or click to browse</p>
+            <p className="text-zinc-300 font-semibold text-center px-4">Tap to open EPUB</p>
+            <p className="text-zinc-600 text-sm mt-1 hidden sm:block">or drop a file here</p>
           </>
         )}
         <input
           id="epub-upload"
           type="file"
-          accept=".epub"
+          accept=".epub,.etbook"
           className="sr-only"
           onChange={handleChange}
           disabled={parsing}

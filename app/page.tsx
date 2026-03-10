@@ -182,6 +182,7 @@ export default function Home() {
 
   const [uploadTab, setUploadTab] = useState<'file' | 'calibre' | 'mybooks'>('file');
   const [importError, setImportError] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   async function handleImport(file: File) {
     setImportError(null);
@@ -430,16 +431,16 @@ export default function Home() {
     const savedBooks = listSavedBooks();
     return (
       <main className="min-h-screen flex flex-col">
-        <div className="flex border-b border-zinc-800 px-6 pt-6 gap-1">
+        <div className="flex border-b border-zinc-800 px-4 sm:px-6 pt-4 sm:pt-6 gap-0.5 overflow-x-auto">
           {([
             { key: 'file', label: 'Upload EPUB' },
-            { key: 'calibre', label: 'Calibre Library' },
+            { key: 'calibre', label: 'Calibre' },
             { key: 'mybooks', label: `My Books${savedBooks.length > 0 ? ` (${savedBooks.length})` : ''}` },
           ] as const).map(({ key, label }) => (
             <button
               key={key}
               onClick={() => setUploadTab(key)}
-              className={`px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 transition-colors -mb-px ${
+              className={`px-3 sm:px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 transition-colors -mb-px whitespace-nowrap ${
                 uploadTab === key
                   ? 'border-amber-500 text-amber-400'
                   : 'border-transparent text-zinc-500 hover:text-zinc-300'
@@ -449,7 +450,7 @@ export default function Home() {
             </button>
           ))}
         </div>
-        <div className="flex-1 p-6">
+        <div className="flex-1 p-4 sm:p-6">
           {uploadTab === 'file' ? (
             <>
               <UploadZone onFile={handleFile} parsing={parsing} />
@@ -549,19 +550,29 @@ export default function Home() {
 
   return (
     <main className="min-h-screen flex flex-col">
-      <header className="bg-zinc-900 border-b border-zinc-800 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <span className="text-xl">📖</span>
-          <div>
-            <h1 className="font-bold text-zinc-100 leading-tight">{book.title}</h1>
-            <p className="text-xs text-zinc-500">{book.author}</p>
+      <header className="bg-zinc-900 border-b border-zinc-800 px-4 py-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          {/* Hamburger — mobile only */}
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="lg:hidden flex-shrink-0 w-9 h-9 flex items-center justify-center text-zinc-400 hover:text-zinc-200 transition-colors rounded-lg"
+            aria-label="Open chapter list"
+          >
+            <svg width="18" height="14" viewBox="0 0 18 14" fill="none">
+              <rect width="18" height="2" rx="1" fill="currentColor"/>
+              <rect y="6" width="18" height="2" rx="1" fill="currentColor"/>
+              <rect y="12" width="18" height="2" rx="1" fill="currentColor"/>
+            </svg>
+          </button>
+          <span className="text-xl flex-shrink-0">📖</span>
+          <div className="min-w-0">
+            <h1 className="font-bold text-zinc-100 leading-tight truncate text-sm sm:text-base">{book.title}</h1>
+            <p className="text-xs text-zinc-500 truncate">{book.author}</p>
           </div>
         </div>
-        <div className="flex items-center gap-4">
-          {isSeriesContinuation && <span className="text-xs text-violet-400 font-medium">Series mode</span>}
-          {hasStoredState && (
-            <span className="text-xs text-zinc-600">Saved · ch.{stored.lastAnalyzedIndex + 1}</span>
-          )}
+        <div className="flex items-center gap-3 flex-shrink-0">
+          {isSeriesContinuation && <span className="hidden sm:inline text-xs text-violet-400 font-medium">Series mode</span>}
+          {hasStoredState && <span className="hidden md:inline text-xs text-zinc-600">Saved · ch.{stored.lastAnalyzedIndex + 1}</span>}
           {hasStoredState && (
             <button
               onClick={() => exportBook(book.title, book.author)}
@@ -573,7 +584,7 @@ export default function Home() {
           )}
           <button
             onClick={() => { setBook(null); setResult(null); storedRef.current = null; seriesBaseRef.current = null; }}
-            className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+            className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors whitespace-nowrap"
           >
             Change book
           </button>
@@ -581,11 +592,31 @@ export default function Home() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        <aside className="w-64 flex-shrink-0 bg-zinc-900 border-r border-zinc-800 p-4 overflow-y-auto">
+        {/* Mobile sidebar backdrop */}
+        {sidebarOpen && (
+          <div
+            className="fixed inset-0 z-30 bg-black/60 lg:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
+
+        <aside className={`
+          fixed inset-y-0 left-0 z-40 w-72 bg-zinc-900 border-r border-zinc-800 p-4 overflow-y-auto
+          transform transition-transform duration-200 ease-in-out
+          lg:relative lg:w-64 lg:translate-x-0 lg:z-auto lg:flex-shrink-0
+          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+        `}>
+          {/* Close button — mobile only */}
+          <button
+            onClick={() => setSidebarOpen(false)}
+            className="lg:hidden mb-3 ml-auto flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            Close ✕
+          </button>
           <ChapterSelector
             chapters={book.chapters}
             currentIndex={currentIndex}
-            onChange={handleChapterChange}
+            onChange={(i) => { handleChapterChange(i); setSidebarOpen(false); }}
             onAnalyze={handleAnalyze}
             onCancelAnalyze={() => { analyzeCancelRef.current = true; }}
             onRebuild={handleRebuild}
@@ -602,9 +633,9 @@ export default function Home() {
           {analyzeError && <p className="mt-3 text-xs text-red-500 text-center">{analyzeError}</p>}
         </aside>
 
-        <div className="flex-1 overflow-y-auto p-6 flex flex-col">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col">
           {/* Tab bar — always visible */}
-          <div className="flex rounded-lg overflow-hidden border border-zinc-800 mb-5 w-fit flex-shrink-0">
+          <div className="flex rounded-lg overflow-hidden border border-zinc-800 mb-5 w-full sm:w-fit flex-shrink-0">
             {([
               { key: 'characters', label: 'Characters' },
               { key: 'locations', label: 'Locations' },
@@ -613,7 +644,7 @@ export default function Home() {
               <button
                 key={key}
                 onClick={() => setTab(key)}
-                className={`px-5 py-2 text-sm font-medium transition-colors ${
+                className={`flex-1 sm:flex-none px-4 sm:px-5 py-2.5 sm:py-2 text-sm font-medium transition-colors ${
                   tab === key ? 'bg-zinc-700 text-zinc-100' : 'bg-transparent text-zinc-500 hover:text-zinc-300'
                 }`}
               >
@@ -716,14 +747,14 @@ export default function Home() {
                           placeholder="Search…"
                           value={search}
                           onChange={(e) => setSearch(e.target.value)}
-                          className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-sm text-zinc-300 placeholder-zinc-600 focus:outline-none focus:border-zinc-600 min-w-36 flex-1"
+                          className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-300 placeholder-zinc-600 focus:outline-none focus:border-zinc-600 min-w-36 flex-1"
                         />
-                        <div className="flex gap-1.5">
+                        <div className="flex gap-1.5 flex-wrap">
                           {(['all', 'main', 'secondary', 'minor'] as const).map((f) => (
                             <button
                               key={f}
                               onClick={() => setFilter(f)}
-                              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                              className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
                                 filter === f
                                   ? 'bg-zinc-700 text-zinc-100'
                                   : 'text-zinc-500 hover:text-zinc-300 border border-zinc-800 hover:border-zinc-700'
@@ -736,7 +767,7 @@ export default function Home() {
                         <select
                           value={sortKey}
                           onChange={(e) => setSortKey(e.target.value as SortKey)}
-                          className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-500 focus:outline-none focus:border-zinc-600"
+                          className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-500 focus:outline-none focus:border-zinc-600"
                         >
                           <option value="importance">Importance</option>
                           <option value="name">Name</option>
