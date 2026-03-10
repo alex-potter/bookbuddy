@@ -25,6 +25,22 @@ interface Props {
 
 const BYTES_PER_LOCATION = 128;
 
+// Articles/prepositions that stay lowercase in title case (unless first word)
+const LOWERCASE_WORDS = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor',
+  'on', 'at', 'to', 'by', 'in', 'of', 'up', 'as', 'vs', 'via']);
+
+/** Normalise a chapter title: apply title case if the string is all-upper or all-lower. */
+function normalizeTitle(raw: string): string {
+  const t = raw.trim();
+  const lower = t.toLowerCase();
+  const upper = t.toUpperCase();
+  if (t !== lower && t !== upper) return t; // already mixed case — leave it
+  return lower.replace(/\b\w+/g, (word, offset) => {
+    if (offset > 0 && LOWERCASE_WORDS.has(word)) return word;
+    return word.charAt(0).toUpperCase() + word.slice(1);
+  });
+}
+
 function locationToChapterIndex(location: number, chapters: EbookChapter[]): number {
   const targetOffset = location * BYTES_PER_LOCATION;
   let cumulative = 0;
@@ -98,7 +114,7 @@ function ChapterItem({
         className={`flex-1 text-left px-2.5 py-1.5 rounded-md text-xs transition-colors ${color}`}
       >
         <span className="mr-1.5 text-[10px]">{marker}</span>
-        {ch.title}
+        {normalizeTitle(ch.title)}
         {mode === 'location' && (
           <span className="ml-1 text-zinc-600">~{chapterIndexToLocation(globalIndex, chapters).toLocaleString()}</span>
         )}
@@ -213,12 +229,12 @@ export default function ChapterSelector({
                   ? [...bookGroups.entries()].map(([bookIdx, { bookTitle, items }]) => (
                       <optgroup key={bookIdx} label={bookTitle}>
                         {items.map(({ ch, globalIndex, chapterNum }) => (
-                          <option key={ch.id} value={globalIndex}>Ch. {chapterNum} — {ch.title}</option>
+                          <option key={ch.id} value={globalIndex}>Ch. {chapterNum} — {normalizeTitle(ch.title)}</option>
                         ))}
                       </optgroup>
                     ))
                   : chapters.map((ch, i) => (
-                      <option key={ch.id} value={i}>{i + 1}. {ch.title}</option>
+                      <option key={ch.id} value={i}>{i + 1}. {normalizeTitle(ch.title)}</option>
                     ))}
               </select>
               <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-zinc-500">▾</div>
@@ -243,7 +259,7 @@ export default function ChapterSelector({
               placeholder="e.g. 3421"
               className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 text-zinc-200 text-sm focus:outline-none focus:border-zinc-500"
             />
-            <p className="mt-1.5 text-xs text-zinc-600">≈ {chapters[currentIndex]?.title} · ~{totalLocations.toLocaleString()} total</p>
+            <p className="mt-1.5 text-xs text-zinc-600">≈ {normalizeTitle(chapters[currentIndex]?.title ?? '')} · ~{totalLocations.toLocaleString()} total</p>
             <p className="mt-0.5 text-xs text-zinc-700">Approximate (±1 chapter)</p>
           </>
         )}
