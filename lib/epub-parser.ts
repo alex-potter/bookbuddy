@@ -36,7 +36,10 @@ export async function parseEpub(file: File): Promise<ParsedEbook> {
   // Spine: ordered list of idref
   const spineMatches = [...opfXml.matchAll(/<itemref\s[^>]*idref="([^"]+)"[^>]*\/?>/gi)];
 
-  // 3. Extract chapter text in spine order
+  // 3. Build a title map from NCX or EPUB3 nav before processing chapters
+  const ncxTitleMap = await buildNcxTitleMap(zip, opfDir, opfXml);
+
+  // 4. Extract chapter text in spine order
   const chapters: EbookChapter[] = [];
   let order = 0;
 
@@ -61,10 +64,20 @@ export async function parseEpub(file: File): Promise<ParsedEbook> {
     const text = extractText(html);
     if (text.trim().length < 100) continue; // skip nav/toc/empty files
 
-    // Try to extract a meaningful chapter title from headings
-    const headingMatch = html.match(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/i);
-    const rawTitle = headingMatch?.[1] ? extractText(headingMatch[1]) : '';
-    const chapterTitle = rawTitle.trim() || `Part ${order + 1}`;
+    // Title resolution priority:
+    // 1. NCX/nav label (most reliable — editor-provided)
+    // 2. First h1-h3 heading in the HTML
+    // 3. "Part N" fallback
+    const basename = href.split('/').pop()!;
+    const ncxTitle = ncxTitleMap.get(basename) ?? ncxTitleMap.get(href);
+    let chapterTitle: string;
+    if (ncxTitle) {
+      chapterTitle = ncxTitle;
+    } else {
+      const headingMatch = html.match(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/i);
+      const rawTitle = headingMatch?.[1] ? extractText(headingMatch[1]) : '';
+      chapterTitle = rawTitle.trim() || `Part ${order + 1}`;
+    }
 
     // Store the resolved href so we can map it during omnibus detection
     chapters.push({ id: itemId, title: chapterTitle, text: text.trim(), order: order++, _href: candidates[0] } as EbookChapter & { _href: string });
@@ -74,7 +87,7 @@ export async function parseEpub(file: File): Promise<ParsedEbook> {
     throw new Error('Could not extract any chapters from this EPUB. The file may be DRM-protected or use an unsupported format.');
   }
 
-  // 4. Detect omnibus structure (NCX hierarchy or title patterns)
+  // 5. Detect omnibus structure (NCX hierarchy or title patterns)
   const bookMap = await detectOmnibusStructure(zip, opfDir, opfXml, chapters as Array<EbookChapter & { _href: string }>);
   const books: string[] = [];
   if (bookMap.size > 0) {
@@ -106,9 +119,63 @@ export async function parseEpub(file: File): Promise<ParsedEbook> {
   return { title, author, chapters, books: books.length > 1 ? books : undefined };
 }
 
-// ---- Omnibus detection ----
+// ---- Chapter title extraction from NCX / EPUB3 nav ----
 
 type ZipLike = { file: (name: string) => ({ async: (type: 'text') => Promise<string> } | null) };
+
+/** Build a map of (href basename → label) from the NCX or EPUB3 nav document.
+ *  Returns empty map if neither is present. */
+async function buildNcxTitleMap(
+  zip: ZipLike,
+  opfDir: string,
+  opfXml: string,
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+
+  // --- Try EPUB3 nav.xhtml first ---
+  const navMatch =
+    opfXml.match(/<item[^>]+properties="[^"]*nav[^"]*"[^>]+href="([^"]+)"/i) ||
+    opfXml.match(/<item[^>]+href="([^"]+)"[^>]+properties="[^"]*nav[^"]*"/i);
+  if (navMatch) {
+    const navPath = opfDir + navMatch[1];
+    const navHtml = await zip.file(navPath)?.async('text');
+    if (navHtml) {
+      // Parse <nav epub:type="toc"> … <a href="…">Title</a> …
+      const tocSection = navHtml.match(/<nav[^>]*epub:type="toc"[^>]*>([\s\S]*?)<\/nav>/i)?.[1] ?? navHtml;
+      for (const m of tocSection.matchAll(/<a[^>]+href="([^"#]+)[^"]*"[^>]*>([\s\S]*?)<\/a>/gi)) {
+        const label = extractText(m[2]).trim();
+        const src = m[1].trim().split('/').pop()!;
+        if (label && src && !isGenericTitle(label)) result.set(src, label);
+      }
+      if (result.size > 0) return result;
+    }
+  }
+
+  // --- Fall back to NCX ---
+  const ncxMatch =
+    opfXml.match(/<item[^>]+media-type="application\/x-dtbncx\+xml"[^>]+href="([^"]+)"/i) ||
+    opfXml.match(/<item[^>]+href="([^"]+)"[^>]+media-type="application\/x-dtbncx\+xml"/i);
+  if (!ncxMatch) return result;
+
+  const ncxPath = opfDir + ncxMatch[1];
+  const ncxXml = await zip.file(ncxPath)?.async('text');
+  if (!ncxXml) return result;
+
+  for (const item of parseNcxItems(ncxXml)) {
+    if (item.label && !isGenericTitle(item.label)) {
+      const basename = item.src.split('/').pop()!;
+      result.set(basename, item.label);
+    }
+  }
+  return result;
+}
+
+/** Returns true for generic/useless titles we should skip in favour of HTML heading or Part N. */
+function isGenericTitle(title: string): boolean {
+  return /^(chapter|part|section|ch\.?|p\.?)\s*\d+$/i.test(title.trim());
+}
+
+// ---- Omnibus detection ----
 
 /** Attempt to detect individual books within an omnibus EPUB.
  *  Returns a map from chapter id → { bookIndex, bookTitle }, or empty map if not an omnibus. */
