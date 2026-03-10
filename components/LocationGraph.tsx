@@ -3,13 +3,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Snapshot } from '@/types';
 
+interface CharAvatar {
+  name: string;
+  status: 'alive' | 'dead' | 'unknown' | 'uncertain';
+}
+
 interface Node {
   id: string;
   x: number;
   y: number;
   vx: number;
   vy: number;
-  characterCount: number; // characters currently at this location (latest snapshot)
+  characterCount: number;
+  characters: CharAvatar[];
 }
 
 interface Edge {
@@ -26,14 +32,17 @@ interface GraphData {
 function buildGraph(snapshots: Snapshot[]): GraphData {
   const sorted = [...snapshots].sort((a, b) => a.index - b.index);
 
-  // Count characters per location in latest snapshot
+  // Characters per location in latest snapshot
   const latest = sorted[sorted.length - 1];
   const latestCounts = new Map<string, number>();
+  const charData = new Map<string, CharAvatar[]>();
   if (latest) {
     for (const c of latest.result.characters) {
       const loc = c.currentLocation?.trim();
       if (loc && loc !== 'Unknown') {
         latestCounts.set(loc, (latestCounts.get(loc) ?? 0) + 1);
+        if (!charData.has(loc)) charData.set(loc, []);
+        charData.get(loc)!.push({ name: c.name, status: c.status });
       }
     }
   }
@@ -82,6 +91,7 @@ function buildGraph(snapshots: Snapshot[]): GraphData {
     vx: 0,
     vy: 0,
     characterCount: latestCounts.get(id) ?? 0,
+    characters: charData.get(id) ?? [],
   }));
 
   return { nodes, edges };
@@ -146,6 +156,17 @@ function tick(nodes: Node[], edges: Edge[]): Node[] {
   }
 
   return next;
+}
+
+const STATUS_HEX: Record<CharAvatar['status'], string> = {
+  alive: '#10b981',
+  dead: '#ef4444',
+  unknown: '#71717a',
+  uncertain: '#f59e0b',
+};
+
+function charInitials(name: string): string {
+  return name.split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? '').join('');
 }
 
 const PALETTE_SIZE = 8;
@@ -360,11 +381,26 @@ export default function LocationGraph({ snapshots }: Props) {
           {/* Nodes */}
           {graph.nodes.map((n) => {
             const ci = nodeColor(n.id);
-            const r = Math.max(18, Math.min(34, 18 + n.characterCount * 3));
-            // Inline SVG classes won't work — use fill/stroke directly
+            const r = Math.max(16, Math.min(28, 16 + n.characterCount * 2));
             const fills = ['#f43f5e22','#0ea5e922','#8b5cf622','#10b98122','#f59e0b22','#ec489922','#14b8a622','#6366f122'];
             const strokes = ['#f43f5e99','#0ea5e999','#8b5cf699','#10b98199','#f59e0b99','#ec489999','#14b8a699','#6366f199'];
             const labelFills = ['#fb7185','#38bdf8','#a78bfa','#34d399','#fbbf24','#f472b6','#2dd4bf','#818cf8'];
+
+            const labelAngle = pickAngle(n.id, graph.nodes, graph.edges);
+            const labelDist = r + 12;
+            const lx = Math.cos(labelAngle) * labelDist;
+            const ly = Math.sin(labelAngle) * labelDist;
+            const anchor = Math.cos(labelAngle) > 0.3 ? 'start' : Math.cos(labelAngle) < -0.3 ? 'end' : 'middle';
+            const baseline = Math.sin(labelAngle) > 0.3 ? 'hanging' : Math.sin(labelAngle) < -0.3 ? 'auto' : 'central';
+
+            // Place avatars in a ring just outside the node, evenly spaced
+            const chars = n.characters;
+            const AVT = 7; // avatar radius
+            const ringR = r + AVT + 4;
+            const step = chars.length > 0 ? (2 * Math.PI) / chars.length : 0;
+            // Start avatars opposite the label direction to avoid overlap
+            const startAngle = labelAngle + Math.PI;
+
             return (
               <g
                 key={n.id}
@@ -372,39 +408,37 @@ export default function LocationGraph({ snapshots }: Props) {
                 onMouseDown={(e) => handleMouseDown(e, n.id)}
                 style={{ cursor: 'grab' }}
               >
-                <circle r={r} fill={fills[ci]} stroke={strokes[ci]} strokeWidth="1.5" />
-                {n.characterCount > 0 && (
-                  <text
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    fontSize="10"
-                    fontWeight="600"
-                    fill={labelFills[ci]}
-                  >
-                    {n.characterCount}
-                  </text>
-                )}
-                {/* Location name label — placed in the most open direction */}
-                {(() => {
-                  const angle = pickAngle(n.id, graph.nodes, graph.edges);
-                  const dist = r + 11;
-                  const lx = Math.cos(angle) * dist;
-                  const ly = Math.sin(angle) * dist;
-                  const anchor = Math.cos(angle) > 0.3 ? 'start' : Math.cos(angle) < -0.3 ? 'end' : 'middle';
-                  const baseline = Math.sin(angle) > 0.3 ? 'hanging' : Math.sin(angle) < -0.3 ? 'auto' : 'central';
+                {/* Character avatars in a ring */}
+                {chars.map((c, i) => {
+                  const a = startAngle + i * step;
+                  const ax = Math.cos(a) * ringR;
+                  const ay = Math.sin(a) * ringR;
+                  const hex = STATUS_HEX[c.status];
                   return (
-                    <text
-                      x={lx} y={ly}
-                      textAnchor={anchor}
-                      dominantBaseline={baseline}
-                      fontSize="10"
-                      fontWeight="500"
-                      fill={labelFills[ci]}
-                    >
-                      {n.id.length > 20 ? n.id.slice(0, 18) + '…' : n.id}
-                    </text>
+                    <g key={c.name} transform={`translate(${ax},${ay})`}>
+                      <title>{c.name} ({c.status})</title>
+                      <circle r={AVT} fill={hex + '28'} stroke={hex} strokeWidth="1.5" />
+                      <text textAnchor="middle" dominantBaseline="central" fontSize="5" fontWeight="700" fill={hex}>
+                        {charInitials(c.name)}
+                      </text>
+                    </g>
                   );
-                })()}
+                })}
+
+                {/* Node circle */}
+                <circle r={r} fill={fills[ci]} stroke={strokes[ci]} strokeWidth="1.5" />
+
+                {/* Location name */}
+                <text
+                  x={lx} y={ly}
+                  textAnchor={anchor}
+                  dominantBaseline={baseline}
+                  fontSize="10"
+                  fontWeight="500"
+                  fill={labelFills[ci]}
+                >
+                  {n.id.length > 20 ? n.id.slice(0, 18) + '…' : n.id}
+                </text>
               </g>
             );
           })}

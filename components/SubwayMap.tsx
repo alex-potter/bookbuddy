@@ -5,13 +5,18 @@ import type { Snapshot } from '@/types';
 
 /* ── Types ────────────────────────────────────────────────────────────── */
 
+interface CharAvatar {
+  name: string;
+  status: 'alive' | 'dead' | 'unknown' | 'uncertain';
+}
+
 interface Node {
   id: string;
   x: number;
   y: number;
   vx: number;
   vy: number;
-  charCount: number;   // characters here in latest snapshot
+  characters: CharAvatar[];
 }
 
 interface Edge {
@@ -23,22 +28,61 @@ interface Edge {
 
 /* ── Constants ────────────────────────────────────────────────────────── */
 
-// Transit-map line palette (vivid, distinct)
 const LINE_COLORS = [
-  '#f59e0b', // amber
-  '#38bdf8', // sky
-  '#a78bfa', // violet
-  '#34d399', // emerald
-  '#fb7185', // rose
-  '#f472b6', // pink
-  '#2dd4bf', // teal
-  '#818cf8', // indigo
+  '#f59e0b', '#38bdf8', '#a78bfa', '#34d399',
+  '#fb7185', '#f472b6', '#2dd4bf', '#818cf8',
 ];
+
+const STATUS_HEX: Record<CharAvatar['status'], string> = {
+  alive: '#10b981',
+  dead: '#ef4444',
+  unknown: '#71717a',
+  uncertain: '#f59e0b',
+};
 
 const W = 780;
 const H = 420;
 const CX = W / 2;
 const CY = H / 2;
+
+const AVT_R = 7;       // avatar circle radius
+const AVT_GAP = 2;     // gap between avatars
+const AVT_STEP = AVT_R * 2 + AVT_GAP;
+const MAX_SHOW = 7;    // max avatars before "+N"
+
+/* ── Helpers ──────────────────────────────────────────────────────────── */
+
+function initials(name: string): string {
+  return name.split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? '').join('');
+}
+
+/** Grid positions for a cluster of `count` avatars centred on (cx, cy). */
+function clusterPositions(count: number, cx: number, cy: number): Array<{ x: number; y: number }> {
+  const cols = Math.min(count, 3);
+  const rows = Math.ceil(count / cols);
+  const positions: { x: number; y: number }[] = [];
+  let idx = 0;
+  for (let row = 0; row < rows && idx < count; row++) {
+    const inRow = Math.min(cols, count - row * cols);
+    for (let col = 0; col < inRow; col++) {
+      positions.push({
+        x: cx + (col - (inRow - 1) / 2) * AVT_STEP,
+        y: cy + (row - (rows - 1) / 2) * AVT_STEP,
+      });
+      idx++;
+    }
+  }
+  return positions;
+}
+
+/** Centre point for an avatar cluster placed `dist` from node in `angle` direction. */
+function clusterCenter(nodeX: number, nodeY: number, nodeR: number, angle: number, rows: number): { cx: number; cy: number } {
+  const dist = nodeR + AVT_R + 5 + ((rows - 1) / 2) * AVT_STEP;
+  return {
+    cx: nodeX + Math.cos(angle) * dist,
+    cy: nodeY + Math.sin(angle) * dist,
+  };
+}
 
 /* ── Graph extraction ─────────────────────────────────────────────────── */
 
@@ -46,15 +90,16 @@ function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[] } {
   const sorted = [...snapshots].sort((a, b) => a.index - b.index);
   if (sorted.length === 0) return { nodes: [], edges: [] };
 
-  // Character counts at latest snapshot
   const latest = sorted[sorted.length - 1];
-  const charCounts = new Map<string, number>();
+  const charData = new Map<string, CharAvatar[]>();
   for (const c of latest.result.characters) {
     const loc = c.currentLocation?.trim();
-    if (loc && loc !== 'Unknown') charCounts.set(loc, (charCounts.get(loc) ?? 0) + 1);
+    if (loc && loc !== 'Unknown') {
+      if (!charData.has(loc)) charData.set(loc, []);
+      charData.get(loc)!.push({ name: c.name, status: c.status });
+    }
   }
 
-  // Edges from character movement between consecutive snapshots
   const edgeCounts = new Map<string, number>();
   for (let i = 1; i < sorted.length; i++) {
     const prevMap = new Map<string, string>();
@@ -65,22 +110,19 @@ function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[] } {
       const newLoc = c.currentLocation?.trim();
       const oldLoc = prevMap.get(c.name);
       if (!newLoc || newLoc === 'Unknown' || !oldLoc || oldLoc === 'Unknown' || newLoc === oldLoc) continue;
-      const key = [oldLoc, newLoc].sort().join('\x00');
-      edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
+      edgeCounts.set([oldLoc, newLoc].sort().join('\x00'), (edgeCounts.get([oldLoc, newLoc].sort().join('\x00')) ?? 0) + 1);
     }
   }
 
-  // Sort edges by weight descending, assign line colors
   const sortedEdges = [...edgeCounts.entries()].sort((a, b) => b[1] - a[1]);
   const edges: Edge[] = sortedEdges.map(([key, weight], i) => {
     const [source, target] = key.split('\x00');
     return { source, target, weight, color: LINE_COLORS[i % LINE_COLORS.length] };
   });
 
-  // Nodes = all referenced locations + any with characters in latest
   const nodeIds = new Set<string>();
   for (const e of edges) { nodeIds.add(e.source); nodeIds.add(e.target); }
-  for (const [loc] of charCounts.entries()) nodeIds.add(loc);
+  for (const [loc] of charData.entries()) nodeIds.add(loc);
 
   const nodes: Node[] = Array.from(nodeIds).map((id) => ({
     id,
@@ -88,7 +130,7 @@ function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[] } {
     y: CY + (Math.random() - 0.5) * 280,
     vx: 0,
     vy: 0,
-    charCount: charCounts.get(id) ?? 0,
+    characters: charData.get(id) ?? [],
   }));
 
   return { nodes, edges };
@@ -96,11 +138,11 @@ function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[] } {
 
 /* ── Physics ──────────────────────────────────────────────────────────── */
 
-const REPULSION = 7000;
-const SPRING_K = 0.045;
-const SPRING_REST = 150;
+const REPULSION = 10000;
+const SPRING_K = 0.04;
+const SPRING_REST = 180;
 const DAMPING = 0.80;
-const GRAVITY = 0.007;
+const GRAVITY = 0.006;
 
 function tick(nodes: Node[], edges: Edge[]): Node[] {
   const next = nodes.map((n) => ({ ...n }));
@@ -113,8 +155,7 @@ function tick(nodes: Node[], edges: Edge[]): Node[] {
       const d2 = Math.max(dx * dx + dy * dy, 100);
       const d = Math.sqrt(d2);
       const f = REPULSION / d2;
-      const fx = (f * dx) / d;
-      const fy = (f * dy) / d;
+      const fx = (f * dx) / d; const fy = (f * dy) / d;
       next[i].vx -= fx; next[i].vy -= fy;
       next[j].vx += fx; next[j].vy += fy;
     }
@@ -136,8 +177,8 @@ function tick(nodes: Node[], edges: Edge[]): Node[] {
     n.vx += (CX - n.x) * GRAVITY;
     n.vy += (CY - n.y) * GRAVITY;
     n.vx *= DAMPING; n.vy *= DAMPING;
-    n.x = Math.max(60, Math.min(W - 60, n.x + n.vx));
-    n.y = Math.max(40, Math.min(H - 40, n.y + n.vy));
+    n.x = Math.max(70, Math.min(W - 70, n.x + n.vx));
+    n.y = Math.max(50, Math.min(H - 50, n.y + n.vy));
   }
 
   return next;
@@ -145,8 +186,6 @@ function tick(nodes: Node[], edges: Edge[]): Node[] {
 
 /* ── Label placement ──────────────────────────────────────────────────── */
 
-// Pick the angle (from 8 candidates) that is furthest from all connected edge directions.
-// This places labels in the most "open" direction — away from neighboring stations.
 const LABEL_CANDIDATES = [0, 45, 90, 135, 180, 225, 270, 315].map((d) => (d * Math.PI) / 180);
 
 function angularDist(a: number, b: number): number {
@@ -162,10 +201,7 @@ function pickLabelAngle(node: Node, edges: Edge[], nodeMap: Map<string, Node>): 
       return other ? [Math.atan2(other.y - node.y, other.x - node.x)] : [];
     });
 
-  if (edgeAngles.length === 0) {
-    // Isolated node: push away from canvas center
-    return Math.atan2(node.y - CY, node.x - CX);
-  }
+  if (edgeAngles.length === 0) return Math.atan2(node.y - CY, node.x - CX);
 
   let bestAngle = LABEL_CANDIDATES[0];
   let bestScore = -Infinity;
@@ -179,16 +215,11 @@ function pickLabelAngle(node: Node, edges: Edge[], nodeMap: Map<string, Node>): 
 /* ── Subway routing ───────────────────────────────────────────────────── */
 
 function subwayPath(x1: number, y1: number, x2: number, y2: number): string {
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const adx = Math.abs(dx);
-  const ady = Math.abs(dy);
-  if (adx >= ady) {
-    const mx = x1 + Math.sign(dx) * ady;
-    return `M ${x1} ${y1} L ${mx} ${y2} L ${x2} ${y2}`;
+  const dx = x2 - x1; const dy = y2 - y1;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return `M ${x1} ${y1} L ${x1 + Math.sign(dx) * Math.abs(dy)} ${y2} L ${x2} ${y2}`;
   } else {
-    const my = y1 + Math.sign(dy) * adx;
-    return `M ${x1} ${y1} L ${x2} ${my} L ${x2} ${y2}`;
+    return `M ${x1} ${y1} L ${x2} ${y1 + Math.sign(dy) * Math.abs(dx)} L ${x2} ${y2}`;
   }
 }
 
@@ -203,18 +234,15 @@ export default function SubwayMap({ snapshots }: Props) {
   const [settled, setSettled] = useState(false);
   const frameRef = useRef<number>(0);
 
-  // Rebuild when snapshots change
   useEffect(() => {
     setGraph(buildGraph(snapshots));
     setSettled(false);
   }, [snapshots]);
 
-  // Simulation — run until settled
   useEffect(() => {
     if (settled) return;
     let count = 0;
     const MAX = 400;
-
     function loop() {
       setGraph((prev) => {
         const next = tick(prev.nodes, prev.edges);
@@ -225,7 +253,6 @@ export default function SubwayMap({ snapshots }: Props) {
       });
       if (count < MAX) frameRef.current = requestAnimationFrame(loop);
     }
-
     frameRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(frameRef.current);
   }, [settled]);
@@ -249,79 +276,98 @@ export default function SubwayMap({ snapshots }: Props) {
       style={{ height: '100%', display: 'block' }}
     >
       <defs>
-        {/* Subtle grid */}
         <pattern id="sm-grid" width="30" height="30" patternUnits="userSpaceOnUse">
           <path d="M 30 0 L 0 0 0 30" fill="none" stroke="#27272a" strokeWidth="0.5" />
         </pattern>
-        {/* Glow filter for stations */}
-        <filter id="sm-glow" x="-40%" y="-40%" width="180%" height="180%">
-          <feGaussianBlur stdDeviation="3" result="blur" />
+        <filter id="sm-glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="2.5" result="blur" />
           <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
         </filter>
       </defs>
 
-      {/* Background */}
       <rect width={W} height={H} fill="#09090b" />
       <rect width={W} height={H} fill="url(#sm-grid)" />
 
-      {/* Lines (edges) — drawn before stations so stations sit on top */}
+      {/* Transit lines */}
       <g>
         {graph.edges.map((e) => {
           const s = nodeMap.get(e.source);
           const t = nodeMap.get(e.target);
           if (!s || !t) return null;
-          const thick = 2.5 + 2.5 * (e.weight / maxW);
           return (
             <path
               key={`${e.source}\x00${e.target}`}
               d={subwayPath(s.x, s.y, t.x, t.y)}
               fill="none"
               stroke={e.color}
-              strokeWidth={thick}
+              strokeWidth={2.5 + 2.5 * (e.weight / maxW)}
               strokeLinecap="round"
               strokeLinejoin="round"
-              opacity={0.7}
+              opacity={0.65}
             />
           );
         })}
       </g>
 
-      {/* Station markers + labels */}
+      {/* Stations + labels + character avatars */}
       {graph.nodes.map((n) => {
-        // Collect edge colors touching this node
         const colors = graph.edges
           .filter((e) => e.source === n.id || e.target === n.id)
           .map((e) => e.color);
         const primaryColor = colors[0] ?? '#71717a';
-        const r = n.charCount > 0 ? 9 : 6;
+        const r = n.characters.length > 0 ? 9 : 6;
 
-        // Place label in the most open direction (away from connected neighbors)
-        const angle = pickLabelAngle(n, graph.edges, nodeMap);
-        const labelDist = r + 11;
-        const labelX = n.x + Math.cos(angle) * labelDist;
-        const labelY = n.y + Math.sin(angle) * labelDist;
-        const labelAnchor = Math.cos(angle) > 0.3 ? 'start' : Math.cos(angle) < -0.3 ? 'end' : 'middle';
-        const labelBaseline = Math.sin(angle) > 0.3 ? 'hanging' : Math.sin(angle) < -0.3 ? 'auto' : 'central';
+        const labelAngle = pickLabelAngle(n, graph.edges, nodeMap);
+        const labelDist = r + 12;
+        const labelX = n.x + Math.cos(labelAngle) * labelDist;
+        const labelY = n.y + Math.sin(labelAngle) * labelDist;
+        const labelAnchor = Math.cos(labelAngle) > 0.3 ? 'start' : Math.cos(labelAngle) < -0.3 ? 'end' : 'middle';
+        const labelBaseline = Math.sin(labelAngle) > 0.3 ? 'hanging' : Math.sin(labelAngle) < -0.3 ? 'auto' : 'central';
+
+        // Character avatars: opposite side from label
+        const charAngle = labelAngle + Math.PI;
+        const displayChars = n.characters.slice(0, MAX_SHOW);
+        const extra = n.characters.length - MAX_SHOW;
+        const showCount = displayChars.length + (extra > 0 ? 1 : 0);
+        const avatarRows = Math.ceil(showCount / 3);
+        const { cx: avatarCX, cy: avatarCY } = clusterCenter(n.x, n.y, r, charAngle, avatarRows);
+        const positions = clusterPositions(showCount, avatarCX, avatarCY);
 
         return (
-          <g key={n.id} filter="url(#sm-glow)">
-            {/* Outer ring (line color) */}
-            <circle cx={n.x} cy={n.y} r={r + 3} fill={primaryColor} opacity={0.25} />
-            {/* Station circle */}
-            <circle cx={n.x} cy={n.y} r={r} fill="#18181b" stroke={primaryColor} strokeWidth={2.5} />
-            {/* Character count dot */}
-            {n.charCount > 0 && (
-              <text
-                x={n.x} y={n.y}
-                textAnchor="middle"
-                dominantBaseline="central"
-                fontSize="7"
-                fontWeight="700"
-                fill={primaryColor}
-              >
-                {n.charCount}
-              </text>
+          <g key={n.id}>
+            {/* Character avatar cluster */}
+            {displayChars.map((c, i) => {
+              const pos = positions[i];
+              if (!pos) return null;
+              const hex = STATUS_HEX[c.status];
+              return (
+                <g key={c.name} transform={`translate(${pos.x},${pos.y})`}>
+                  <title>{c.name} ({c.status})</title>
+                  <circle r={AVT_R} fill={hex + '28'} stroke={hex} strokeWidth="1.5" />
+                  <text
+                    textAnchor="middle" dominantBaseline="central"
+                    fontSize="5.5" fontWeight="700" fill={hex}
+                  >
+                    {initials(c.name)}
+                  </text>
+                </g>
+              );
+            })}
+            {extra > 0 && positions[MAX_SHOW] && (
+              <g transform={`translate(${positions[MAX_SHOW].x},${positions[MAX_SHOW].y})`}>
+                <circle r={AVT_R} fill="#27272a" stroke="#52525b" strokeWidth="1" />
+                <text textAnchor="middle" dominantBaseline="central" fontSize="5" fill="#a1a1aa">
+                  +{extra}
+                </text>
+              </g>
             )}
+
+            {/* Station marker */}
+            <g filter="url(#sm-glow)">
+              <circle cx={n.x} cy={n.y} r={r + 3} fill={primaryColor} opacity={0.2} />
+              <circle cx={n.x} cy={n.y} r={r} fill="#18181b" stroke={primaryColor} strokeWidth={2.5} />
+            </g>
+
             {/* Station name */}
             <text
               x={labelX} y={labelY}
@@ -330,7 +376,7 @@ export default function SubwayMap({ snapshots }: Props) {
               fontSize="9.5"
               fontWeight="600"
               fill="#e4e4e7"
-              style={{ textShadow: '0 1px 3px #000' }}
+              style={{ textShadow: '0 1px 4px #000, 0 0 8px #000' }}
             >
               {n.id.length > 22 ? n.id.slice(0, 20) + '…' : n.id}
             </text>
@@ -338,11 +384,8 @@ export default function SubwayMap({ snapshots }: Props) {
         );
       })}
 
-      {/* "not yet settled" shimmer hint */}
       {!settled && (
-        <text x={W - 8} y={H - 8} textAnchor="end" fontSize="8" fill="#3f3f46">
-          settling…
-        </text>
+        <text x={W - 8} y={H - 8} textAnchor="end" fontSize="8" fill="#3f3f46">settling…</text>
       )}
     </svg>
   );
