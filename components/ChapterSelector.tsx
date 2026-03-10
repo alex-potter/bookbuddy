@@ -18,6 +18,7 @@ interface Props {
   snapshotIndices?: Set<number>;
   excludedBooks?: Set<number>;
   onToggleBook?: (bookIndex: number) => void;
+  metaOnly?: boolean;
 }
 
 const BYTES_PER_LOCATION = 128;
@@ -104,14 +105,14 @@ function ChapterItem({
 export default function ChapterSelector({
   chapters, currentIndex, onChange, onAnalyze, onCancelAnalyze, onRebuild, onCancelRebuild,
   analyzing, rebuilding, rebuildProgress, lastAnalyzedIndex,
-  snapshotIndices, excludedBooks, onToggleBook,
+  snapshotIndices, excludedBooks, onToggleBook, metaOnly,
 }: Props) {
   const [mode, setMode] = useState<'chapter' | 'location'>('chapter');
   const [locationInput, setLocationInput] = useState('');
 
   const isOmnibus = chapters.some((ch) => ch.bookIndex !== undefined);
   const totalLocations = chapterIndexToLocation(chapters.length - 1, chapters);
-  const busy = analyzing || rebuilding;
+  const busy = analyzing || rebuilding || !!metaOnly;
 
   // Build book groups (omnibus only)
   const bookGroups = new Map<number, {
@@ -239,6 +240,7 @@ export default function ChapterSelector({
       ) : (
         <button
           onClick={onAnalyze} disabled={busy}
+          title={metaOnly ? 'Re-upload EPUB to analyze' : undefined}
           className={`w-full py-2.5 rounded-lg text-sm font-semibold transition-colors ${
             busy ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed' : 'bg-amber-500 text-zinc-900 hover:bg-amber-400'
           }`}
@@ -246,7 +248,10 @@ export default function ChapterSelector({
           ⌖ Analyze Chapters
         </button>
       )}
-      {!busy && lastAnalyzedIndex !== null && lastAnalyzedIndex >= 0 && lastAnalyzedIndex < currentIndex && (
+      {metaOnly && (
+        <p className="mt-1.5 text-xs text-center text-zinc-600">Re-upload EPUB to analyze</p>
+      )}
+      {!busy && !metaOnly && lastAnalyzedIndex !== null && lastAnalyzedIndex >= 0 && lastAnalyzedIndex < currentIndex && (
         <p className="mt-1.5 text-xs text-center text-zinc-600">Ch.{lastAnalyzedIndex + 2}–{currentIndex + 1} · chapter by chapter</p>
       )}
 

@@ -20,17 +20,24 @@ const IMPORTANCE_ORDER: Record<Character['importance'], number> = {
   minor: 2,
 };
 
+interface BookMeta {
+  chapters: Array<{ id: string; title: string; order: number; bookIndex?: number; bookTitle?: string }>;
+  books?: string[];
+}
+
 interface StoredBookState {
-  lastAnalyzedIndex: number; // -1 = series carry-forward
+  lastAnalyzedIndex: number; // -2 = meta only, -1 = series carry-forward, ≥0 = analyzed
   result: AnalysisResult;
   snapshots: Snapshot[];
   excludedBooks?: number[];
+  bookMeta?: BookMeta;
 }
 
 interface SavedBookEntry {
   title: string;
   author: string;
   lastAnalyzedIndex: number;
+  chapterCount?: number;
 }
 
 function storageKey(title: string, author: string) {
@@ -88,7 +95,7 @@ function upsertSnapshot(snapshots: Snapshot[], index: number, result: AnalysisRe
   return [...without, { index, result }];
 }
 
-function listSavedBooks(excludeTitle: string, excludeAuthor: string): SavedBookEntry[] {
+function listSavedBooks(excludeTitle?: string, excludeAuthor?: string): SavedBookEntry[] {
   const results: SavedBookEntry[] = [];
   try {
     for (let i = 0; i < localStorage.length; i++) {
@@ -99,10 +106,10 @@ function listSavedBooks(excludeTitle: string, excludeAuthor: string): SavedBookE
       const raw = localStorage.getItem(key);
       if (!raw) continue;
       const state = JSON.parse(raw) as StoredBookState;
-      if (state.lastAnalyzedIndex >= 0) results.push({ title, author, lastAnalyzedIndex: state.lastAnalyzedIndex });
+      results.push({ title, author, lastAnalyzedIndex: state.lastAnalyzedIndex, chapterCount: state.bookMeta?.chapters.length });
     }
   } catch { /* ignore */ }
-  return results;
+  return results.sort((a, b) => b.lastAnalyzedIndex - a.lastAnalyzedIndex);
 }
 
 async function analyzeChapter(
@@ -140,7 +147,7 @@ export default function Home() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
 
-  const [uploadTab, setUploadTab] = useState<'file' | 'calibre'>('file');
+  const [uploadTab, setUploadTab] = useState<'file' | 'calibre' | 'mybooks'>('file');
 
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildProgress, setRebuildProgress] = useState<{ current: number; total: number } | null>(null);
@@ -172,7 +179,15 @@ export default function Home() {
   const seriesBaseRef = useRef<AnalysisResult | null>(null);
 
   function activateBook(parsed: ParsedEbook, initialStored: StoredBookState | null) {
-    storedRef.current = initialStored;
+    const bookMeta: BookMeta = {
+      chapters: parsed.chapters.map(({ id, title, order, bookIndex, bookTitle }) => ({ id, title, order, bookIndex, bookTitle })),
+      books: parsed.books,
+    };
+    const stateToSave: StoredBookState = initialStored
+      ? { ...initialStored, bookMeta }
+      : { lastAnalyzedIndex: -2, result: { characters: [], summary: '' }, snapshots: [], bookMeta };
+    storedRef.current = stateToSave;
+    saveStored(parsed.title, parsed.author, stateToSave);
     seriesBaseRef.current = initialStored?.lastAnalyzedIndex === -1 ? initialStored.result : null;
     setExcludedBooks(initialStored?.excludedBooks ? new Set(initialStored.excludedBooks) : new Set());
     setMapState(loadMapState(parsed.title, parsed.author));
@@ -183,6 +198,18 @@ export default function Home() {
       setResult(initialStored.result);
       setCurrentIndex(initialStored.lastAnalyzedIndex);
     }
+  }
+
+  function loadBookFromMeta(title: string, author: string) {
+    const stored = loadStored(title, author);
+    if (!stored?.bookMeta) return;
+    const parsed: ParsedEbook = {
+      title,
+      author,
+      chapters: stored.bookMeta.chapters.map((ch) => ({ ...ch, text: '' })),
+      books: stored.bookMeta.books,
+    };
+    activateBook(parsed, stored);
   }
 
   /** Called whenever the user selects a chapter in the sidebar */
@@ -219,7 +246,7 @@ export default function Home() {
       const parsed = await parseEpub(file);
       const ownStored = loadStored(parsed.title, parsed.author);
       if (ownStored) { activateBook(parsed, ownStored); return; }
-      const others = listSavedBooks(parsed.title, parsed.author);
+      const others = listSavedBooks(parsed.title, parsed.author).filter((b) => b.lastAnalyzedIndex >= 0);
       if (others.length > 0) {
         setPendingBook(parsed);
         setSeriesOptions(others);
@@ -351,12 +378,14 @@ export default function Home() {
   }
 
   if (!book) {
+    const savedBooks = listSavedBooks();
     return (
       <main className="min-h-screen flex flex-col">
         <div className="flex border-b border-zinc-800 px-6 pt-6 gap-1">
           {([
             { key: 'file', label: 'Upload EPUB' },
             { key: 'calibre', label: 'Calibre Library' },
+            { key: 'mybooks', label: `My Books${savedBooks.length > 0 ? ` (${savedBooks.length})` : ''}` },
           ] as const).map(({ key, label }) => (
             <button
               key={key}
@@ -377,8 +406,54 @@ export default function Home() {
               <UploadZone onFile={handleFile} parsing={parsing} />
               {parseError && <p className="mt-4 text-center text-red-500 text-sm">{parseError}</p>}
             </>
-          ) : (
+          ) : uploadTab === 'calibre' ? (
             <CalibreLibrary onFile={handleFile} />
+          ) : (
+            /* My Books */
+            savedBooks.length === 0 ? (
+              <div className="flex flex-col items-center justify-center min-h-[40vh] gap-3 text-center">
+                <span className="text-4xl opacity-30">📚</span>
+                <p className="text-zinc-400 font-medium">No books yet</p>
+                <p className="text-sm text-zinc-600">Books you open will appear here for quick access.</p>
+              </div>
+            ) : (
+              <div className="max-w-2xl">
+                <p className="text-xs font-medium text-zinc-600 uppercase tracking-wider mb-4">
+                  {savedBooks.length} saved book{savedBooks.length !== 1 ? 's' : ''}
+                </p>
+                <ul className="space-y-2">
+                  {savedBooks.map((entry) => {
+                    const hasText = loadStored(entry.title, entry.author)?.bookMeta !== undefined;
+                    const analyzed = entry.lastAnalyzedIndex >= 0;
+                    return (
+                      <li key={`${entry.title}::${entry.author}`}>
+                        <button
+                          onClick={() => loadBookFromMeta(entry.title, entry.author)}
+                          disabled={!hasText}
+                          className="w-full text-left px-4 py-3 bg-zinc-900 border border-zinc-800 rounded-xl hover:border-zinc-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="font-medium text-zinc-200 truncate">{entry.title}</p>
+                              <p className="text-xs text-zinc-500 truncate mt-0.5">{entry.author}</p>
+                            </div>
+                            <div className="flex-shrink-0 text-right">
+                              {analyzed ? (
+                                <span className="text-xs text-amber-500/80">
+                                  Ch. {entry.lastAnalyzedIndex + 1}{entry.chapterCount ? ` / ${entry.chapterCount}` : ''} analyzed
+                                </span>
+                              ) : (
+                                <span className="text-xs text-zinc-600">Not analyzed</span>
+                              )}
+                            </div>
+                          </div>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )
           )}
         </div>
       </main>
@@ -388,6 +463,7 @@ export default function Home() {
   const stored = storedRef.current;
   const hasStoredState = !!stored && stored.lastAnalyzedIndex >= 0;
   const isSeriesContinuation = stored?.lastAnalyzedIndex === -1;
+  const isMetaOnly = book.chapters.every((ch) => !ch.text);
   const busy = analyzing || rebuilding;
   const snapshotIndices = new Set((stored?.snapshots ?? []).map((s) => s.index));
   // Whether the displayed result is from a historical snapshot rather than the latest
@@ -434,6 +510,7 @@ export default function Home() {
             snapshotIndices={snapshotIndices}
             excludedBooks={excludedBooks}
             onToggleBook={toggleBook}
+            metaOnly={isMetaOnly}
           />
           {analyzeError && <p className="mt-3 text-xs text-red-500 text-center">{analyzeError}</p>}
         </aside>
