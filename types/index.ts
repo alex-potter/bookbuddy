@@ -40,3 +40,13 @@ export interface Snapshot {
   index: number;         // chapter index (0-based)
   result: AnalysisResult;
 }
+
+export interface LocationPin {
+  x: number;  // percentage of image width  (0–100)
+  y: number;  // percentage of image height (0–100)
+}
+
+export interface MapState {
+  imageDataUrl: string;
+  pins: Record<string, LocationPin>;  // location name → coordinates
+}
