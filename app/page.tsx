@@ -271,6 +271,27 @@ export default function Home() {
     return () => { if (playIntervalRef.current) clearInterval(playIntervalRef.current); };
   }, [playing, playSpeed]);
 
+  // Sync map state across browser tabs via the storage event
+  useEffect(() => {
+    function onStorage(e: StorageEvent) {
+      if (!book || !e.key) return;
+      if (e.key === mapStorageKey(book.title, book.author)) {
+        setMapState(e.newValue ? (JSON.parse(e.newValue) as MapState) : null);
+      }
+      if (e.key === storageKey(book.title, book.author) && e.newValue) {
+        const updated = JSON.parse(e.newValue) as StoredBookState;
+        storedRef.current = updated;
+        if (!playing) {
+          setResult(updated.result);
+          setCurrentIndex(updated.lastAnalyzedIndex);
+          setViewingSnapshotIndex(null);
+        }
+      }
+    }
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [book, playing]);
+
   const storedRef = useRef<StoredBookState | null>(null);
   const seriesBaseRef = useRef<AnalysisResult | null>(null);
 
