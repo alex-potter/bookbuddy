@@ -61,10 +61,11 @@ function extractPins(raw: string, imageWidth?: number, imageHeight?: number): Re
 
   if (Object.keys(rawPins).length === 0) return {};
 
-  // Normalize coordinates if the model returned pixel coords (any value > 100)
+  // Normalize coordinates only if values are clearly pixel-scale (>200).
+  // Values slightly over 100 (e.g. 103, 111) are still percentages — just clamp them.
   const allX = Object.values(rawPins).map((p) => p.x);
   const allY = Object.values(rawPins).map((p) => p.y);
-  const needsNorm = Math.max(...allX) > 100 || Math.max(...allY) > 100;
+  const needsNorm = Math.max(...allX) > 200 || Math.max(...allY) > 200;
 
   // Use actual image dimensions when available; fall back to data-max (less accurate)
   const normW = needsNorm ? (imageWidth ?? Math.max(...allX)) : 100;
