@@ -150,6 +150,8 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
   const [urlInput, setUrlInput] = useState('');
   const [urlLoading, setUrlLoading] = useState(false);
   const [urlError, setUrlError] = useState<string | null>(null);
+  const [trackedCharNames, setTrackedCharNames] = useState<Set<string> | null>(null); // null = all
+  const [filterOpen, setFilterOpen] = useState(false);
 
   // Auto-detect state
   const [detecting, setDetecting] = useState(false);
@@ -165,6 +167,25 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
   const locationMap = buildLocationMap(characters);
   const locations = [...locationMap.entries()];
   const pinnedCount = mapState ? Object.keys(mapState.pins).length : 0;
+
+  // Character filter helpers
+  const displayedChars = trackedCharNames === null
+    ? characters
+    : characters.filter((c) => trackedCharNames.has(c.name));
+  const displayedLocationMap = buildLocationMap(displayedChars);
+
+  function toggleChar(name: string) {
+    setTrackedCharNames((prev) => {
+      const base = prev === null ? new Set(characters.map((c) => c.name)) : new Set(prev);
+      if (base.has(name)) { base.delete(name); } else { base.add(name); }
+      return base.size === characters.length ? null : base;
+    });
+  }
+
+  const sortedCharacters = [...characters].sort((a, b) => {
+    const order = { main: 0, secondary: 1, minor: 2 };
+    return order[a.importance] - order[b.importance];
+  });
 
   // ESC cancels placement mode / closes suggestions
   useEffect(() => {
@@ -347,8 +368,67 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
       >
         {/* Subway map fills full height */}
         <div className="h-full bg-zinc-900">
-          <SubwayMap snapshots={snapshots} currentCharacters={characters} />
+          <SubwayMap snapshots={snapshots} currentCharacters={displayedChars} />
         </div>
+
+        {/* Filter panel — bottom-left overlay */}
+        {characters.length > 0 && (
+          <div className="absolute bottom-3 left-3 z-10">
+            {filterOpen ? (
+              <div className="bg-zinc-900/95 border border-zinc-700 rounded-xl shadow-2xl backdrop-blur-sm p-3 flex flex-col gap-2 w-52 max-h-72">
+                <div className="flex items-center justify-between flex-shrink-0">
+                  <p className="text-xs font-semibold text-zinc-300">Track characters</p>
+                  <button onClick={() => setFilterOpen(false)} className="text-zinc-600 hover:text-zinc-400 text-xs">✕</button>
+                </div>
+                <div className="flex gap-1.5 flex-shrink-0">
+                  <button
+                    onClick={() => setTrackedCharNames(null)}
+                    className="text-[10px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-colors"
+                  >All</button>
+                  <button
+                    onClick={() => setTrackedCharNames(new Set())}
+                    className="text-[10px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-colors"
+                  >None</button>
+                </div>
+                <ul className="overflow-y-auto space-y-0.5 flex-1 min-h-0">
+                  {sortedCharacters.map((c) => {
+                    const checked = trackedCharNames === null || trackedCharNames.has(c.name);
+                    return (
+                      <li key={c.name}>
+                        <label className="flex items-center gap-2 px-1.5 py-1 rounded-lg hover:bg-zinc-800 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleChar(c.name)}
+                            className="accent-amber-500 w-3 h-3 flex-shrink-0"
+                          />
+                          <span className="text-xs text-zinc-300 truncate flex-1">{c.name}</span>
+                          <span className="text-[9px] text-zinc-600 flex-shrink-0">{c.importance[0]}</span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {trackedCharNames !== null && (
+                  <p className="text-[10px] text-zinc-600 text-center flex-shrink-0">
+                    {trackedCharNames.size} of {characters.length} shown
+                  </p>
+                )}
+              </div>
+            ) : (
+              <button
+                onClick={() => setFilterOpen(true)}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors backdrop-blur-sm shadow-lg ${
+                  trackedCharNames !== null
+                    ? 'bg-amber-500/15 border-amber-500/40 text-amber-400 hover:bg-amber-500/20'
+                    : 'bg-zinc-800/90 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 border-zinc-700'
+                }`}
+              >
+                ⊙ {trackedCharNames !== null ? `${trackedCharNames.size}/${characters.length}` : 'Filter'}
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Upload panel — bottom-right overlay */}
         <div className="absolute bottom-3 right-3 z-10">
@@ -430,20 +510,78 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
             {pinnedCount} of {locations.length} locations pinned
           </p>
           {pinnedCount > 0 && (
-            <div className="flex rounded-lg overflow-hidden border border-zinc-700 text-xs">
-              {(['locations', 'characters'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  onClick={() => { setCharMode(mode === 'characters'); setActivePin(null); setActiveCharPin(null); }}
-                  className={`px-2.5 py-1 transition-colors ${
-                    (mode === 'characters') === charMode
-                      ? 'bg-zinc-700 text-zinc-100'
-                      : 'bg-transparent text-zinc-500 hover:text-zinc-300'
-                  }`}
-                >
-                  {mode === 'locations' ? 'Locations' : 'Characters'}
-                </button>
-              ))}
+            <div className="flex items-center gap-2">
+              <div className="flex rounded-lg overflow-hidden border border-zinc-700 text-xs">
+                {(['locations', 'characters'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => { setCharMode(mode === 'characters'); setActivePin(null); setActiveCharPin(null); }}
+                    className={`px-2.5 py-1 transition-colors ${
+                      (mode === 'characters') === charMode
+                        ? 'bg-zinc-700 text-zinc-100'
+                        : 'bg-transparent text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    {mode === 'locations' ? 'Locations' : 'Characters'}
+                  </button>
+                ))}
+              </div>
+              {charMode && characters.length > 0 && (
+                <div className="relative">
+                  <button
+                    onClick={() => setFilterOpen((v) => !v)}
+                    className={`text-xs px-2 py-1 rounded-lg border transition-colors ${
+                      trackedCharNames !== null
+                        ? 'border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/15'
+                        : 'border-zinc-700 text-zinc-500 hover:text-zinc-300 hover:border-zinc-600'
+                    }`}
+                  >
+                    ⊙ {trackedCharNames !== null ? `${trackedCharNames.size}/${characters.length}` : 'Filter'}
+                  </button>
+                  {filterOpen && (
+                    <div className="absolute top-full mt-1 left-0 bg-zinc-900/95 border border-zinc-700 rounded-xl shadow-2xl backdrop-blur-sm p-3 flex flex-col gap-2 w-52 max-h-72 z-30">
+                      <div className="flex items-center justify-between flex-shrink-0">
+                        <p className="text-xs font-semibold text-zinc-300">Track characters</p>
+                        <button onClick={() => setFilterOpen(false)} className="text-zinc-600 hover:text-zinc-400 text-xs">✕</button>
+                      </div>
+                      <div className="flex gap-1.5 flex-shrink-0">
+                        <button
+                          onClick={() => setTrackedCharNames(null)}
+                          className="text-[10px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-colors"
+                        >All</button>
+                        <button
+                          onClick={() => setTrackedCharNames(new Set())}
+                          className="text-[10px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-colors"
+                        >None</button>
+                      </div>
+                      <ul className="overflow-y-auto space-y-0.5 flex-1 min-h-0">
+                        {sortedCharacters.map((c) => {
+                          const checked = trackedCharNames === null || trackedCharNames.has(c.name);
+                          return (
+                            <li key={c.name}>
+                              <label className="flex items-center gap-2 px-1.5 py-1 rounded-lg hover:bg-zinc-800 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleChar(c.name)}
+                                  className="accent-amber-500 w-3 h-3 flex-shrink-0"
+                                />
+                                <span className="text-xs text-zinc-300 truncate flex-1">{c.name}</span>
+                                <span className="text-[9px] text-zinc-600 flex-shrink-0">{c.importance[0]}</span>
+                              </label>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                      {trackedCharNames !== null && (
+                        <p className="text-[10px] text-zinc-600 text-center flex-shrink-0">
+                          {trackedCharNames.size} of {characters.length} shown
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
           <div className="flex-1" />
@@ -545,7 +683,7 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
             const mapH = mapRect?.height ?? 600;
             const charPins: { char: Character; location: string; px: number; py: number }[] = [];
             for (const [location, { x, y }] of Object.entries(pins)) {
-              const chars = locationMap.get(location) ?? [];
+              const chars = displayedLocationMap.get(location) ?? [];
               if (chars.length === 0) continue;
               const positions = clusterPositions(chars.length, x, y, mapW, mapH);
               chars.forEach((char, i) => charPins.push({
@@ -559,7 +697,7 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
               <>
                 {/* Faint anchor dots */}
                 {Object.entries(pins).map(([location, { x, y }]) => {
-                  const hasChars = (locationMap.get(location) ?? []).length > 0;
+                  const hasChars = (displayedLocationMap.get(location) ?? []).length > 0;
                   if (!hasChars) return null;
                   const locColor = pinColor(location);
                   return (
