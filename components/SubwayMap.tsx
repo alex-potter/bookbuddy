@@ -466,6 +466,7 @@ interface Props {
 }
 
 export default function SubwayMap({ snapshots, currentCharacters = [], onCharacterClick, onLocationClick }: Props) {
+  const [charSearch, setCharSearch] = useState('');
   const [isDark, setIsDark] = useState(() =>
     typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
   );
@@ -631,7 +632,16 @@ export default function SubwayMap({ snapshots, currentCharacters = [], onCharact
 
   // Build live character→location map from currentCharacters (updates with snapshot nav).
   // Characters with unknown locations fall back to their last confirmed location.
-  const resolvedCharacters = withResolvedLocations(currentCharacters, snapshots);
+  const allResolved = withResolvedLocations(currentCharacters, snapshots);
+  const resolvedCharacters = charSearch.trim()
+    ? (() => {
+        const q = charSearch.toLowerCase();
+        return allResolved.filter((c) =>
+          c.name.toLowerCase().includes(q) ||
+          (c.aliases ?? []).some((a) => a.toLowerCase().includes(q)),
+        );
+      })()
+    : allResolved;
   const liveByLoc = new Map<string, CharAvatar[]>();
   for (const c of resolvedCharacters) {
     const loc = c.currentLocation?.trim();
@@ -763,6 +773,20 @@ export default function SubwayMap({ snapshots, currentCharacters = [], onCharact
 
   return (
     <div className={`relative w-full h-full ${isDark ? 'bg-zinc-950' : 'bg-stone-50'}`} style={{ backgroundImage: gridBg }}>
+      {/* Character search overlay */}
+      <div className="absolute top-2 right-2 z-20">
+        <input
+          type="search"
+          placeholder="Find character…"
+          value={charSearch}
+          onChange={(e) => setCharSearch(e.target.value)}
+          className={`w-36 text-[11px] px-2.5 py-1.5 rounded-lg border outline-none transition-colors ${
+            isDark
+              ? 'bg-zinc-900/90 border-zinc-700 text-zinc-300 placeholder-zinc-600 focus:border-zinc-500'
+              : 'bg-white/90 border-stone-300 text-stone-700 placeholder-stone-400 focus:border-stone-400'
+          }`}
+        />
+      </div>
       {/* Spinner shown while physics settles */}
       {!settled && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2">
