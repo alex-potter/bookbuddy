@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { EbookChapter } from '@/types';
 import { normalizeTitle } from '@/lib/normalize-title';
 
@@ -132,6 +132,173 @@ function ChapterItem({
   );
 }
 
+interface ComboboxProps {
+  chapters: EbookChapter[];
+  currentIndex: number;
+  lastAnalyzedIndex: number | null;
+  isOmnibus: boolean;
+  bookGroups: Map<number, { bookTitle: string; items: Array<{ ch: EbookChapter; globalIndex: number; chapterNum: number }> }>;
+  onChange: (index: number) => void;
+}
+
+function ChapterCombobox({ chapters, currentIndex, lastAnalyzedIndex, isOmnibus, bookGroups, onChange }: ComboboxProps) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const frontier = Math.max(currentIndex, lastAnalyzedIndex ?? -1);
+
+  const currentCh = chapters[currentIndex];
+  const displayLabel = currentCh ? normalizeTitle(currentCh.title) : '—';
+  const subLabel = (() => {
+    if (!currentCh) return '';
+    if (currentCh.bookIndex === undefined) return `${currentIndex + 1} of ${chapters.length} chapters`;
+    let num = 0, bookTotal = 0;
+    for (const c of chapters) {
+      if (c.bookIndex === currentCh.bookIndex) { bookTotal++; if (c.order <= currentCh.order) num++; }
+    }
+    return `Ch. ${num} of ${bookTotal} · ${currentCh.bookTitle}`;
+  })();
+
+  // Flat list for filtering
+  type FlatItem = { globalIndex: number; label: string; groupLabel?: string; chapterNum?: number };
+  const flatItems: FlatItem[] = isOmnibus
+    ? [...bookGroups.entries()].flatMap(([, { bookTitle, items }]) =>
+        items.map(({ ch, globalIndex, chapterNum }) => ({
+          globalIndex, chapterNum,
+          label: normalizeTitle(ch.title),
+          groupLabel: bookTitle,
+        })),
+      )
+    : chapters.map((ch, i) => ({ globalIndex: i, label: normalizeTitle(ch.title) }));
+
+  const q = query.toLowerCase();
+  const filtered = q
+    ? flatItems.filter((it) =>
+        it.label.toLowerCase().includes(q) ||
+        it.groupLabel?.toLowerCase().includes(q) ||
+        String(it.chapterNum ?? it.globalIndex + 1).startsWith(q),
+      )
+    : flatItems;
+
+  function openDropdown() {
+    setQuery('');
+    setOpen(true);
+    setTimeout(() => {
+      // Scroll active item into view
+      const active = listRef.current?.querySelector('[data-active="true"]');
+      active?.scrollIntoView({ block: 'nearest' });
+    }, 0);
+  }
+
+  function select(index: number) {
+    onChange(index);
+    setOpen(false);
+    setQuery('');
+  }
+
+  function handleKey(e: React.KeyboardEvent) {
+    if (e.key === 'Escape') { setOpen(false); setQuery(''); }
+    if (e.key === 'Enter' && filtered.length > 0) { select(filtered[0].globalIndex); }
+  }
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    function handler(e: MouseEvent) {
+      if (!containerRef.current?.contains(e.target as Node)) { setOpen(false); setQuery(''); }
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  // Group filtered items by book for omnibus display
+  const groups: Array<{ label?: string; items: FlatItem[] }> = [];
+  if (isOmnibus) {
+    const seen = new Map<string, FlatItem[]>();
+    for (const it of filtered) {
+      const g = it.groupLabel ?? '';
+      if (!seen.has(g)) { seen.set(g, []); groups.push({ label: g, items: seen.get(g)! }); }
+      seen.get(g)!.push(it);
+    }
+  } else {
+    groups.push({ items: filtered });
+  }
+
+  return (
+    <div ref={containerRef} className="relative">
+      {/* Trigger */}
+      <button
+        type="button"
+        onClick={openDropdown}
+        className="w-full flex items-center justify-between bg-stone-100 dark:bg-zinc-800 border border-stone-300 dark:border-zinc-700 rounded-lg px-3 py-2.5 text-left focus:outline-none focus:border-stone-400 dark:focus:border-zinc-500 hover:border-stone-400 dark:hover:border-zinc-600 transition-colors"
+      >
+        <span className="text-sm text-stone-800 dark:text-zinc-200 truncate min-w-0">{displayLabel}</span>
+        <span className="flex-shrink-0 ml-2 text-stone-400 dark:text-zinc-500 text-xs">▾</span>
+      </button>
+      <p className="mt-1.5 text-xs text-stone-400 dark:text-zinc-600">{subLabel}</p>
+
+      {/* Dropdown */}
+      {open && (
+        <div className="absolute z-50 top-full mt-1 left-0 right-0 bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-700 rounded-lg shadow-xl flex flex-col max-h-72 overflow-hidden">
+          {/* Search input */}
+          <div className="px-2 pt-2 pb-1.5 border-b border-stone-100 dark:border-zinc-800">
+            <input
+              ref={inputRef}
+              autoFocus
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={handleKey}
+              placeholder="Search chapters…"
+              className="w-full bg-stone-50 dark:bg-zinc-800 border border-stone-200 dark:border-zinc-700 rounded-md px-2.5 py-1.5 text-xs text-stone-800 dark:text-zinc-200 placeholder-stone-400 dark:placeholder-zinc-600 focus:outline-none focus:border-stone-400 dark:focus:border-zinc-500"
+            />
+          </div>
+          {/* List */}
+          <div ref={listRef} className="overflow-y-auto flex-1">
+            {groups.length === 0 || (groups.length === 1 && groups[0].items.length === 0) ? (
+              <p className="px-3 py-4 text-xs text-stone-400 dark:text-zinc-600 text-center">No chapters match</p>
+            ) : (
+              groups.map((group, gi) => (
+                <div key={gi}>
+                  {group.label && (
+                    <div className="px-2.5 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-stone-400 dark:text-zinc-600">{group.label}</div>
+                  )}
+                  {group.items.map((it) => {
+                    const isActive = it.globalIndex === currentIndex;
+                    const disabled = it.globalIndex > frontier;
+                    return (
+                      <button
+                        key={it.globalIndex}
+                        data-active={isActive}
+                        disabled={disabled}
+                        onClick={() => select(it.globalIndex)}
+                        className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                          isActive
+                            ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 font-medium'
+                            : disabled
+                            ? 'text-stone-300 dark:text-zinc-700 cursor-default'
+                            : 'text-stone-700 dark:text-zinc-300 hover:bg-stone-50 dark:hover:bg-zinc-800'
+                        }`}
+                      >
+                        <span className="text-stone-400 dark:text-zinc-600 mr-1.5 tabular-nums">
+                          {it.chapterNum !== undefined ? `${it.chapterNum}.` : `${it.globalIndex + 1}.`}
+                        </span>
+                        {it.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ChapterSelector({
   chapters, currentIndex, onChange, onAnalyze, onCancelAnalyze, onRebuild, onCancelRebuild,
   analyzing, rebuilding, rebuildProgress, lastAnalyzedIndex,
@@ -214,39 +381,14 @@ export default function ChapterSelector({
       <div className="mb-4">
         <label className="block text-xs font-medium text-stone-400 dark:text-zinc-500 uppercase tracking-wider mb-2">Currently at</label>
         {mode === 'chapter' ? (
-          <>
-            <div className="relative">
-              <select
-                value={currentIndex}
-                onChange={(e) => onChange(Number(e.target.value))}
-                className="w-full appearance-none bg-stone-100 dark:bg-zinc-800 border border-stone-300 dark:border-zinc-700 rounded-lg px-3 py-2.5 pr-8 text-stone-800 dark:text-zinc-200 text-sm focus:outline-none focus:border-stone-400 dark:focus:border-zinc-500 cursor-pointer"
-              >
-                {isOmnibus
-                  ? [...bookGroups.entries()].map(([bookIdx, { bookTitle, items }]) => (
-                      <optgroup key={bookIdx} label={bookTitle}>
-                        {items.map(({ ch, globalIndex, chapterNum }) => (
-                          <option key={ch.id} value={globalIndex}>Ch. {chapterNum} — {normalizeTitle(ch.title)}</option>
-                        ))}
-                      </optgroup>
-                    ))
-                  : chapters.map((ch, i) => (
-                      <option key={ch.id} value={i}>{i + 1}. {normalizeTitle(ch.title)}</option>
-                    ))}
-              </select>
-              <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-stone-400 dark:text-zinc-500">▾</div>
-            </div>
-            <p className="mt-1.5 text-xs text-stone-400 dark:text-zinc-600">
-              {(() => {
-                const ch = chapters[currentIndex];
-                if (!ch || ch.bookIndex === undefined) return `${currentIndex + 1} of ${chapters.length} chapters`;
-                let num = 0, bookTotal = 0;
-                for (const c of chapters) {
-                  if (c.bookIndex === ch.bookIndex) { bookTotal++; if (c.order <= ch.order) num++; }
-                }
-                return `Ch. ${num} of ${bookTotal} · ${ch.bookTitle}`;
-              })()}
-            </p>
-          </>
+          <ChapterCombobox
+            chapters={chapters}
+            currentIndex={currentIndex}
+            lastAnalyzedIndex={lastAnalyzedIndex}
+            isOmnibus={isOmnibus}
+            bookGroups={bookGroups}
+            onChange={onChange}
+          />
         ) : (
           <>
             <input
