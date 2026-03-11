@@ -48,6 +48,7 @@ interface Props {
 
 export default function LocationBoard({ characters, locations, bookTitle, snapshots = [] }: Props) {
   const [view, setView] = useState<'list' | 'graph'>('list');
+  const [search, setSearch] = useState('');
   const [mapImage, setMapImage] = useState<string | null>(null);
   const [mapLabel, setMapLabel] = useState('');
   const [dragging, setDragging] = useState(false);
@@ -251,11 +252,30 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
 
           {/* Location groups */}
           <div>
-            <p className="text-xs font-medium text-stone-400 dark:text-zinc-600 uppercase tracking-wider mb-3">
-              Locations · {groups.filter(g => g.location !== 'Unknown').length} known
-            </p>
+            <div className="flex items-center gap-3 mb-3">
+              <p className="text-xs font-medium text-stone-400 dark:text-zinc-600 uppercase tracking-wider">
+                Locations · {groups.filter(g => g.location !== 'Unknown').length} known
+              </p>
+              <input
+                type="search"
+                placeholder="Find character…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="ml-auto w-36 text-xs px-2.5 py-1 rounded-lg border bg-transparent outline-none transition-colors border-stone-300 dark:border-zinc-700 text-stone-700 dark:text-zinc-300 placeholder-stone-400 dark:placeholder-zinc-600 focus:border-stone-400 dark:focus:border-zinc-500"
+              />
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-              {groups.map(({ location, characters: chars, description }) => (
+              {groups.flatMap(({ location, characters: chars, description }) => {
+                const filtered = search.trim()
+                  ? chars.filter((c) => {
+                      const q = search.toLowerCase();
+                      return c.name.toLowerCase().includes(q)
+                        || (c.aliases ?? []).some((a) => a.toLowerCase().includes(q));
+                    })
+                  : chars;
+                if (filtered.length === 0) return [];
+                return [{ location, characters: filtered, description }];
+              }).map(({ location, characters: chars, description }) => (
                 <div
                   key={location}
                   className={`bg-white dark:bg-zinc-900 rounded-xl border border-stone-200 dark:border-zinc-800 overflow-hidden ${
