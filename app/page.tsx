@@ -353,7 +353,9 @@ export default function Home() {
     setCurrentIndex(0);
     if (initialStored && initialStored.lastAnalyzedIndex >= 0) {
       setResult(initialStored.result);
-      setCurrentIndex(initialStored.lastAnalyzedIndex);
+      // Default to the next unanalyzed chapter so Analyze is ready to go immediately
+      const nextIdx = Math.min(initialStored.lastAnalyzedIndex + 1, parsed.chapters.length - 1);
+      setCurrentIndex(nextIdx);
     }
   }
 
@@ -467,7 +469,7 @@ export default function Home() {
         setRebuildProgress({ current: i - startIndex + 1, total });
         const ch = book.chapters[i];
         if (ch.bookIndex !== undefined && excludedBooks.has(ch.bookIndex)) continue;
-        if (excludedChapters.has(i) || isFrontMatter(ch)) {
+        if (isFrontMatter(ch)) {
           if (accumulated) {
             snapshots = upsertSnapshot(snapshots, i, accumulated);
             const partial: StoredBookState = { lastAnalyzedIndex: i, result: accumulated, snapshots };
@@ -491,7 +493,7 @@ export default function Home() {
       setRebuildProgress(null);
       analyzeCancelRef.current = false;
     }
-  }, [book, currentIndex, excludedBooks, excludedChapters]);
+  }, [book, currentIndex, excludedBooks]);
 
   const handleRebuild = useCallback(async () => {
     if (!book) return;
