@@ -29,6 +29,7 @@ CHARACTER COMPLETENESS RULES:
 - Include EVERY named character who appears in the text, no matter how briefly — protagonists, antagonists, and minor characters alike.
 - A character mentioned once by name still gets an entry.
 - Never filter, skip, or summarize away characters because they seem unimportant.
+- NEVER group characters together (e.g. do NOT create entries like "The Hobbits", "The Fellowship", "The Guards"). Every individual must have their own separate entry under their own name.
 
 DEDUPLICATION RULES (critical):
 - A character must appear EXACTLY ONCE regardless of how many names or nicknames they are called by.
@@ -131,7 +132,7 @@ ${newChaptersText}
 INSTRUCTIONS — RETURN ONLY CHANGES, NOT THE FULL LIST:
 1. Read the new chapter text carefully.
 2. For each character who APPEARS in the new chapter: include them in "updatedCharacters" with updated fields (status, currentLocation, recentEvents, lastSeen). Keep description/relationships from existing state unless the chapter changes them.
-3. For any BRAND NEW named character introduced in this chapter: include them in "updatedCharacters" with all fields filled in.
+3. For any BRAND NEW named character introduced in this chapter: include them in "updatedCharacters" with all fields filled in. NEVER group individuals — each person gets their own entry.
 4. Do NOT include characters from the existing list who do not appear in the new chapter.
 5. For significant named places (cities, stations, planets, regions, named landmarks) that appear in this chapter: include them in "updatedLocations". Do NOT include generic rooms, corridors, vehicle interiors, or vague descriptions — only real proper-noun locations.
 6. Update the summary to reflect the story as of the current chapter.
