@@ -1331,6 +1331,7 @@ export default function Home() {
                       locations={result.locations}
                       bookTitle={book.title}
                       snapshots={stored?.snapshots ?? []}
+                      chapterTitles={book.chapters.map((ch) => ch.title)}
                       locationImage={mapState?.locationImage}
                       locationLabel={mapState?.locationLabel}
                       onLocationImageChange={(image, label) => {

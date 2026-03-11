@@ -44,14 +44,42 @@ interface Props {
   locations?: LocationInfo[];
   bookTitle?: string;
   snapshots?: Snapshot[];
+  chapterTitles?: string[];
   locationImage?: string;
   locationLabel?: string;
   onLocationImageChange?: (image: string | null, label: string) => void;
 }
 
-export default function LocationBoard({ characters, locations, bookTitle, snapshots = [], locationImage, locationLabel = '', onLocationImageChange }: Props) {
+/** Build a per-location timeline from snapshot history */
+function buildLocationTimeline(
+  locationName: string,
+  snapshots: Snapshot[],
+  chapterTitles?: string[],
+): Array<{ index: number; chapterTitle: string; events: string; characters: string[] }> {
+  const norm = (s: string) => s.toLowerCase().trim();
+  const target = norm(locationName);
+  const sorted = [...snapshots].sort((a, b) => a.index - b.index);
+  const entries = [];
+  for (const snap of sorted) {
+    const locEntry = (snap.result.locations ?? []).find((l) => norm(l.name) === target);
+    const charsHere = snap.result.characters
+      .filter((c) => norm(c.currentLocation ?? '') === target)
+      .map((c) => c.name);
+    if (!locEntry?.recentEvents && charsHere.length === 0) continue;
+    entries.push({
+      index: snap.index,
+      chapterTitle: chapterTitles?.[snap.index] ?? `Chapter ${snap.index + 1}`,
+      events: locEntry?.recentEvents ?? '',
+      characters: charsHere,
+    });
+  }
+  return entries;
+}
+
+export default function LocationBoard({ characters, locations, bookTitle, snapshots = [], chapterTitles, locationImage, locationLabel = '', onLocationImageChange }: Props) {
   const [view, setView] = useState<'list' | 'graph'>('list');
   const [search, setSearch] = useState('');
+  const [expandedLocation, setExpandedLocation] = useState<string | null>(null);
   const mapImage = locationImage ?? null;
   const mapLabel = locationLabel;
   const [dragging, setDragging] = useState(false);
@@ -280,41 +308,92 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
                   : chars;
                 if (filtered.length === 0) return [];
                 return [{ location, characters: filtered, description }];
-              }).map(({ location, characters: chars, description }) => (
-                <div
-                  key={location}
-                  className={`bg-white dark:bg-zinc-900 rounded-xl border border-stone-200 dark:border-zinc-800 overflow-hidden ${
-                    location === 'Unknown' ? 'opacity-50' : ''
-                  }`}
-                >
-                  <div className="px-4 py-2.5 border-b border-stone-200 dark:border-zinc-800 bg-stone-100/40 dark:bg-zinc-800/40">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-stone-400 dark:text-zinc-600">{location === 'Unknown' ? '?' : '◎'}</span>
-                      <h3 className="font-medium text-stone-700 dark:text-zinc-300 text-sm">{location}</h3>
-                      <span className="ml-auto text-xs text-stone-400 dark:text-zinc-600">{chars.length}</span>
-                    </div>
-                    {description && (
-                      <p className="mt-1.5 text-xs text-stone-400 dark:text-zinc-500 leading-relaxed">{description}</p>
+              }).map(({ location, characters: chars, description }) => {
+                const isExpanded = expandedLocation === location;
+                const timeline = isExpanded ? buildLocationTimeline(location, snapshots, chapterTitles) : [];
+                const hasHistory = location !== 'Unknown' && snapshots.length > 0;
+                return (
+                  <div
+                    key={location}
+                    className={`bg-white dark:bg-zinc-900 rounded-xl border border-stone-200 dark:border-zinc-800 overflow-hidden ${
+                      location === 'Unknown' ? 'opacity-50' : ''
+                    }`}
+                  >
+                    {/* Header — clickable to expand timeline */}
+                    <button
+                      className={`w-full text-left px-4 py-2.5 border-b border-stone-200 dark:border-zinc-800 bg-stone-100/40 dark:bg-zinc-800/40 transition-colors ${
+                        hasHistory ? 'hover:bg-stone-100 dark:hover:bg-zinc-800/70 cursor-pointer' : 'cursor-default'
+                      }`}
+                      onClick={() => hasHistory && setExpandedLocation(isExpanded ? null : location)}
+                      disabled={!hasHistory}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-stone-400 dark:text-zinc-600">{location === 'Unknown' ? '?' : '◎'}</span>
+                        <h3 className="font-medium text-stone-700 dark:text-zinc-300 text-sm">{location}</h3>
+                        <span className="ml-auto flex items-center gap-1.5 text-xs text-stone-400 dark:text-zinc-600">
+                          {chars.length}
+                          {hasHistory && (
+                            <span className="text-[10px] opacity-60">{isExpanded ? '▴' : '▾'}</span>
+                          )}
+                        </span>
+                      </div>
+                      {description && (
+                        <p className="mt-1.5 text-xs text-stone-400 dark:text-zinc-500 leading-relaxed text-left">{description}</p>
+                      )}
+                    </button>
+
+                    {/* Current characters */}
+                    <ul className="divide-y divide-stone-200/50 dark:divide-zinc-800/50">
+                      {chars.map((c) => (
+                        <li key={c.name} className="px-4 py-3 flex items-start gap-3">
+                          <div className={`flex-shrink-0 w-7 h-7 rounded-md flex items-center justify-center text-xs font-bold ${nameColor(c.name)}`}>
+                            {initials(c.name)}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-stone-700 dark:text-zinc-300 truncate">{c.name}</p>
+                            <p className="text-xs text-stone-400 dark:text-zinc-500 line-clamp-2 leading-relaxed">
+                              {c.recentEvents || c.description.split('.')[0]}
+                            </p>
+                          </div>
+                          <span className={`flex-shrink-0 mt-1 w-2 h-2 rounded-full ${STATUS_DOT[c.status]}`} title={c.status} />
+                        </li>
+                      ))}
+                    </ul>
+
+                    {/* Timeline — expanded */}
+                    {isExpanded && (
+                      <div className="border-t border-stone-200 dark:border-zinc-800 bg-stone-50/50 dark:bg-zinc-950/40 px-4 py-3">
+                        <p className="text-[10px] font-semibold text-stone-400 dark:text-zinc-600 uppercase tracking-wider mb-3">Location history</p>
+                        {timeline.length === 0 ? (
+                          <p className="text-xs text-stone-400 dark:text-zinc-600 py-2">No recorded events for this location.</p>
+                        ) : (
+                          <ol className="relative border-l border-stone-200 dark:border-zinc-700 ml-1 space-y-4">
+                            {timeline.map((entry) => (
+                              <li key={entry.index} className="pl-4 relative">
+                                {/* Timeline dot */}
+                                <span className="absolute -left-1 top-1 w-2 h-2 rounded-full bg-amber-500/70 border border-amber-500" />
+                                <p className="text-[10px] font-medium text-stone-400 dark:text-zinc-500 mb-0.5">{entry.chapterTitle}</p>
+                                {entry.events && (
+                                  <p className="text-xs text-stone-600 dark:text-zinc-300 leading-relaxed">{entry.events}</p>
+                                )}
+                                {entry.characters.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 mt-1.5">
+                                    {entry.characters.map((name) => (
+                                      <span key={name} className="text-[10px] px-1.5 py-0.5 rounded bg-stone-100 dark:bg-zinc-800 text-stone-500 dark:text-zinc-400 border border-stone-200 dark:border-zinc-700">
+                                        {name}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </li>
+                            ))}
+                          </ol>
+                        )}
+                      </div>
                     )}
                   </div>
-                  <ul className="divide-y divide-stone-200/50 dark:divide-zinc-800/50">
-                    {chars.map((c) => (
-                      <li key={c.name} className="px-4 py-3 flex items-start gap-3">
-                        <div className={`flex-shrink-0 w-7 h-7 rounded-md flex items-center justify-center text-xs font-bold ${nameColor(c.name)}`}>
-                          {initials(c.name)}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-stone-700 dark:text-zinc-300 truncate">{c.name}</p>
-                          <p className="text-xs text-stone-400 dark:text-zinc-500 line-clamp-2 leading-relaxed">
-                            {c.recentEvents || c.description.split('.')[0]}
-                          </p>
-                        </div>
-                        <span className={`flex-shrink-0 mt-1 w-2 h-2 rounded-full ${STATUS_DOT[c.status]}`} title={c.status} />
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </>
