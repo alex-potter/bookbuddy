@@ -1123,23 +1123,23 @@ export default function Home() {
               }
             }
             return (
-              <div className="mb-4 flex items-center gap-2 px-3 py-2 bg-stone-100/50 dark:bg-zinc-800/50 rounded-xl border border-stone-300/40 dark:border-zinc-700/40 flex-shrink-0">
+              <div className="mb-4 flex items-center gap-1 px-2 py-1.5 bg-stone-100/50 dark:bg-zinc-800/50 rounded-xl border border-stone-300/40 dark:border-zinc-700/40 flex-shrink-0">
                 <button
                   onClick={() => goTo(Math.max(0, pos - 1))}
                   disabled={pos <= 0 || playing}
-                  className="text-stone-400 dark:text-zinc-500 hover:text-stone-800 dark:hover:text-zinc-200 disabled:opacity-30 disabled:cursor-default transition-colors px-1"
+                  className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-base text-stone-500 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-100 hover:bg-stone-200 dark:hover:bg-zinc-700 disabled:opacity-30 disabled:cursor-default transition-colors"
                   title="Previous snapshot"
                 >‹</button>
-                <span className="flex-1 text-center text-xs text-stone-500 dark:text-zinc-400 truncate">
+                <span className="flex-1 text-center truncate px-1">
                   {atLatest
-                    ? <><span className="text-stone-800 dark:text-zinc-200 font-medium">ch.{(snap?.index ?? 0) + 1} — {chTitle}</span> <span className="text-stone-400 dark:text-zinc-600">(latest)</span></>
-                    : <>Viewing <span className="text-stone-800 dark:text-zinc-200 font-medium">ch.{snap.index + 1} — {chTitle}</span> <span className="text-stone-400 dark:text-zinc-600">({pos + 1}/{snaps.length})</span></>
+                    ? <><span className="text-sm font-semibold text-stone-800 dark:text-zinc-100">ch.{(snap?.index ?? 0) + 1} — {chTitle}</span> <span className="text-xs text-stone-400 dark:text-zinc-500">(latest)</span></>
+                    : <><span className="text-xs text-stone-400 dark:text-zinc-500">Viewing </span><span className="text-sm font-semibold text-stone-800 dark:text-zinc-100">ch.{snap.index + 1} — {chTitle}</span> <span className="text-xs text-stone-400 dark:text-zinc-500">({pos + 1}/{snaps.length})</span></>
                   }
                 </span>
                 <button
                   onClick={() => goTo(Math.min(snaps.length - 1, pos + 1))}
                   disabled={atLatest || playing}
-                  className="text-stone-400 dark:text-zinc-500 hover:text-stone-800 dark:hover:text-zinc-200 disabled:opacity-30 disabled:cursor-default transition-colors px-1"
+                  className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-base text-stone-500 dark:text-zinc-400 hover:text-stone-900 dark:hover:text-zinc-100 hover:bg-stone-200 dark:hover:bg-zinc-700 disabled:opacity-30 disabled:cursor-default transition-colors"
                   title="Next snapshot"
                 >›</button>
                 <div className="w-px h-4 bg-stone-300 dark:bg-zinc-700 mx-1" />
