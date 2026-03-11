@@ -285,6 +285,7 @@ export default function Home() {
   }
 
   const [rebuilding, setRebuilding] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [rebuildProgress, setRebuildProgress] = useState<{ current: number; total: number } | null>(null);
   const rebuildCancelRef = useRef(false);
   const analyzeCancelRef = useRef(false);
@@ -911,17 +912,34 @@ export default function Home() {
                               ↓
                             </button>
                           )}
-                          <button
-                            onClick={() => {
-                              if (!confirm(`Delete all saved data for "${entry.title}"?`)) return;
-                              deleteStored(entry.title, entry.author);
-                              setMyBooksRev((r) => r + 1);
-                            }}
-                            title="Delete saved data"
-                            className="flex-shrink-0 p-2 text-stone-300 dark:text-zinc-700 hover:text-red-400 transition-colors"
-                          >
-                            ✕
-                          </button>
+                          {pendingDelete === `${entry.title}::${entry.author}` ? (
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                              <button
+                                onClick={() => {
+                                  deleteStored(entry.title, entry.author);
+                                  setPendingDelete(null);
+                                  setMyBooksRev((r) => r + 1);
+                                }}
+                                className="text-xs px-2 py-1 rounded-md bg-red-500/15 text-red-400 hover:bg-red-500/25 transition-colors font-medium"
+                              >
+                                Delete
+                              </button>
+                              <button
+                                onClick={() => setPendingDelete(null)}
+                                className="text-xs px-2 py-1 rounded-md text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300 transition-colors"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setPendingDelete(`${entry.title}::${entry.author}`)}
+                              title="Delete saved data"
+                              className="flex-shrink-0 p-2 text-stone-300 dark:text-zinc-700 hover:text-red-400 transition-colors"
+                            >
+                              ✕
+                            </button>
+                          )}
                         </li>
                       );
                     })}
