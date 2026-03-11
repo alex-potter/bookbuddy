@@ -1,6 +1,6 @@
 {
-  "name": "Chapter Companion",
-  "short_name": "ChCompanion",
+  "name": "BookBuddy",
+  "short_name": "BookBuddy",
   "description": "Track characters as you read your ebook — spoiler-free",
   "start_url": "/",
   "display": "standalone",

@@ -1,7 +1,7 @@
 // Capacitor configuration — @capacitor/cli types available after: npm install
 const config = {
-  appId: 'com.chaptercompanion.app',
-  appName: 'Chapter Companion',
+  appId: 'com.bookbuddy.app',
+  appName: 'BookBuddy',
   webDir: 'out',            // next build output directory (output:'export')
   server: {
     androidScheme: 'https', // serve bundled assets over https:// in WebView

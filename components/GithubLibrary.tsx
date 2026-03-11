@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from 'react';
 
-const REPO = 'alex-potter/ebook-tracker';
+const REPO = 'alex-potter/bookbuddy';
 const BRANCH = 'main';
 
-interface EtbookEntry {
+interface BookBuddyEntry {
   path: string;
   label: string;
   author: string;
@@ -17,7 +17,7 @@ interface Props {
 }
 
 export default function GithubLibrary({ onFile }: Props) {
-  const [entries, setEntries] = useState<EtbookEntry[]>([]);
+  const [entries, setEntries] = useState<BookBuddyEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
@@ -26,15 +26,15 @@ export default function GithubLibrary({ onFile }: Props) {
     fetch(`https://api.github.com/repos/${REPO}/git/trees/${BRANCH}?recursive=1`)
       .then((r) => { if (!r.ok) throw new Error(`GitHub API ${r.status}`); return r.json(); })
       .then((data) => {
-        const books: EtbookEntry[] = (data.tree as { path: string; type: string }[])
-          .filter((item) => item.path.startsWith('books/') && item.path.endsWith('.etbook') && item.type === 'blob')
+        const books: BookBuddyEntry[] = (data.tree as { path: string; type: string }[])
+          .filter((item) => item.path.startsWith('books/') && (item.path.endsWith('.bookbuddy') || item.path.endsWith('.etbook')) && item.type === 'blob')
           .map((item) => {
             const parts = item.path.split('/');
             const filename = parts[parts.length - 1];
             const author = parts.length > 2 ? parts[parts.length - 2] : 'Unknown';
             return {
               path: item.path,
-              label: filename.replace(/\.etbook$/, ''),
+              label: filename.replace(/\.(bookbuddy|etbook)$/, ''),
               author,
               downloadUrl: `https://raw.githubusercontent.com/${REPO}/${BRANCH}/${item.path}`,
             };
@@ -45,14 +45,14 @@ export default function GithubLibrary({ onFile }: Props) {
       .finally(() => setLoading(false));
   }, []);
 
-  async function handleSelect(entry: EtbookEntry) {
+  async function handleSelect(entry: BookBuddyEntry) {
     setDownloading(entry.path);
     setError(null);
     try {
       const res = await fetch(entry.downloadUrl);
       if (!res.ok) throw new Error('Download failed');
       const blob = await res.blob();
-      const file = new File([blob], entry.label + '.etbook', { type: 'application/json' });
+      const file = new File([blob], entry.label + '.bookbuddy', { type: 'application/json' });
       onFile(file);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Download failed');
@@ -61,7 +61,7 @@ export default function GithubLibrary({ onFile }: Props) {
     }
   }
 
-  const byAuthor = entries.reduce<Record<string, EtbookEntry[]>>((acc, e) => {
+  const byAuthor = entries.reduce<Record<string, BookBuddyEntry[]>>((acc, e) => {
     (acc[e.author] ??= []).push(e);
     return acc;
   }, {});

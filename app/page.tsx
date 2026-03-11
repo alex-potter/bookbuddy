@@ -45,12 +45,14 @@ interface SavedBookEntry {
 }
 
 function storageKey(title: string, author: string) {
-  return `ebook-tracker::${title}::${author}`;
+  return `bookbuddy::${title}::${author}`;
 }
 
 function loadStored(title: string, author: string): StoredBookState | null {
   try {
-    const raw = localStorage.getItem(storageKey(title, author));
+    // Migrate from legacy key if new key not yet written
+    const raw = localStorage.getItem(storageKey(title, author))
+      ?? localStorage.getItem(`ebook-tracker::${title}::${author}`);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as StoredBookState;
     // Back-compat: old saves without snapshots
@@ -73,7 +75,7 @@ function deleteStored(title: string, author: string) {
 }
 
 function mapStorageKey(title: string, author: string) {
-  return `ebook-tracker-map::${title}::${author}`;
+  return `bookbuddy-map::${title}::${author}`;
 }
 
 function loadMapState(title: string, author: string): MapState | null {
@@ -89,7 +91,7 @@ function saveMapState(title: string, author: string, state: MapState) {
   } catch { /* ignore */ }
 }
 
-interface EtbookExport {
+interface BookBuddyExport {
   version: 2;
   title: string;
   author: string;
@@ -108,21 +110,21 @@ function exportBook(title: string, author: string, liveParsed?: ParsedEbook) {
     };
   }
   const mapState = loadMapState(title, author);
-  const payload: EtbookExport = { version: 2, title, author, state, mapState };
+  const payload: BookBuddyExport = { version: 2, title, author, state, mapState };
   const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${title} — ${author}.etbook`;
+  a.download = `${title} — ${author}.bookbuddy`;
   a.click();
   URL.revokeObjectURL(url);
 }
 
-async function importEtbook(file: File): Promise<{ title: string; author: string }> {
+async function importBookBuddy(file: File): Promise<{ title: string; author: string }> {
   const text = await file.text();
-  const payload = JSON.parse(text) as Partial<EtbookExport>;
+  const payload = JSON.parse(text) as Partial<BookBuddyExport>;
   if (!payload.title || !payload.author || !payload.state) {
-    throw new Error('Invalid or unrecognised .etbook file.');
+    throw new Error('Invalid or unrecognised .bookbuddy file.');
   }
   saveStored(payload.title, payload.author, payload.state);
   if (payload.mapState) saveMapState(payload.title, payload.author, payload.mapState);
@@ -149,7 +151,7 @@ function listSavedBooks(excludeTitle?: string, excludeAuthor?: string): SavedBoo
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (!key?.startsWith('ebook-tracker::')) continue;
+      if (!key?.startsWith('bookbuddy::') && !key?.startsWith('ebook-tracker::')) continue;
       const [, title, author] = key.split('::');
       if (title === excludeTitle && author === excludeAuthor) continue;
       const raw = localStorage.getItem(key);
@@ -236,7 +238,7 @@ export default function Home() {
   async function handleImport(file: File) {
     setImportError(null);
     try {
-      const { title, author } = await importEtbook(file);
+      const { title, author } = await importBookBuddy(file);
       loadBookFromMeta(title, author);
     } catch (err) {
       setImportError(err instanceof Error ? err.message : 'Import failed.');
@@ -402,8 +404,8 @@ export default function Home() {
   }
 
   const handleFile = useCallback(async (file: File) => {
-    // .etbook import shortcut
-    if (file.name.endsWith('.etbook')) {
+    // .bookbuddy / legacy .etbook import shortcut
+    if (file.name.endsWith('.bookbuddy') || file.name.endsWith('.etbook')) {
       await handleImport(file);
       return;
     }
@@ -646,15 +648,15 @@ export default function Home() {
               {/* Import */}
               <div className="mb-5 flex items-center gap-3">
                 <label
-                  htmlFor="etbook-import"
+                  htmlFor="bookbuddy-import"
                   className="px-3 py-1.5 bg-stone-100 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 text-xs font-medium rounded-lg cursor-pointer hover:bg-stone-200 dark:hover:bg-zinc-700 transition-colors border border-stone-300 dark:border-zinc-700"
                 >
-                  Import .etbook
+                  Import .bookbuddy
                 </label>
                 <input
-                  id="etbook-import"
+                  id="bookbuddy-import"
                   type="file"
-                  accept=".etbook"
+                  accept=".bookbuddy,.etbook"
                   className="sr-only"
                   onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.target.value = ''; }}
                 />
@@ -702,7 +704,7 @@ export default function Home() {
                           {analyzed && (
                             <button
                               onClick={() => exportBook(entry.title, entry.author)}
-                              title="Export .etbook"
+                              title="Export .bookbuddy"
                               className="flex-shrink-0 p-2 text-stone-400 dark:text-zinc-600 hover:text-stone-700 dark:hover:text-zinc-300 transition-colors"
                             >
                               ↓
@@ -771,7 +773,7 @@ export default function Home() {
             <button
               onClick={() => exportBook(book.title, book.author, book)}
               className="text-xs text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300 transition-colors"
-              title="Export .etbook file"
+              title="Export .bookbuddy file"
             >
               Export
             </button>

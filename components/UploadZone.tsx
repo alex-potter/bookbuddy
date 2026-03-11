@@ -31,7 +31,7 @@ export default function UploadZone({ onFile, parsing }: Props) {
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] gap-8 px-4">
       <div className="text-center">
-        <h1 className="text-3xl sm:text-4xl font-bold text-stone-900 dark:text-zinc-100 tracking-tight mb-2">Chapter Companion</h1>
+        <h1 className="text-3xl sm:text-4xl font-bold text-stone-900 dark:text-zinc-100 tracking-tight mb-2">BookBuddy</h1>
         <p className="text-stone-400 dark:text-zinc-500">Track characters as you read — spoiler-free</p>
       </div>
 
@@ -65,7 +65,7 @@ export default function UploadZone({ onFile, parsing }: Props) {
         <input
           id="epub-upload"
           type="file"
-          accept=".epub,.etbook"
+          accept=".epub,.bookbuddy,.etbook"
           className="sr-only"
           onChange={handleChange}
           disabled={parsing}
