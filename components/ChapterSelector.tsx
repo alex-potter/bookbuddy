@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { EbookChapter } from '@/types';
+import { normalizeTitle } from '@/lib/normalize-title';
 
 interface Props {
   chapters: EbookChapter[];
@@ -24,24 +25,6 @@ interface Props {
 }
 
 const BYTES_PER_LOCATION = 128;
-
-// Articles/prepositions that stay lowercase in title case (unless first word)
-const LOWERCASE_WORDS = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor',
-  'on', 'at', 'to', 'by', 'in', 'of', 'up', 'as', 'vs', 'via']);
-
-/** Normalise a chapter title to title case when it is predominantly uppercase. */
-function normalizeTitle(raw: string): string {
-  const t = raw.trim();
-  const letters = t.replace(/[^a-zA-Z]/g, '');
-  if (letters.length === 0) return t;
-  const upperRatio = (letters.match(/[A-Z]/g) ?? []).length / letters.length;
-  // Leave titles that are already mostly lowercase (proper mixed case)
-  if (upperRatio < 0.5) return t;
-  return t.toLowerCase().replace(/\b\w+/g, (word, offset) => {
-    if (offset > 0 && LOWERCASE_WORDS.has(word)) return word;
-    return word.charAt(0).toUpperCase() + word.slice(1);
-  });
-}
 
 function locationToChapterIndex(location: number, chapters: EbookChapter[]): number {
   const targetOffset = location * BYTES_PER_LOCATION;

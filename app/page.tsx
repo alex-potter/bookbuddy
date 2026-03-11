@@ -12,6 +12,7 @@ import SeriesPicker from '@/components/SeriesPicker';
 import SettingsModal from '@/components/SettingsModal';
 import GithubLibrary from '@/components/GithubLibrary';
 import UploadZone from '@/components/UploadZone';
+import { normalizeTitle } from '@/lib/normalize-title';
 
 type SortKey = 'importance' | 'name' | 'status';
 type MainTab = 'characters' | 'locations' | 'map';
@@ -838,7 +839,7 @@ export default function Home() {
               : snaps.findIndex((s) => s.index === viewingSnapshotIndex);
             const atLatest = viewingSnapshotIndex === null || pos === snaps.length - 1;
             const snap = snaps[pos];
-            const chTitle = book.chapters[snap?.index]?.title ?? `Chapter ${(snap?.index ?? 0) + 1}`;
+            const chTitle = normalizeTitle(book.chapters[snap?.index]?.title ?? `Chapter ${(snap?.index ?? 0) + 1}`);
             function goTo(newPos: number) {
               const target = snaps[newPos];
               if (newPos === snaps.length - 1) {
