@@ -91,6 +91,7 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
   const fileRef = useRef<HTMLInputElement>(null);
 
   const locationDescMap = new Map((locations ?? []).map((l) => [l.name.toLowerCase(), l.description]));
+  const locationRelMap = new Map((locations ?? []).map((l) => [l.name.toLowerCase(), l.relationships ?? []]));
 
   const resolvedCharacters = withResolvedLocations(characters, snapshots);
 
@@ -356,6 +357,19 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
                       {description && !showTimeline && (
                         <p className="mt-1.5 text-xs text-stone-400 dark:text-zinc-500 leading-relaxed">{description}</p>
                       )}
+                      {!showTimeline && (() => {
+                        const rels = locationRelMap.get(location.toLowerCase()) ?? [];
+                        if (rels.length === 0) return null;
+                        return (
+                          <div className="mt-1.5 flex flex-wrap gap-1">
+                            {rels.map((r) => (
+                              <span key={r.location} className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-400 border border-violet-500/20">
+                                {r.relationship} · {r.location}
+                              </span>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     {/* Characters view */}

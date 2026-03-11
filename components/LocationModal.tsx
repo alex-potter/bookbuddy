@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import type { Snapshot } from '@/types';
+import type { LocationRelationship, Snapshot } from '@/types';
 
 function nameColor(name: string): string {
   const colors = [
@@ -46,16 +46,18 @@ interface Props {
 export default function LocationModal({ locationName, snapshots, chapterTitles, onClose }: Props) {
   const [tab, setTab] = useState<'overview' | 'timeline'>('overview');
 
-  // Find the most recent LocationInfo for description + arc
+  // Find the most recent LocationInfo for description + arc + relationships
   const sorted = [...snapshots].sort((a, b) => a.index - b.index);
   let description = '';
   let arc = '';
+  let relationships: LocationRelationship[] = [];
   for (const snap of sorted) {
     const info = snap.result.locations?.find(
       (l) => l.name?.toLowerCase().trim() === locationName.toLowerCase().trim(),
     );
     if (info?.description) description = info.description;
     if (info?.arc) arc = info.arc;
+    if (info?.relationships?.length) relationships = info.relationships;
   }
 
   // Characters currently here (from latest snapshot)
@@ -193,6 +195,21 @@ export default function LocationModal({ locationName, snapshots, chapterTitles, 
                             <p className="text-xs text-stone-400 dark:text-zinc-500 mt-0.5 line-clamp-2">{c.recentEvents}</p>
                           )}
                         </div>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {/* Related places */}
+              {relationships.length > 0 && (
+                <section>
+                  <p className="text-xs font-semibold text-stone-400 dark:text-zinc-500 uppercase tracking-wider mb-2">Related Places</p>
+                  <ul className="space-y-1.5">
+                    {relationships.map((r) => (
+                      <li key={r.location} className="flex items-center gap-2 text-sm">
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-400 border border-violet-500/20 flex-shrink-0">{r.relationship}</span>
+                        <span className="text-stone-700 dark:text-zinc-300">{r.location}</span>
                       </li>
                     ))}
                   </ul>
