@@ -199,7 +199,9 @@ const NEARBY_RADIUS = 200; // px — nearby nodes also act as label obstacles
 const LABEL_R_OFFSET = 16;  // px from node edge to label anchor
 const LABEL_FONT = 9.5;
 const LABEL_CHAR_W = LABEL_FONT * 0.57; // approximate SVG text char width
-const TRUNC_LEN = 28;
+const LINE_HEIGHT = LABEL_FONT * 1.45;
+const MAX_LINE_CHARS = 20;
+const MAX_LINES = 3;
 
 function angularDist(a: number, b: number): number {
   const d = Math.abs(a - b) % (2 * Math.PI);
@@ -266,14 +268,45 @@ function angleToLabel(node: Node, r: number, angle: number): LabelInfo {
   return { lx, ly, anchor, baseline };
 }
 
-function labelBbox(info: LabelInfo, textLen: number) {
-  const w = textLen * LABEL_CHAR_W + 4;
-  const h = LABEL_FONT + 4;
-  let { lx: x, ly: y } = info;
+/** Break a location name into wrapped lines, max MAX_LINES × MAX_LINE_CHARS. */
+function wrapLabel(id: string): string[] {
+  const words = id.split(' ');
+  const lines: string[] = [];
+  let cur = '';
+  for (const word of words) {
+    if (cur.length === 0) {
+      cur = word;
+    } else if (cur.length + 1 + word.length <= MAX_LINE_CHARS) {
+      cur += ' ' + word;
+    } else {
+      lines.push(cur);
+      cur = word;
+    }
+  }
+  if (cur) lines.push(cur);
+  if (lines.length > MAX_LINES) {
+    lines.splice(MAX_LINES);
+    const last = lines[MAX_LINES - 1];
+    if (last.length > MAX_LINE_CHARS - 1) lines[MAX_LINES - 1] = last.slice(0, MAX_LINE_CHARS - 1) + '…';
+  }
+  return lines;
+}
+
+/** Top-left y of a multi-line text block given its anchor baseline. */
+function blockTopY(ly: number, baseline: 'hanging' | 'auto' | 'central', lineCount: number): number {
+  const totalH = lineCount * LINE_HEIGHT;
+  if (baseline === 'auto') return ly - totalH;
+  if (baseline === 'central') return ly - totalH / 2;
+  return ly; // hanging
+}
+
+function labelBbox(info: LabelInfo, lines: string[]) {
+  const w = Math.max(...lines.map((l) => l.length)) * LABEL_CHAR_W + 4;
+  const h = lines.length * LINE_HEIGHT + 2;
+  let x = info.lx;
+  const y = blockTopY(info.ly, info.baseline, lines.length);
   if (info.anchor === 'end') x -= w;
   else if (info.anchor === 'middle') x -= w / 2;
-  if (info.baseline === 'auto') y -= h;
-  else if (info.baseline === 'central') y -= h / 2;
   return { x, y, w, h };
 }
 
@@ -282,10 +315,6 @@ function bboxOverlap(
   b: { x: number; y: number; w: number; h: number },
 ) {
   return !(a.x + a.w < b.x || b.x + b.w < a.x || a.y + a.h < b.y || b.y + b.h < a.y);
-}
-
-function truncLabel(id: string) {
-  return id.length > TRUNC_LEN ? id.slice(0, TRUNC_LEN - 1) + '…' : id;
 }
 
 /* ── Subway routing ───────────────────────────────────────────────────── */
@@ -375,7 +404,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
 
   for (const n of sortedForLabels) {
     const r = (liveByLoc.get(n.id)?.length ?? 0) > 0 ? 9 : 6;
-    const text = truncLabel(n.id);
+    const lines = wrapLabel(n.id);
     const preferred = pickLabelAngle(n, graph.edges, graph.nodes);
     // Try candidates closest to preferred first; pick the one with fewest bbox overlaps
     const ordered = [...LABEL_CANDIDATES].sort((a, b) => angularDist(a, preferred) - angularDist(b, preferred));
@@ -383,7 +412,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
     let bestOverlaps = Infinity;
     for (const angle of ordered) {
       const info = angleToLabel(n, r, angle);
-      const box = labelBbox(info, text.length);
+      const box = labelBbox(info, lines);
       const oc = placedBoxes.filter((b) => bboxOverlap(box, b)).length;
       if (oc < bestOverlaps) {
         bestOverlaps = oc;
@@ -392,7 +421,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
       }
     }
     const chosen = angleToLabel(n, r, chosenAngle);
-    placedBoxes.push(labelBbox(chosen, text.length));
+    placedBoxes.push(labelBbox(chosen, lines));
     resolvedAngles.set(n.id, chosenAngle);
   }
 
@@ -407,7 +436,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
     const primaryColor = colors[0] ?? '#71717a';
     const chars = liveByLoc.get(n.id) ?? [];
     const r = chars.length > 0 ? 9 : 6;
-    const text = truncLabel(n.id);
+    const lines = wrapLabel(n.id);
 
     const labelAngle = resolvedAngles.get(n.id) ?? pickLabelAngle(n, graph.edges, graph.nodes);
     const { lx: labelX, ly: labelY, anchor: labelAnchor, baseline: labelBaseline } = angleToLabel(n, r, labelAngle);
@@ -428,7 +457,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
       overflowBadges.push({ x: positions[MAX_SHOW].x, y: positions[MAX_SHOW].y, count: extra });
     }
 
-    return { n, primaryColor, r, text, labelX, labelY, labelAnchor, labelBaseline };
+    return { n, primaryColor, r, lines, labelX, labelY, labelAnchor, labelBaseline };
   });
 
   // Grid as a CSS background so it covers the full container, not just the SVG viewBox
@@ -477,22 +506,27 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
       </g>
 
       {/* Station markers + labels (no avatars here) */}
-      {nodeData.map(({ n, primaryColor, r, text, labelX, labelY, labelAnchor, labelBaseline }) => (
-        <g key={n.id}>
-          <g filter="url(#sm-glow)">
-            <circle cx={n.x} cy={n.y} r={r + 3} fill={primaryColor} opacity={0.2} />
-            <circle cx={n.x} cy={n.y} r={r} fill="#18181b" stroke={primaryColor} strokeWidth={2.5} />
+      {nodeData.map(({ n, primaryColor, r, lines, labelX, labelY, labelAnchor, labelBaseline }) => {
+        const startY = blockTopY(labelY, labelBaseline, lines.length);
+        return (
+          <g key={n.id}>
+            <g filter="url(#sm-glow)">
+              <circle cx={n.x} cy={n.y} r={r + 3} fill={primaryColor} opacity={0.2} />
+              <circle cx={n.x} cy={n.y} r={r} fill="#18181b" stroke={primaryColor} strokeWidth={2.5} />
+            </g>
+            <text
+              x={labelX} y={startY}
+              textAnchor={labelAnchor} dominantBaseline="hanging"
+              fontSize={LABEL_FONT} fontWeight="600" fill="#e4e4e7"
+              style={{ textShadow: '0 1px 4px #000, 0 0 8px #000' }}
+            >
+              {lines.map((line, i) => (
+                <tspan key={i} x={labelX} dy={i === 0 ? 0 : LINE_HEIGHT}>{line}</tspan>
+              ))}
+            </text>
           </g>
-          <text
-            x={labelX} y={labelY}
-            textAnchor={labelAnchor} dominantBaseline={labelBaseline}
-            fontSize="9.5" fontWeight="600" fill="#e4e4e7"
-            style={{ textShadow: '0 1px 4px #000, 0 0 8px #000' }}
-          >
-            {text}
-          </text>
-        </g>
-      ))}
+        );
+      })}
 
       {/* Overflow +N badges (static per station, no transition needed) */}
       {overflowBadges.map(({ x, y, count }, i) => (
