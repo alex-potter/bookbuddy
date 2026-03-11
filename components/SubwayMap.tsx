@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { Character, Snapshot } from '@/types';
-import { withResolvedLocations } from '@/lib/resolve-locations';
+import { withResolvedLocations, buildLocationAliasMap, resolveLocationName } from '@/lib/resolve-locations';
 
 /* ── Types ────────────────────────────────────────────────────────────── */
 
@@ -152,20 +152,24 @@ function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[]; arcL
 
   const maxChapter = sorted[sorted.length - 1].index;
 
+  // Build alias map from all snapshots so old "Ceres" entries resolve to "Ceres Station"
+  const aliasMap = buildLocationAliasMap(snapshots);
+  const resolveLoc = (name: string | undefined) => resolveLocationName(name, aliasMap);
+
   // Collect all real location names, arc labels, and first-appearance chapter per location
   const allLocs = new Set<string>();
   const locArc = new Map<string, string>();
   const locFirstChapter = new Map<string, number>();
   for (const snap of sorted) {
     for (const c of snap.result.characters) {
-      const loc = c.currentLocation?.trim();
+      const loc = resolveLoc(c.currentLocation?.trim());
       if (isRealLocation(loc)) {
         allLocs.add(loc);
         if (!locFirstChapter.has(loc)) locFirstChapter.set(loc, snap.index);
       }
     }
     for (const l of snap.result.locations ?? []) {
-      const name = l.name?.trim();
+      const name = resolveLoc(l.name?.trim());
       if (isRealLocation(name) && l.arc?.trim()) locArc.set(name, l.arc.trim());
     }
   }
@@ -175,11 +179,11 @@ function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[]; arcL
   for (let i = 1; i < sorted.length; i++) {
     const prevMap = new Map<string, string>();
     for (const c of sorted[i - 1].result.characters) {
-      const loc = c.currentLocation?.trim();
+      const loc = resolveLoc(c.currentLocation?.trim());
       if (isRealLocation(loc)) prevMap.set(c.name, loc);
     }
     for (const c of sorted[i].result.characters) {
-      const newLoc = c.currentLocation?.trim();
+      const newLoc = resolveLoc(c.currentLocation?.trim());
       const oldLoc = prevMap.get(c.name);
       if (!isRealLocation(newLoc) || !isRealLocation(oldLoc) || newLoc === oldLoc) continue;
       const key = `${oldLoc}\x00${newLoc}`;

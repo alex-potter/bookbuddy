@@ -5,7 +5,7 @@ import type { Character, LocationInfo, Snapshot } from '@/types';
 import LocationGraph from './LocationGraph';
 import SubwayMap from './SubwayMap';
 import CharacterModal from './CharacterModal';
-import { withResolvedLocations } from '@/lib/resolve-locations';
+import { withResolvedLocations, buildLocationAliasMap, resolveLocationName } from '@/lib/resolve-locations';
 
 interface LocationGroup {
   location: string;
@@ -55,16 +55,17 @@ interface Props {
 function buildLocationTimeline(
   locationName: string,
   snapshots: Snapshot[],
+  aliasMap: Map<string, string>,
   chapterTitles?: string[],
 ): Array<{ index: number; chapterTitle: string; events: string; characters: string[] }> {
-  const norm = (s: string) => s.toLowerCase().trim();
-  const target = norm(locationName);
+  const canon = (s: string) => resolveLocationName(s.toLowerCase().trim(), aliasMap) ?? s.toLowerCase().trim();
+  const target = canon(locationName);
   const sorted = [...snapshots].sort((a, b) => a.index - b.index);
   const entries = [];
   for (const snap of sorted) {
-    const locEntry = (snap.result.locations ?? []).find((l) => norm(l.name) === target);
+    const locEntry = (snap.result.locations ?? []).find((l) => canon(l.name) === target);
     const charsHere = snap.result.characters
-      .filter((c) => norm(c.currentLocation ?? '') === target)
+      .filter((c) => canon(c.currentLocation ?? '') === target)
       .map((c) => c.name);
     if (!locEntry?.recentEvents && charsHere.length === 0) continue;
     entries.push({
@@ -94,12 +95,15 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
   const locationRelMap = new Map((locations ?? []).map((l) => [l.name.toLowerCase(), l.relationships ?? []]));
   const locationAliasMap = new Map((locations ?? []).map((l) => [l.name.toLowerCase(), l.aliases ?? []]));
 
+  const locAliasResolver = buildLocationAliasMap(snapshots);
+  const resolveLoc = (name: string | undefined) => resolveLocationName(name?.trim(), locAliasResolver) ?? name?.trim();
+
   const resolvedCharacters = withResolvedLocations(characters, snapshots);
 
   const groups: LocationGroup[] = [];
   const seen = new Map<string, Character[]>();
   for (const c of resolvedCharacters) {
-    const loc = c.currentLocation?.trim() || 'Unknown';
+    const loc = resolveLoc(c.currentLocation) || 'Unknown';
     if (!seen.has(loc)) seen.set(loc, []);
     seen.get(loc)!.push(c);
   }
@@ -319,7 +323,7 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
                 return [{ location, characters: filtered, description }];
               }).map(({ location, characters: chars, description }) => {
                 const showTimeline = expandedLocation === location;
-                const timeline = showTimeline ? buildLocationTimeline(location, snapshots, chapterTitles) : [];
+                const timeline = showTimeline ? buildLocationTimeline(location, snapshots, locAliasResolver, chapterTitles) : [];
                 const hasHistory = location !== 'Unknown' && snapshots.length > 0;
                 return (
                   <div
