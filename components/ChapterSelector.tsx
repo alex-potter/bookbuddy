@@ -147,7 +147,6 @@ function ChapterCombobox({ chapters, currentIndex, lastAnalyzedIndex, isOmnibus,
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const frontier = Math.max(currentIndex, lastAnalyzedIndex ?? -1);
 
   const currentCh = chapters[currentIndex];
   const displayLabel = currentCh ? normalizeTitle(currentCh.title) : '—';
@@ -267,18 +266,17 @@ function ChapterCombobox({ chapters, currentIndex, lastAnalyzedIndex, isOmnibus,
                   )}
                   {group.items.map((it) => {
                     const isActive = it.globalIndex === currentIndex;
-                    const disabled = it.globalIndex > frontier;
+                    const analyzed = lastAnalyzedIndex !== null && it.globalIndex <= lastAnalyzedIndex;
                     return (
                       <button
                         key={it.globalIndex}
                         data-active={isActive}
-                        disabled={disabled}
                         onClick={() => select(it.globalIndex)}
                         className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
                           isActive
                             ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 font-medium'
-                            : disabled
-                            ? 'text-stone-300 dark:text-zinc-700 cursor-default'
+                            : analyzed
+                            ? 'text-amber-600/60 dark:text-amber-500/50 hover:bg-stone-50 dark:hover:bg-zinc-800'
                             : 'text-stone-700 dark:text-zinc-300 hover:bg-stone-50 dark:hover:bg-zinc-800'
                         }`}
                       >
