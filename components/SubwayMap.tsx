@@ -463,9 +463,10 @@ interface Props {
   currentCharacters?: Character[];  // characters at the currently viewed snapshot
   onCharacterClick?: (name: string) => void;
   onLocationClick?: (name: string) => void;
+  onArcClick?: (arcName: string) => void;
 }
 
-export default function SubwayMap({ snapshots, currentCharacters = [], onCharacterClick, onLocationClick }: Props) {
+export default function SubwayMap({ snapshots, currentCharacters = [], onCharacterClick, onLocationClick, onArcClick }: Props) {
   const [charSearch, setCharSearch] = useState('');
   const [isDark, setIsDark] = useState(() =>
     typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
@@ -845,8 +846,15 @@ export default function SubwayMap({ snapshots, currentCharacters = [], onCharact
           {/* Arc label — left margin, vertically centred in band */}
           {(() => {
             const arcColor = lane.name ? LINE_COLORS[i % LINE_COLORS.length] : (isDark ? '#52525b' : '#a8a29e');
+            const clickable = !!lane.name && !!onArcClick;
+            const handleArcClick = clickable ? () => onArcClick!(lane.name) : undefined;
             return (
-              <>
+              <g style={{ cursor: clickable ? 'pointer' : 'default' }} onClick={handleArcClick}>
+                <rect
+                  x={0} y={lane.y - lane.height / 2}
+                  width={LANE_MARGIN_LEFT - 5} height={lane.height}
+                  fill="transparent"
+                />
                 <line
                   x1={LANE_MARGIN_LEFT - 4} y1={lane.y - lane.height / 2}
                   x2={LANE_MARGIN_LEFT - 4} y2={lane.y + lane.height / 2}
@@ -861,7 +869,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [], onCharact
                 >
                   {lane.label.toUpperCase()}
                 </text>
-              </>
+              </g>
             );
           })()}
         </g>

@@ -5,6 +5,7 @@ import type { Character, LocationPin, MapState, NarrativeArc, Snapshot } from '@
 import SubwayMap from './SubwayMap';
 import CharacterModal from './CharacterModal';
 import LocationModal from './LocationModal';
+import NarrativeArcModal from './NarrativeArcModal';
 import { withResolvedLocations } from '@/lib/resolve-locations';
 
 interface Props {
@@ -166,6 +167,7 @@ export default function MapBoard({ characters, arcs = [], bookTitle, mapState, o
   const [charFilterQ, setCharFilterQ] = useState('');
   const [selectedCharName, setSelectedCharName] = useState<string | null>(null);
   const [selectedLocationName, setSelectedLocationName] = useState<string | null>(null);
+  const [selectedArcName, setSelectedArcName] = useState<string | null>(null);
 
   // Auto-detect state
   const [detecting, setDetecting] = useState(false);
@@ -427,6 +429,9 @@ export default function MapBoard({ characters, arcs = [], bookTitle, mapState, o
       {selectedLocationName && (
         <LocationModal locationName={selectedLocationName} snapshots={snapshots} onClose={() => setSelectedLocationName(null)} />
       )}
+      {selectedArcName && (
+        <NarrativeArcModal arcName={selectedArcName} snapshots={snapshots} onClose={() => setSelectedArcName(null)} />
+      )}
       <div
         className={`relative h-full min-h-0 rounded-xl border overflow-hidden ${isDragging ? 'border-amber-500/40' : 'border-stone-200 dark:border-zinc-800'}`}
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
@@ -435,7 +440,7 @@ export default function MapBoard({ characters, arcs = [], bookTitle, mapState, o
       >
         {/* Subway map fills full height */}
         <div className="h-full bg-white dark:bg-zinc-900">
-          <SubwayMap snapshots={snapshots} currentCharacters={displayedChars} onCharacterClick={setSelectedCharName} onLocationClick={setSelectedLocationName} />
+          <SubwayMap snapshots={snapshots} currentCharacters={displayedChars} onCharacterClick={setSelectedCharName} onLocationClick={setSelectedLocationName} onArcClick={setSelectedArcName} />
         </div>
 
         {/* Filter panel — bottom-left overlay */}
