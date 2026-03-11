@@ -76,6 +76,7 @@ function saveStored(title: string, author: string, state: StoredBookState) {
 
 function deleteStored(title: string, author: string) {
   localStorage.removeItem(storageKey(title, author));
+  localStorage.removeItem(`ebook-tracker::${title}::${author}`);
   localStorage.removeItem(mapStorageKey(title, author));
   deleteChapters(title, author).catch(() => {});
 }
