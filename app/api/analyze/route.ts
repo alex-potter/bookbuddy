@@ -57,6 +57,7 @@ const SCHEMA = `{
   "locations": [
     {
       "name": "Proper place name only — a city, station, planet, region, or named landmark (NOT a generic room, corridor, or activity description)",
+      "arc": "Short narrative arc label grouping related locations into the same storyline thread (e.g. 'Shire', 'Quest', 'Gondor', 'Rohan'). Use the same label consistently across chapters for the same storyline. If a location belongs to multiple arcs choose the most prominent one.",
       "description": "1–2 sentence description of this place — what kind of place it is, its significance, atmosphere, or notable features as established in the text"
     }
   ],
@@ -107,6 +108,7 @@ const DELTA_SCHEMA = `{
   "updatedLocations": [
     {
       "name": "Proper place name only — a city, station, planet, region, or named landmark (NOT a generic room, corridor, or activity description)",
+      "arc": "Short narrative arc label grouping related locations into the same storyline thread. Use the same label consistently for the same storyline across all chapters.",
       "description": "1–2 sentence description of this place as revealed so far"
     }
   ],

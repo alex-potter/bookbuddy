@@ -43,6 +43,7 @@ export interface Character {
 
 export interface LocationInfo {
   name: string;
+  arc?: string;         // narrative arc / storyline this location belongs to
   description: string;  // 1–2 sentence description of the place
 }
 

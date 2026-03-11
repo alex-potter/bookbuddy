@@ -8,6 +8,7 @@ import { withResolvedLocations } from '@/lib/resolve-locations';
 
 interface Node {
   id: string;
+  arc?: string;  // narrative arc zone this location belongs to
   x: number;
   y: number;
   vx: number;
@@ -135,12 +136,17 @@ function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[] } {
   const sorted = [...snapshots].sort((a, b) => a.index - b.index);
   if (sorted.length === 0) return { nodes: [], edges: [] };
 
-  // Collect all real location names ever seen
+  // Collect all real location names ever seen, plus arc tags from location metadata
   const allLocs = new Set<string>();
+  const locArc = new Map<string, string>(); // location name → narrative arc label
   for (const snap of sorted) {
     for (const c of snap.result.characters) {
       const loc = c.currentLocation?.trim();
       if (isRealLocation(loc)) allLocs.add(loc);
+    }
+    for (const l of snap.result.locations ?? []) {
+      const name = l.name?.trim();
+      if (isRealLocation(name) && l.arc?.trim()) locArc.set(name, l.arc.trim());
     }
   }
 
@@ -197,6 +203,7 @@ function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[] } {
 
   const nodes: Node[] = Array.from(nodeIds).map((id) => ({
     id,
+    arc: locArc.get(id),
     x: CX + (Math.random() - 0.5) * 700,
     y: CY + (Math.random() - 0.5) * 450,
     vx: 0,
@@ -213,6 +220,8 @@ const SPRING_K = 0.04;
 const SPRING_REST = 180;
 const DAMPING = 0.80;
 const GRAVITY = 0.006;
+const ARC_ZONE_R = 230;   // radius from canvas centre to arc zone anchors
+const ARC_GRAVITY = 0.020; // attraction strength toward arc zone anchor
 
 function tick(nodes: Node[], edges: Edge[]): Node[] {
   const next = nodes.map((n) => ({ ...n }));
@@ -241,6 +250,22 @@ function tick(nodes: Node[], edges: Edge[]): Node[] {
     const fx = (f * dx) / d; const fy = (f * dy) / d;
     next[si].vx += fx; next[si].vy += fy;
     next[ti].vx -= fx; next[ti].vy -= fy;
+  }
+
+  // Arc zone clustering — pull each node toward its narrative arc's zone anchor.
+  // Anchors are evenly spaced on a circle; stable because sorted alphabetically.
+  const arcNames = [...new Set(next.map((n) => n.arc).filter(Boolean) as string[])].sort();
+  if (arcNames.length > 1) {
+    const arcAnchor = new Map(arcNames.map((arc, i) => {
+      const angle = (i / arcNames.length) * 2 * Math.PI - Math.PI / 2;
+      return [arc, { x: CX + Math.cos(angle) * ARC_ZONE_R, y: CY + Math.sin(angle) * ARC_ZONE_R }];
+    }));
+    for (const n of next) {
+      const anchor = n.arc ? arcAnchor.get(n.arc) : undefined;
+      if (!anchor) continue;
+      n.vx += (anchor.x - n.x) * ARC_GRAVITY;
+      n.vy += (anchor.y - n.y) * ARC_GRAVITY;
+    }
   }
 
   for (const n of next) {
@@ -567,6 +592,15 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
   const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
   const maxW = Math.max(...graph.edges.map((e) => e.weight), 1);
 
+  // Arc zone anchors — same computation as tick() so the labels land at zone centres
+  const arcNames = [...new Set(graph.nodes.map((n) => n.arc).filter(Boolean) as string[])].sort();
+  const arcZoneAnchors = arcNames.length > 1
+    ? arcNames.map((arc, i) => {
+        const angle = (i / arcNames.length) * 2 * Math.PI - Math.PI / 2;
+        return { arc, x: CX + Math.cos(angle) * ARC_ZONE_R, y: CY + Math.sin(angle) * ARC_ZONE_R };
+      })
+    : [];
+
   // ── Phase 1: collision-aware label placement ──────────────────────────
   // Nodes with more connections get label placement priority.
   const nodeDegree = new Map<string, number>();
@@ -690,6 +724,22 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
           );
         })}
       </defs>
+
+      {/* Arc zone backgrounds — rendered first so everything else sits on top */}
+      {arcZoneAnchors.map(({ arc, x, y }) => (
+        <g key={`zone-${arc}`}>
+          <circle cx={x} cy={y} r={160} fill="white" opacity={0.025} />
+          <text
+            x={x} y={y}
+            textAnchor="middle" dominantBaseline="central"
+            fontSize={11} fontWeight="700" letterSpacing="0.08em"
+            fill="white" opacity={0.08}
+            style={{ textTransform: 'uppercase', userSelect: 'none' }}
+          >
+            {arc.toUpperCase()}
+          </text>
+        </g>
+      ))}
 
       {/* Transit lines */}
       <g>
