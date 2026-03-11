@@ -365,13 +365,13 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
 
     return (
       <div
-        className={`relative h-full min-h-0 rounded-xl border overflow-hidden ${isDragging ? 'border-amber-500/40' : 'border-zinc-800'}`}
+        className={`relative h-full min-h-0 rounded-xl border overflow-hidden ${isDragging ? 'border-amber-500/40' : 'border-stone-200 dark:border-zinc-800'}`}
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
       >
         {/* Subway map fills full height */}
-        <div className="h-full bg-zinc-900">
+        <div className="h-full bg-white dark:bg-zinc-900">
           <SubwayMap snapshots={snapshots} currentCharacters={displayedChars} />
         </div>
 
@@ -379,19 +379,19 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
         {characters.length > 0 && (
           <div className="absolute bottom-3 left-3 z-10">
             {filterOpen ? (
-              <div className="bg-zinc-900/95 border border-zinc-700 rounded-xl shadow-2xl backdrop-blur-sm p-3 flex flex-col gap-2 w-52 max-h-72">
+              <div className="bg-white/95 dark:bg-zinc-900/95 border border-stone-300 dark:border-zinc-700 rounded-xl shadow-2xl backdrop-blur-sm p-3 flex flex-col gap-2 w-52 max-h-72">
                 <div className="flex items-center justify-between flex-shrink-0">
-                  <p className="text-xs font-semibold text-zinc-300">Track characters</p>
-                  <button onClick={() => setFilterOpen(false)} className="text-zinc-600 hover:text-zinc-400 text-xs">✕</button>
+                  <p className="text-xs font-semibold text-stone-700 dark:text-zinc-300">Track characters</p>
+                  <button onClick={() => setFilterOpen(false)} className="text-stone-400 dark:text-zinc-600 hover:text-stone-500 dark:hover:text-zinc-400 text-xs">✕</button>
                 </div>
                 <div className="flex gap-1.5 flex-shrink-0">
                   <button
                     onClick={() => setTrackedCharNames(null)}
-                    className="text-[10px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-colors"
+                    className="text-[10px] px-2 py-0.5 rounded border border-stone-300 dark:border-zinc-700 text-stone-500 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 hover:border-stone-400 dark:hover:border-zinc-600 transition-colors"
                   >All</button>
                   <button
                     onClick={() => setTrackedCharNames(new Set())}
-                    className="text-[10px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-colors"
+                    className="text-[10px] px-2 py-0.5 rounded border border-stone-300 dark:border-zinc-700 text-stone-500 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 hover:border-stone-400 dark:hover:border-zinc-600 transition-colors"
                   >None</button>
                 </div>
                 <ul className="overflow-y-auto space-y-0.5 flex-1 min-h-0">
@@ -399,22 +399,22 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
                     const checked = trackedCharNames === null || trackedCharNames.has(c.name);
                     return (
                       <li key={c.name}>
-                        <label className="flex items-center gap-2 px-1.5 py-1 rounded-lg hover:bg-zinc-800 cursor-pointer">
+                        <label className="flex items-center gap-2 px-1.5 py-1 rounded-lg hover:bg-stone-100 dark:hover:bg-zinc-800 cursor-pointer">
                           <input
                             type="checkbox"
                             checked={checked}
                             onChange={() => toggleChar(c.name)}
                             className="accent-amber-500 w-3 h-3 flex-shrink-0"
                           />
-                          <span className="text-xs text-zinc-300 truncate flex-1">{c.name}</span>
-                          <span className="text-[9px] text-zinc-600 flex-shrink-0">{c.importance[0]}</span>
+                          <span className="text-xs text-stone-700 dark:text-zinc-300 truncate flex-1">{c.name}</span>
+                          <span className="text-[9px] text-stone-400 dark:text-zinc-600 flex-shrink-0">{c.importance[0]}</span>
                         </label>
                       </li>
                     );
                   })}
                 </ul>
                 {trackedCharNames !== null && (
-                  <p className="text-[10px] text-zinc-600 text-center flex-shrink-0">
+                  <p className="text-[10px] text-stone-400 dark:text-zinc-600 text-center flex-shrink-0">
                     {trackedCharNames.size} of {characters.length} shown
                   </p>
                 )}
@@ -425,7 +425,7 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
                 className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors backdrop-blur-sm shadow-lg ${
                   trackedCharNames !== null
                     ? 'bg-amber-500/15 border-amber-500/40 text-amber-400 hover:bg-amber-500/20'
-                    : 'bg-zinc-800/90 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 border-zinc-700'
+                    : 'bg-stone-100/90 dark:bg-zinc-800/90 hover:bg-stone-200 dark:hover:bg-zinc-700 text-stone-500 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 border-stone-300 dark:border-zinc-700'
                 }`}
               >
                 ⊙ {trackedCharNames !== null ? `${trackedCharNames.size}/${characters.length}` : 'Filter'}
@@ -437,17 +437,17 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
         {/* Upload panel — bottom-right overlay */}
         <div className="absolute bottom-3 right-3 z-10">
           {showUploadPanel ? (
-            <div className="bg-zinc-900/95 border border-zinc-700 rounded-xl shadow-2xl backdrop-blur-sm p-3.5 flex flex-col gap-2.5 w-64">
+            <div className="bg-white/95 dark:bg-zinc-900/95 border border-stone-300 dark:border-zinc-700 rounded-xl shadow-2xl backdrop-blur-sm p-3.5 flex flex-col gap-2.5 w-64">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold text-zinc-300">Add a real map image</p>
-                <button onClick={() => setShowUploadPanel(false)} className="text-zinc-600 hover:text-zinc-400 text-xs">✕</button>
+                <p className="text-xs font-semibold text-stone-700 dark:text-zinc-300">Add a real map image</p>
+                <button onClick={() => setShowUploadPanel(false)} className="text-stone-400 dark:text-zinc-600 hover:text-stone-500 dark:hover:text-zinc-400 text-xs">✕</button>
               </div>
 
               {/* Drop zone */}
               <div
                 onClick={() => fileInputRef.current?.click()}
                 className={`h-20 rounded-lg border-2 border-dashed flex flex-col items-center justify-center gap-1 cursor-pointer transition-colors ${
-                  isDragging ? 'border-amber-500 bg-amber-500/5 text-amber-400' : 'border-zinc-700 hover:border-zinc-600 hover:bg-zinc-800/40 text-zinc-500'
+                  isDragging ? 'border-amber-500 bg-amber-500/5 text-amber-400' : 'border-stone-300 dark:border-zinc-700 hover:border-stone-400 dark:hover:border-zinc-600 hover:bg-stone-100/40 dark:hover:bg-zinc-800/40 text-stone-400 dark:text-zinc-500'
                 }`}
               >
                 <span className="text-base opacity-50">↑</span>
@@ -462,7 +462,7 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
                   onChange={(e) => { setUrlInput(e.target.value); setUrlError(null); }}
                   onKeyDown={(e) => { if (e.key === 'Enter') loadFromUrl(urlInput); }}
                   placeholder="Or paste image URL…"
-                  className="flex-1 min-w-0 bg-zinc-800 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
+                  className="flex-1 min-w-0 bg-stone-100 dark:bg-zinc-800 border border-stone-300 dark:border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-stone-800 dark:text-zinc-200 placeholder-stone-400 dark:placeholder-zinc-600 focus:outline-none focus:border-stone-400 dark:focus:border-zinc-500"
                 />
                 <button
                   onClick={() => loadFromUrl(urlInput)}
@@ -478,7 +478,7 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
                 href={searchUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-center text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors"
+                className="text-center text-[10px] text-stone-400 dark:text-zinc-600 hover:text-stone-500 dark:hover:text-zinc-400 transition-colors"
               >
                 Search "{bookTitle ?? ''} map" in Google Images ↗
               </a>
@@ -486,7 +486,7 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
           ) : (
             <button
               onClick={() => setShowUploadPanel(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-800/90 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 text-xs font-medium rounded-lg border border-zinc-700 transition-colors backdrop-blur-sm shadow-lg"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 bg-stone-100/90 dark:bg-zinc-800/90 hover:bg-stone-200 dark:hover:bg-zinc-700 text-stone-500 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 text-xs font-medium rounded-lg border border-stone-300 dark:border-zinc-700 transition-colors backdrop-blur-sm shadow-lg"
             >
               <span className="text-[10px]">🗺️</span> Add map image
             </button>
@@ -510,20 +510,20 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
       <div className="flex-1 min-w-0 flex flex-col gap-2 min-h-0">
         {/* Toolbar */}
         <div className="flex items-center gap-3 flex-shrink-0">
-          <p className="text-xs text-zinc-600">
+          <p className="text-xs text-stone-400 dark:text-zinc-600">
             {pinnedCount} of {locations.length} locations pinned
           </p>
           {pinnedCount > 0 && (
             <div className="flex items-center gap-2">
-              <div className="flex rounded-lg overflow-hidden border border-zinc-700 text-xs">
+              <div className="flex rounded-lg overflow-hidden border border-stone-300 dark:border-zinc-700 text-xs">
                 {(['locations', 'characters'] as const).map((mode) => (
                   <button
                     key={mode}
                     onClick={() => { setCharMode(mode === 'characters'); setActivePin(null); setActiveCharPin(null); }}
                     className={`px-2.5 py-1 transition-colors ${
                       (mode === 'characters') === charMode
-                        ? 'bg-zinc-700 text-zinc-100'
-                        : 'bg-transparent text-zinc-500 hover:text-zinc-300'
+                        ? 'bg-stone-200 dark:bg-zinc-700 text-stone-900 dark:text-zinc-100'
+                        : 'bg-transparent text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300'
                     }`}
                   >
                     {mode === 'locations' ? 'Locations' : 'Characters'}
@@ -537,25 +537,25 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
                     className={`text-xs px-2 py-1 rounded-lg border transition-colors ${
                       trackedCharNames !== null
                         ? 'border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/15'
-                        : 'border-zinc-700 text-zinc-500 hover:text-zinc-300 hover:border-zinc-600'
+                        : 'border-stone-300 dark:border-zinc-700 text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300 hover:border-stone-400 dark:hover:border-zinc-600'
                     }`}
                   >
                     ⊙ {trackedCharNames !== null ? `${trackedCharNames.size}/${characters.length}` : 'Filter'}
                   </button>
                   {filterOpen && (
-                    <div className="absolute top-full mt-1 left-0 bg-zinc-900/95 border border-zinc-700 rounded-xl shadow-2xl backdrop-blur-sm p-3 flex flex-col gap-2 w-52 max-h-72 z-30">
+                    <div className="absolute top-full mt-1 left-0 bg-white/95 dark:bg-zinc-900/95 border border-stone-300 dark:border-zinc-700 rounded-xl shadow-2xl backdrop-blur-sm p-3 flex flex-col gap-2 w-52 max-h-72 z-30">
                       <div className="flex items-center justify-between flex-shrink-0">
-                        <p className="text-xs font-semibold text-zinc-300">Track characters</p>
-                        <button onClick={() => setFilterOpen(false)} className="text-zinc-600 hover:text-zinc-400 text-xs">✕</button>
+                        <p className="text-xs font-semibold text-stone-700 dark:text-zinc-300">Track characters</p>
+                        <button onClick={() => setFilterOpen(false)} className="text-stone-400 dark:text-zinc-600 hover:text-stone-500 dark:hover:text-zinc-400 text-xs">✕</button>
                       </div>
                       <div className="flex gap-1.5 flex-shrink-0">
                         <button
                           onClick={() => setTrackedCharNames(null)}
-                          className="text-[10px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-colors"
+                          className="text-[10px] px-2 py-0.5 rounded border border-stone-300 dark:border-zinc-700 text-stone-500 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 hover:border-stone-400 dark:hover:border-zinc-600 transition-colors"
                         >All</button>
                         <button
                           onClick={() => setTrackedCharNames(new Set())}
-                          className="text-[10px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-colors"
+                          className="text-[10px] px-2 py-0.5 rounded border border-stone-300 dark:border-zinc-700 text-stone-500 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 hover:border-stone-400 dark:hover:border-zinc-600 transition-colors"
                         >None</button>
                       </div>
                       <ul className="overflow-y-auto space-y-0.5 flex-1 min-h-0">
@@ -563,22 +563,22 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
                           const checked = trackedCharNames === null || trackedCharNames.has(c.name);
                           return (
                             <li key={c.name}>
-                              <label className="flex items-center gap-2 px-1.5 py-1 rounded-lg hover:bg-zinc-800 cursor-pointer">
+                              <label className="flex items-center gap-2 px-1.5 py-1 rounded-lg hover:bg-stone-100 dark:hover:bg-zinc-800 cursor-pointer">
                                 <input
                                   type="checkbox"
                                   checked={checked}
                                   onChange={() => toggleChar(c.name)}
                                   className="accent-amber-500 w-3 h-3 flex-shrink-0"
                                 />
-                                <span className="text-xs text-zinc-300 truncate flex-1">{c.name}</span>
-                                <span className="text-[9px] text-zinc-600 flex-shrink-0">{c.importance[0]}</span>
+                                <span className="text-xs text-stone-700 dark:text-zinc-300 truncate flex-1">{c.name}</span>
+                                <span className="text-[9px] text-stone-400 dark:text-zinc-600 flex-shrink-0">{c.importance[0]}</span>
                               </label>
                             </li>
                           );
                         })}
                       </ul>
                       {trackedCharNames !== null && (
-                        <p className="text-[10px] text-zinc-600 text-center flex-shrink-0">
+                        <p className="text-[10px] text-stone-400 dark:text-zinc-600 text-center flex-shrink-0">
                           {trackedCharNames.size} of {characters.length} shown
                         </p>
                       )}
@@ -618,21 +618,21 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
               await navigator.clipboard.writeText(data);
               alert('Pin debug data copied to clipboard.');
             }}
-            className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
+            className="text-xs text-stone-400 dark:text-zinc-600 hover:text-stone-500 dark:hover:text-zinc-400 transition-colors"
           >
             Copy debug data
           </button>
           {pinnedCount > 0 && !placingLocation && (
             <button
               onClick={() => { if (confirm('Clear all pin placements?')) onMapStateChange({ ...mapState, pins: {} }); }}
-              className="text-xs text-zinc-600 hover:text-red-400 transition-colors"
+              className="text-xs text-stone-400 dark:text-zinc-600 hover:text-red-400 transition-colors"
             >
               Clear pins
             </button>
           )}
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
+            className="text-xs text-stone-400 dark:text-zinc-600 hover:text-stone-500 dark:hover:text-zinc-400 transition-colors"
           >
             Replace map
           </button>
@@ -654,7 +654,7 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
             </button>
             <button
               onClick={() => setSuggestions(null)}
-              className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors ml-auto"
+              className="text-xs text-stone-400 dark:text-zinc-600 hover:text-stone-500 dark:hover:text-zinc-400 transition-colors ml-auto"
             >
               Dismiss
             </button>
@@ -669,7 +669,7 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
           onPointerMove={handleMapPointerMove}
           onPointerUp={handleMapPointerUp}
           onPointerCancel={() => setDragState(null)}
-          className={`relative border border-zinc-800 overflow-hidden select-none ${dragState ? 'cursor-grabbing' : placingLocation ? 'cursor-crosshair' : 'cursor-default'}`}
+          className={`relative border border-stone-200 dark:border-zinc-800 overflow-hidden select-none ${dragState ? 'cursor-grabbing' : placingLocation ? 'cursor-crosshair' : 'cursor-default'}`}
         >
           <img src={mapState.imageDataUrl} alt="Map" className="w-full block" draggable={false} />
 
@@ -736,16 +736,16 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
                         </div>
                         {isActive && (
                           <div
-                            className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl p-3 min-w-44 z-20 pointer-events-auto"
+                            className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-white dark:bg-zinc-900 border border-stone-300 dark:border-zinc-700 rounded-xl shadow-2xl p-3 min-w-44 z-20 pointer-events-auto"
                             onClick={(e) => e.stopPropagation()}
                           >
                             <div className="flex items-center gap-2 mb-1">
                               <div className="w-5 h-5 rounded-md flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0" style={{ backgroundColor: color }}>{initials(char.name)}</div>
-                              <p className="text-xs text-zinc-200 font-semibold truncate">{char.name}</p>
+                              <p className="text-xs text-stone-800 dark:text-zinc-200 font-semibold truncate">{char.name}</p>
                             </div>
-                            <p className="text-[10px] text-zinc-500">{char.importance} · {char.status}</p>
-                            <p className="text-[10px] text-zinc-600 mt-1 truncate">{location}</p>
-                            {char.recentEvents && <p className="text-[10px] text-zinc-500 mt-1 line-clamp-2">{char.recentEvents}</p>}
+                            <p className="text-[10px] text-stone-400 dark:text-zinc-500">{char.importance} · {char.status}</p>
+                            <p className="text-[10px] text-stone-400 dark:text-zinc-600 mt-1 truncate">{location}</p>
+                            {char.recentEvents && <p className="text-[10px] text-stone-400 dark:text-zinc-500 mt-1 line-clamp-2">{char.recentEvents}</p>}
                           </div>
                         )}
                       </div>
@@ -786,28 +786,28 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
 
                   {isActive && (
                     <div
-                      className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl p-3 min-w-44 z-20"
+                      className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white dark:bg-zinc-900 border border-stone-300 dark:border-zinc-700 rounded-xl shadow-2xl p-3 min-w-44 z-20"
                       onClick={(e) => e.stopPropagation()}
                     >
                       <div className="flex items-center justify-between mb-2">
-                        <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">{location}</p>
+                        <p className="text-[10px] font-semibold text-stone-400 dark:text-zinc-500 uppercase tracking-wider">{location}</p>
                         <button
                           onClick={() => { removePin(location); setActivePin(null); }}
-                          className="text-[10px] text-zinc-700 hover:text-red-500 transition-colors ml-2"
+                          className="text-[10px] text-stone-300 dark:text-zinc-700 hover:text-red-500 transition-colors ml-2"
                           title="Remove pin"
                         >✕</button>
                       </div>
                       {chars.length === 0 ? (
-                        <p className="text-xs text-zinc-600">No characters here</p>
+                        <p className="text-xs text-stone-400 dark:text-zinc-600">No characters here</p>
                       ) : (
                         <ul className="space-y-1.5">
                           {chars.map((ch) => (
                             <li key={ch.name} className="flex items-center gap-2">
-                              <div className="w-5 h-5 rounded-md bg-zinc-800 flex items-center justify-center text-[9px] font-bold text-zinc-400 flex-shrink-0">
+                              <div className="w-5 h-5 rounded-md bg-stone-100 dark:bg-zinc-800 flex items-center justify-center text-[9px] font-bold text-stone-500 dark:text-zinc-400 flex-shrink-0">
                                 {initials(ch.name)}
                               </div>
                               <div className="min-w-0">
-                                <p className="text-xs text-zinc-200 font-medium truncate">{ch.name}</p>
+                                <p className="text-xs text-stone-800 dark:text-zinc-200 font-medium truncate">{ch.name}</p>
                                 {ch.importance === 'main' && <p className="text-[9px] text-amber-500/70">main</p>}
                               </div>
                             </li>
@@ -816,7 +816,7 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
                       )}
                       <button
                         onClick={() => { setPlacingLocation(location); setActivePin(null); }}
-                        className="mt-2 w-full text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors text-center"
+                        className="mt-2 w-full text-[10px] text-stone-400 dark:text-zinc-600 hover:text-stone-500 dark:hover:text-zinc-400 transition-colors text-center"
                       >
                         Move pin
                       </button>
@@ -836,7 +836,7 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
               onClick={(e) => e.stopPropagation()}
             >
               <div className="relative -translate-x-1/2 -translate-y-full flex flex-col items-center pointer-events-all">
-                <div className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold text-violet-300 whitespace-nowrap border border-dashed border-violet-500/60 bg-zinc-900/80 shadow-lg">
+                <div className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold text-violet-300 whitespace-nowrap border border-dashed border-violet-500/60 bg-white/80 dark:bg-zinc-900/80 shadow-lg">
                   <span className="opacity-60">✦</span>
                   {location}
                   <button
@@ -846,7 +846,7 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
                   >✓</button>
                   <button
                     onClick={() => dismissSuggestion(location)}
-                    className="text-zinc-600 hover:text-red-400 transition-colors"
+                    className="text-stone-400 dark:text-zinc-600 hover:text-red-400 transition-colors"
                     title="Dismiss"
                   >✕</button>
                 </div>
@@ -872,8 +872,8 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
                   <li key={name} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-violet-500/20 bg-violet-500/5">
                     <span className="text-[8px]" style={{ color }}>●</span>
                     <span className="flex-1 text-xs text-violet-300 truncate">{name}</span>
-                    <button onClick={() => acceptSuggestion(name)} className="text-[10px] text-zinc-500 hover:text-violet-300 transition-colors" title="Accept">✓</button>
-                    <button onClick={() => dismissSuggestion(name)} className="text-[10px] text-zinc-700 hover:text-red-400 transition-colors" title="Dismiss">✕</button>
+                    <button onClick={() => acceptSuggestion(name)} className="text-[10px] text-stone-400 dark:text-zinc-500 hover:text-violet-300 transition-colors" title="Accept">✓</button>
+                    <button onClick={() => dismissSuggestion(name)} className="text-[10px] text-stone-300 dark:text-zinc-700 hover:text-red-400 transition-colors" title="Dismiss">✕</button>
                   </li>
                 );
               })}
@@ -881,12 +881,12 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
           </div>
         )}
 
-        <p className="text-xs font-medium text-zinc-600 uppercase tracking-wider mb-2 flex-shrink-0">
+        <p className="text-xs font-medium text-stone-400 dark:text-zinc-600 uppercase tracking-wider mb-2 flex-shrink-0">
           {unplacedLocations.length > 0 ? `Unplaced (${unplacedLocations.length})` : 'Locations'}
         </p>
 
         {locations.length === 0 ? (
-          <p className="text-xs text-zinc-700">No locations found — analyze a chapter first.</p>
+          <p className="text-xs text-stone-300 dark:text-zinc-700">No locations found — analyze a chapter first.</p>
         ) : (
           <ul className="space-y-1 overflow-y-auto flex-1">
             {locations.map(([name, chars]) => {
@@ -906,8 +906,8 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
                         : isPlacing
                         ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
                         : pin
-                        ? 'border-zinc-800 bg-zinc-800/20 text-zinc-300 hover:border-zinc-700'
-                        : 'border-zinc-800/40 text-zinc-600 hover:border-zinc-700 hover:text-zinc-500'
+                        ? 'border-stone-200 dark:border-zinc-800 bg-stone-100/20 dark:bg-zinc-800/20 text-stone-700 dark:text-zinc-300 hover:border-stone-300 dark:hover:border-zinc-700'
+                        : 'border-stone-200/40 dark:border-zinc-800/40 text-stone-400 dark:text-zinc-600 hover:border-stone-300 dark:hover:border-zinc-700 hover:text-stone-400 dark:hover:text-zinc-500'
                     }`}
                   >
                     <div className="flex items-center gap-2">
@@ -915,9 +915,9 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
                         {isSuggested ? '✦' : '●'}
                       </span>
                       <span className="flex-1 truncate font-medium">{name}</span>
-                      <span className="flex-shrink-0 text-zinc-600">{chars.length}</span>
+                      <span className="flex-shrink-0 text-stone-400 dark:text-zinc-600">{chars.length}</span>
                     </div>
-                    <p className="text-[10px] mt-0.5 ml-3.5 text-zinc-700">
+                    <p className="text-[10px] mt-0.5 ml-3.5 text-stone-300 dark:text-zinc-700">
                       {isSuggested ? 'Detected — accept or dismiss' : isPlacing ? 'Click map to place…' : pin ? 'Pinned · click to move' : 'Click to place'}
                     </p>
                   </button>
@@ -931,14 +931,14 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
                 <li key={`pinned-${name}`}>
                   <button
                     onClick={() => setPlacingLocation(placingLocation === name ? null : name)}
-                    className="w-full text-left px-2.5 py-2 rounded-lg text-xs border border-zinc-800 bg-zinc-800/20 text-zinc-400 hover:border-zinc-700 transition-colors"
+                    className="w-full text-left px-2.5 py-2 rounded-lg text-xs border border-stone-200 dark:border-zinc-800 bg-stone-100/20 dark:bg-zinc-800/20 text-stone-500 dark:text-zinc-400 hover:border-stone-300 dark:hover:border-zinc-700 transition-colors"
                   >
                     <div className="flex items-center gap-2">
                       <span className="flex-shrink-0 text-[8px]" style={{ color }}>●</span>
                       <span className="flex-1 truncate font-medium">{name}</span>
-                      <span className="flex-shrink-0 text-zinc-600">{chars.length}</span>
+                      <span className="flex-shrink-0 text-stone-400 dark:text-zinc-600">{chars.length}</span>
                     </div>
-                    <p className="text-[10px] mt-0.5 ml-3.5 text-zinc-700">Pinned · click to move</p>
+                    <p className="text-[10px] mt-0.5 ml-3.5 text-stone-300 dark:text-zinc-700">Pinned · click to move</p>
                   </button>
                 </li>
               );
@@ -947,8 +947,8 @@ export default function MapBoard({ characters, bookTitle, mapState, onMapStateCh
         )}
 
         {pinnedCount > 0 && !suggestions && (
-          <div className="mt-4 pt-3 border-t border-zinc-800 flex-shrink-0">
-            <p className="text-[10px] text-zinc-700">Click a pin to see characters. ESC cancels placement.</p>
+          <div className="mt-4 pt-3 border-t border-stone-200 dark:border-zinc-800 flex-shrink-0">
+            <p className="text-[10px] text-stone-300 dark:text-zinc-700">Click a pin to see characters. ESC cancels placement.</p>
           </div>
         )}
       </div>

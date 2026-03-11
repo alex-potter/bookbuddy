@@ -6,14 +6,14 @@ import type { Character, Snapshot } from '@/types';
 const STATUS_CONFIG = {
   alive:     { label: 'Alive',     color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20', dot: 'bg-emerald-400' },
   dead:      { label: 'Dead',      color: 'bg-red-500/10 text-red-400 border-red-500/20',             dot: 'bg-red-400' },
-  unknown:   { label: 'Unknown',   color: 'bg-zinc-700/50 text-zinc-400 border-zinc-600/30',          dot: 'bg-zinc-500' },
+  unknown:   { label: 'Unknown',   color: 'bg-stone-200/50 dark:bg-zinc-700/50 text-stone-500 dark:text-zinc-400 border-stone-400 dark:border-zinc-600/30',          dot: 'bg-stone-400 dark:bg-zinc-500' },
   uncertain: { label: 'Uncertain', color: 'bg-amber-500/10 text-amber-400 border-amber-500/20',       dot: 'bg-amber-400' },
 };
 
 const IMPORTANCE_CONFIG = {
   main:      { label: 'Main',      color: 'bg-amber-500 text-zinc-900' },
-  secondary: { label: 'Secondary', color: 'bg-zinc-700 text-zinc-300' },
-  minor:     { label: 'Minor',     color: 'bg-zinc-800 text-zinc-500' },
+  secondary: { label: 'Secondary', color: 'bg-stone-200 dark:bg-zinc-700 text-stone-700 dark:text-zinc-300' },
+  minor:     { label: 'Minor',     color: 'bg-stone-100 dark:bg-zinc-800 text-stone-400 dark:text-zinc-500' },
 };
 
 function nameColor(name: string): string {
@@ -115,11 +115,11 @@ export default function CharacterModal({ character, snapshots, chapterTitles, on
 
       {/* Panel */}
       <div
-        className="relative z-10 w-full max-w-lg max-h-[85vh] overflow-y-auto bg-zinc-900 rounded-2xl border border-zinc-800 shadow-2xl"
+        className="relative z-10 w-full max-w-lg max-h-[85vh] overflow-y-auto bg-white dark:bg-zinc-900 rounded-2xl border border-stone-200 dark:border-zinc-800 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="p-6 border-b border-zinc-800 pb-0">
+        <div className="p-6 border-b border-stone-200 dark:border-zinc-800 pb-0">
           <div className="flex items-start gap-4">
             <div className={`flex-shrink-0 w-14 h-14 rounded-xl flex items-center justify-center text-lg font-bold ${nameColor(character.name)}`}>
               {initials(character.name)}
@@ -127,14 +127,14 @@ export default function CharacterModal({ character, snapshots, chapterTitles, on
             <div className="flex-1 min-w-0">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-lg font-bold text-zinc-100 leading-tight">{character.name}</h2>
+                  <h2 className="text-lg font-bold text-stone-900 dark:text-zinc-100 leading-tight">{character.name}</h2>
                   {character.aliases?.length > 0 && (
-                    <p className="text-sm text-zinc-500 mt-0.5">{character.aliases.join(' · ')}</p>
+                    <p className="text-sm text-stone-400 dark:text-zinc-500 mt-0.5">{character.aliases.join(' · ')}</p>
                   )}
                 </div>
                 <button
                   onClick={onClose}
-                  className="flex-shrink-0 text-zinc-600 hover:text-zinc-300 transition-colors text-lg leading-none"
+                  className="flex-shrink-0 text-stone-400 dark:text-zinc-600 hover:text-stone-700 dark:hover:text-zinc-300 transition-colors text-lg leading-none"
                 >
                   ✕
                 </button>
@@ -163,7 +163,7 @@ export default function CharacterModal({ character, snapshots, chapterTitles, on
                 className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors -mb-px ${
                   tab === key
                     ? 'border-amber-500 text-amber-400'
-                    : 'border-transparent text-zinc-500 hover:text-zinc-300'
+                    : 'border-transparent text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300'
                 }`}
               >
                 {label}
@@ -178,20 +178,20 @@ export default function CharacterModal({ character, snapshots, chapterTitles, on
               {/* Description */}
               {character.description && (
                 <section>
-                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-1.5">About</p>
-                  <p className="text-sm text-zinc-300 leading-relaxed">{character.description}</p>
+                  <p className="text-xs font-semibold text-stone-400 dark:text-zinc-500 uppercase tracking-wider mb-1.5">About</p>
+                  <p className="text-sm text-stone-700 dark:text-zinc-300 leading-relaxed">{character.description}</p>
                 </section>
               )}
 
               {/* Location + Last seen */}
               <section className="grid grid-cols-2 gap-3">
-                <div className="p-3 bg-zinc-800/50 rounded-lg border border-zinc-800">
-                  <p className="text-[10px] font-semibold text-zinc-600 uppercase tracking-wider mb-1">Current location</p>
-                  <p className="text-sm text-zinc-300">{character.currentLocation || 'Unknown'}</p>
+                <div className="p-3 bg-stone-100/50 dark:bg-zinc-800/50 rounded-lg border border-stone-200 dark:border-zinc-800">
+                  <p className="text-[10px] font-semibold text-stone-400 dark:text-zinc-600 uppercase tracking-wider mb-1">Current location</p>
+                  <p className="text-sm text-stone-700 dark:text-zinc-300">{character.currentLocation || 'Unknown'}</p>
                 </div>
-                <div className="p-3 bg-zinc-800/50 rounded-lg border border-zinc-800">
-                  <p className="text-[10px] font-semibold text-zinc-600 uppercase tracking-wider mb-1">Last seen</p>
-                  <p className="text-sm text-zinc-300">{character.lastSeen || '—'}</p>
+                <div className="p-3 bg-stone-100/50 dark:bg-zinc-800/50 rounded-lg border border-stone-200 dark:border-zinc-800">
+                  <p className="text-[10px] font-semibold text-stone-400 dark:text-zinc-600 uppercase tracking-wider mb-1">Last seen</p>
+                  <p className="text-sm text-stone-700 dark:text-zinc-300">{character.lastSeen || '—'}</p>
                 </div>
               </section>
 
@@ -200,7 +200,7 @@ export default function CharacterModal({ character, snapshots, chapterTitles, on
                 <section>
                   <p className="text-xs font-semibold text-amber-500/80 uppercase tracking-wider mb-1.5">Recent events</p>
                   <div className="p-3 bg-amber-500/5 border border-amber-500/10 rounded-lg">
-                    <p className="text-sm text-zinc-300 leading-relaxed">{character.recentEvents}</p>
+                    <p className="text-sm text-stone-700 dark:text-zinc-300 leading-relaxed">{character.recentEvents}</p>
                   </div>
                 </section>
               )}
@@ -208,7 +208,7 @@ export default function CharacterModal({ character, snapshots, chapterTitles, on
               {/* Relationships */}
               {character.relationships?.length > 0 && (
                 <section>
-                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">
+                  <p className="text-xs font-semibold text-stone-400 dark:text-zinc-500 uppercase tracking-wider mb-2">
                     Relationships ({character.relationships.length})
                   </p>
                   <ul className="space-y-2">
@@ -218,8 +218,8 @@ export default function CharacterModal({ character, snapshots, chapterTitles, on
                           {initials(rel.character)}
                         </div>
                         <div className="flex-1 min-w-0 pt-0.5">
-                          <span className="text-sm font-medium text-zinc-200">{rel.character}</span>
-                          <span className="text-sm text-zinc-500"> — {rel.relationship}</span>
+                          <span className="text-sm font-medium text-stone-800 dark:text-zinc-200">{rel.character}</span>
+                          <span className="text-sm text-stone-400 dark:text-zinc-500"> — {rel.relationship}</span>
                         </div>
                       </li>
                     ))}
@@ -230,22 +230,22 @@ export default function CharacterModal({ character, snapshots, chapterTitles, on
           ) : (
             /* Timeline tab */
             <section>
-              <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-4">
+              <p className="text-xs font-semibold text-stone-400 dark:text-zinc-500 uppercase tracking-wider mb-4">
                 Event history · newest first
               </p>
               {timeline.length === 0 ? (
-                <p className="text-sm text-zinc-600 text-center py-6">No history yet — analyze more chapters to build a timeline.</p>
+                <p className="text-sm text-stone-400 dark:text-zinc-600 text-center py-6">No history yet — analyze more chapters to build a timeline.</p>
               ) : (
-                <ol className="relative border-l border-zinc-800 space-y-0">
+                <ol className="relative border-l border-stone-200 dark:border-zinc-800 space-y-0">
                   {timeline.map((entry, i) => (
                     <li key={i} className="pl-5 pb-6 last:pb-0 relative">
                       {/* dot */}
-                      <span className="absolute -left-[4.5px] top-1.5 w-2 h-2 rounded-full bg-zinc-700 border border-zinc-600" />
-                      <p className="text-[11px] font-semibold text-zinc-500 mb-1">
+                      <span className="absolute -left-[4.5px] top-1.5 w-2 h-2 rounded-full bg-stone-200 dark:bg-zinc-700 border border-stone-300 dark:border-zinc-600" />
+                      <p className="text-[11px] font-semibold text-stone-400 dark:text-zinc-500 mb-1">
                         Ch. {entry.chapterIndex + 1} — {entry.chapterTitle}
                       </p>
                       {entry.location && entry.location !== 'Unknown' && (
-                        <p className="text-[11px] text-zinc-600 mb-1">📍 {entry.location}</p>
+                        <p className="text-[11px] text-stone-400 dark:text-zinc-600 mb-1">📍 {entry.location}</p>
                       )}
                       {entry.interactions.length > 0 && (
                         <div className="flex flex-wrap gap-1 mb-2">
@@ -257,7 +257,7 @@ export default function CharacterModal({ character, snapshots, chapterTitles, on
                           ))}
                         </div>
                       )}
-                      <p className="text-sm text-zinc-300 leading-relaxed">{entry.recentEvents}</p>
+                      <p className="text-sm text-stone-700 dark:text-zinc-300 leading-relaxed">{entry.recentEvents}</p>
                     </li>
                   ))}
                 </ol>

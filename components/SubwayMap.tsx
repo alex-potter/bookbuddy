@@ -425,6 +425,17 @@ interface Props {
 }
 
 export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) {
+  const [isDark, setIsDark] = useState(() =>
+    typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+  );
+
+  useEffect(() => {
+    const obs = new MutationObserver(() => {
+      setIsDark(document.documentElement.classList.contains('dark'));
+    });
+    obs.observe(document.documentElement, { attributeFilter: ['class'] });
+    return () => obs.disconnect();
+  }, []);
   const [graph, setGraph] = useState<{ nodes: Node[]; edges: Edge[] }>(() => buildGraph(snapshots));
   const [settled, setSettled] = useState(false);
   const frameRef = useRef<number>(0);
@@ -572,7 +583,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
     return (
       <div className="flex flex-col items-center justify-center h-full py-12 gap-2">
         <span className="text-3xl opacity-20">🗺️</span>
-        <p className="text-xs text-zinc-600">Analyze chapters to populate the map</p>
+        <p className="text-xs text-stone-400 dark:text-zinc-600">Analyze chapters to populate the map</p>
       </div>
     );
   }
@@ -685,15 +696,25 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
   targetPosRef.current = charPositions;
 
   // Grid as a CSS background so it covers the full container, not just the SVG viewBox
-  const gridBg = `url("data:image/svg+xml,%3Csvg width='30' height='30' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M 30 0 L 0 0 0 30' fill='none' stroke='%2327272a' stroke-width='0.5'/%3E%3C/svg%3E")`;
+  const gridColor = isDark ? '%2327272a' : '%23e7e5e4';
+  const gridBg = `url("data:image/svg+xml,%3Csvg width='30' height='30' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M 30 0 L 0 0 0 30' fill='none' stroke='${gridColor}' stroke-width='0.5'/%3E%3C/svg%3E")`;
+
+  // Theme-dependent SVG colors
+  const nodeFill = isDark ? '#18181b' : '#ffffff';
+  const labelFill = isDark ? '#e4e4e7' : '#1c1917';
+  const labelShadow = isDark ? '0 1px 4px #000, 0 0 8px #000' : '0 1px 3px rgba(255,255,255,0.8)';
+  const overflowFill = isDark ? '#27272a' : '#f5f5f4';
+  const overflowStroke = isDark ? '#52525b' : '#d6d3d1';
+  const overflowText = isDark ? '#a1a1aa' : '#78716c';
+  const zoneCircleFill = isDark ? 'white' : 'black';
 
   return (
-    <div className="relative w-full h-full bg-zinc-950" style={{ backgroundImage: gridBg }}>
+    <div className={`relative w-full h-full ${isDark ? 'bg-zinc-950' : 'bg-stone-50'}`} style={{ backgroundImage: gridBg }}>
       {/* Spinner shown while physics settles */}
       {!settled && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2">
-          <div className="w-5 h-5 rounded-full border-2 border-zinc-700 border-t-zinc-400 animate-spin" />
-          <p className="text-[10px] text-zinc-600">Laying out map…</p>
+          <div className={`w-5 h-5 rounded-full border-2 animate-spin ${isDark ? 'border-zinc-700 border-t-zinc-400' : 'border-stone-300 border-t-stone-500'}`} />
+          <p className={`text-[10px] ${isDark ? 'text-zinc-600' : 'text-stone-400'}`}>Laying out map…</p>
         </div>
       )}
       <svg
@@ -728,12 +749,12 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
       {/* Arc zone backgrounds — rendered first so everything else sits on top */}
       {arcZoneAnchors.map(({ arc, x, y }) => (
         <g key={`zone-${arc}`}>
-          <circle cx={x} cy={y} r={160} fill="white" opacity={0.025} />
+          <circle cx={x} cy={y} r={160} fill={zoneCircleFill} opacity={0.025} />
           <text
             x={x} y={y}
             textAnchor="middle" dominantBaseline="central"
             fontSize={11} fontWeight="700" letterSpacing="0.08em"
-            fill="white" opacity={0.08}
+            fill={zoneCircleFill} opacity={0.1}
             style={{ textTransform: 'uppercase', userSelect: 'none' }}
           >
             {arc.toUpperCase()}
@@ -780,7 +801,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
       {nodeData.map(({ n, primaryColor, r }) => (
         <g key={n.id} filter="url(#sm-glow)">
           <circle cx={n.x} cy={n.y} r={r + 3} fill={primaryColor} opacity={0.2} />
-          <circle cx={n.x} cy={n.y} r={r} fill="#18181b" stroke={primaryColor} strokeWidth={2.5} />
+          <circle cx={n.x} cy={n.y} r={r} fill={nodeFill} stroke={primaryColor} strokeWidth={2.5} />
         </g>
       ))}
 
@@ -792,8 +813,8 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
             key={n.id}
             x={labelX} y={startY}
             textAnchor={labelAnchor} dominantBaseline="hanging"
-            fontSize={LABEL_FONT} fontWeight="600" fill="#e4e4e7"
-            style={{ textShadow: '0 1px 4px #000, 0 0 8px #000' }}
+            fontSize={LABEL_FONT} fontWeight="600" fill={labelFill}
+            style={{ textShadow: labelShadow }}
           >
             {lines.map((line, i) => (
               <tspan key={i} x={labelX} dy={i === 0 ? 0 : LINE_HEIGHT}>{line}</tspan>
@@ -805,8 +826,8 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
       {/* Overflow +N badges (static per station, no transition needed) */}
       {overflowBadges.map(({ x, y, count }, i) => (
         <g key={`overflow-${i}`} transform={`translate(${x},${y})`}>
-          <circle r={AVT_R} fill="#27272a" stroke="#52525b" strokeWidth="1" />
-          <text textAnchor="middle" dominantBaseline="central" fontSize="5" fill="#a1a1aa">+{count}</text>
+          <circle r={AVT_R} fill={overflowFill} stroke={overflowStroke} strokeWidth="1" />
+          <text textAnchor="middle" dominantBaseline="central" fontSize="5" fill={overflowText}>+{count}</text>
         </g>
       ))}
 

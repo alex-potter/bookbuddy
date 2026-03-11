@@ -67,11 +67,11 @@ export default function GithubLibrary({ onFile }: Props) {
   }, {});
 
   if (loading) {
-    return <p className="text-sm text-zinc-500 text-center py-10">Loading library…</p>;
+    return <p className="text-sm text-stone-400 dark:text-zinc-500 text-center py-10">Loading library…</p>;
   }
 
   if (entries.length === 0 && !error) {
-    return <p className="text-sm text-zinc-500 text-center py-10">No books in the library yet.</p>;
+    return <p className="text-sm text-stone-400 dark:text-zinc-500 text-center py-10">No books in the library yet.</p>;
   }
 
   return (
@@ -79,16 +79,16 @@ export default function GithubLibrary({ onFile }: Props) {
       {error && <p className="text-xs text-red-400">{error}</p>}
       {Object.entries(byAuthor).map(([author, books]) => (
         <div key={author}>
-          <p className="text-xs font-medium text-zinc-600 uppercase tracking-wider mb-2">{author}</p>
+          <p className="text-xs font-medium text-stone-400 dark:text-zinc-600 uppercase tracking-wider mb-2">{author}</p>
           <ul className="space-y-2">
             {books.map((entry) => (
               <li key={entry.path}>
                 <button
                   onClick={() => handleSelect(entry)}
                   disabled={!!downloading}
-                  className="w-full text-left px-4 py-3 bg-zinc-900 border border-zinc-800 rounded-xl hover:border-zinc-700 transition-colors disabled:opacity-50"
+                  className="w-full text-left px-4 py-3 bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-800 rounded-xl hover:border-stone-300 dark:hover:border-zinc-700 transition-colors disabled:opacity-50"
                 >
-                  <span className="text-sm text-zinc-200">
+                  <span className="text-sm text-stone-800 dark:text-zinc-200">
                     {downloading === entry.path ? 'Downloading…' : entry.label}
                   </span>
                 </button>

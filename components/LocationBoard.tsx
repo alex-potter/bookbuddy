@@ -15,7 +15,7 @@ interface LocationGroup {
 const STATUS_DOT: Record<Character['status'], string> = {
   alive: 'bg-emerald-400',
   dead: 'bg-red-400',
-  unknown: 'bg-zinc-500',
+  unknown: 'bg-stone-400 dark:bg-zinc-500',
   uncertain: 'bg-amber-400',
 };
 
@@ -127,11 +127,11 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
   return (
     <div className="space-y-4">
       {/* View toggle */}
-      <div className="flex gap-1 bg-zinc-800/50 rounded-lg p-0.5 w-fit border border-zinc-800">
+      <div className="flex gap-1 bg-stone-100/50 dark:bg-zinc-800/50 rounded-lg p-0.5 w-fit border border-stone-200 dark:border-zinc-800">
         <button
           onClick={() => setView('list')}
           className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-            view === 'list' ? 'bg-zinc-700 text-zinc-200' : 'text-zinc-500 hover:text-zinc-300'
+            view === 'list' ? 'bg-stone-200 dark:bg-zinc-700 text-stone-800 dark:text-zinc-200' : 'text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300'
           }`}
         >
           List
@@ -139,7 +139,7 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
         <button
           onClick={() => setView('graph')}
           className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-            view === 'graph' ? 'bg-zinc-700 text-zinc-200' : 'text-zinc-500 hover:text-zinc-300'
+            view === 'graph' ? 'bg-stone-200 dark:bg-zinc-700 text-stone-800 dark:text-zinc-200' : 'text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300'
           }`}
         >
           Graph
@@ -152,8 +152,8 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
         <>
           {/* Map section */}
           <div
-            className={`bg-zinc-900 rounded-xl border overflow-hidden relative ${
-              dragging ? 'border-amber-500/40' : 'border-zinc-800'
+            className={`bg-white dark:bg-zinc-900 rounded-xl border overflow-hidden relative ${
+              dragging ? 'border-amber-500/40' : 'border-stone-200 dark:border-zinc-800'
             }`}
             onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
             onDragLeave={() => setDragging(false)}
@@ -164,13 +164,13 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
           >
             {mapImage ? (
               <>
-                <img src={mapImage} alt={mapLabel || 'Book map'} className="w-full max-h-80 object-contain bg-zinc-950" />
+                <img src={mapImage} alt={mapLabel || 'Book map'} className="w-full max-h-80 object-contain bg-stone-50 dark:bg-zinc-950" />
                 {mapLabel && (
-                  <p className="text-xs text-center text-zinc-600 py-2 border-t border-zinc-800">{mapLabel}</p>
+                  <p className="text-xs text-center text-stone-400 dark:text-zinc-600 py-2 border-t border-stone-200 dark:border-zinc-800">{mapLabel}</p>
                 )}
                 <button
                   onClick={() => setMapImage(null)}
-                  className="absolute top-2 right-2 bg-zinc-900/80 hover:bg-zinc-900 text-zinc-400 hover:text-red-400 rounded-lg w-7 h-7 flex items-center justify-center text-sm transition-colors border border-zinc-700"
+                  className="absolute top-2 right-2 bg-white/80 dark:bg-zinc-900/80 hover:bg-white dark:hover:bg-zinc-900 text-stone-500 dark:text-zinc-400 hover:text-red-400 rounded-lg w-7 h-7 flex items-center justify-center text-sm transition-colors border border-stone-300 dark:border-zinc-700"
                   title="Remove map"
                 >
                   ✕
@@ -186,14 +186,14 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
                 {/* Upload overlay button — bottom-right */}
                 <div className="absolute bottom-2 right-2">
                   {showUploadPanel ? (
-                    <div className="bg-zinc-900 border border-zinc-700 rounded-xl shadow-xl p-3 flex flex-col gap-2 min-w-44">
+                    <div className="bg-white dark:bg-zinc-900 border border-stone-300 dark:border-zinc-700 rounded-xl shadow-xl p-3 flex flex-col gap-2 min-w-44">
                       <div className="flex items-center justify-between mb-0.5">
-                        <span className="text-xs font-medium text-zinc-400">Add book map</span>
-                        <button onClick={() => setShowUploadPanel(false)} className="text-zinc-600 hover:text-zinc-400 text-xs">✕</button>
+                        <span className="text-xs font-medium text-stone-500 dark:text-zinc-400">Add book map</span>
+                        <button onClick={() => setShowUploadPanel(false)} className="text-stone-400 dark:text-zinc-600 hover:text-stone-500 dark:hover:text-zinc-400 text-xs">✕</button>
                       </div>
                       <label
                         htmlFor="map-upload"
-                        className="px-3 py-1.5 bg-zinc-800 text-zinc-300 text-xs font-medium rounded-lg cursor-pointer hover:bg-zinc-700 transition-colors border border-zinc-700 text-center"
+                        className="px-3 py-1.5 bg-stone-100 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 text-xs font-medium rounded-lg cursor-pointer hover:bg-stone-200 dark:hover:bg-zinc-700 transition-colors border border-stone-300 dark:border-zinc-700 text-center"
                       >
                         Upload file
                       </label>
@@ -202,14 +202,14 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
                           href={`https://www.google.com/search?q=${encodeURIComponent(bookTitle + ' map')}&tbm=isch`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="px-3 py-1.5 bg-zinc-800 text-zinc-300 text-xs font-medium rounded-lg hover:bg-zinc-700 transition-colors border border-zinc-700 text-center"
+                          className="px-3 py-1.5 bg-stone-100 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 text-xs font-medium rounded-lg hover:bg-stone-200 dark:hover:bg-zinc-700 transition-colors border border-stone-300 dark:border-zinc-700 text-center"
                         >
                           Search Google Images
                         </a>
                       )}
                       <button
                         onClick={() => setShowUrlInput((v) => !v)}
-                        className="px-3 py-1.5 bg-zinc-800 text-zinc-300 text-xs font-medium rounded-lg hover:bg-zinc-700 transition-colors border border-zinc-700"
+                        className="px-3 py-1.5 bg-stone-100 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 text-xs font-medium rounded-lg hover:bg-stone-200 dark:hover:bg-zinc-700 transition-colors border border-stone-300 dark:border-zinc-700"
                       >
                         Paste URL
                       </button>
@@ -222,7 +222,7 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
                             onKeyDown={(e) => e.key === 'Enter' && handleUrlSubmit()}
                             placeholder="https://…"
                             autoFocus
-                            className="flex-1 min-w-0 bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
+                            className="flex-1 min-w-0 bg-stone-100 dark:bg-zinc-800 border border-stone-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-stone-800 dark:text-zinc-200 focus:outline-none focus:border-stone-400 dark:focus:border-zinc-500"
                           />
                           <button
                             onClick={handleUrlSubmit}
@@ -232,12 +232,12 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
                           </button>
                         </div>
                       )}
-                      <p className="text-[10px] text-zinc-700 text-center">or drag &amp; drop / Ctrl+V</p>
+                      <p className="text-[10px] text-stone-300 dark:text-zinc-700 text-center">or drag &amp; drop / Ctrl+V</p>
                     </div>
                   ) : (
                     <button
                       onClick={() => setShowUploadPanel(true)}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-800/90 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 text-xs font-medium rounded-lg border border-zinc-700 transition-colors backdrop-blur-sm"
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 bg-stone-100/90 dark:bg-zinc-800/90 hover:bg-stone-200 dark:hover:bg-zinc-700 text-stone-500 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 text-xs font-medium rounded-lg border border-stone-300 dark:border-zinc-700 transition-colors backdrop-blur-sm"
                       title="Add a real book map image"
                     >
                       <span className="text-[10px]">🗺️</span> Add map image
@@ -251,36 +251,36 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
 
           {/* Location groups */}
           <div>
-            <p className="text-xs font-medium text-zinc-600 uppercase tracking-wider mb-3">
+            <p className="text-xs font-medium text-stone-400 dark:text-zinc-600 uppercase tracking-wider mb-3">
               Locations · {groups.filter(g => g.location !== 'Unknown').length} known
             </p>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
               {groups.map(({ location, characters: chars, description }) => (
                 <div
                   key={location}
-                  className={`bg-zinc-900 rounded-xl border border-zinc-800 overflow-hidden ${
+                  className={`bg-white dark:bg-zinc-900 rounded-xl border border-stone-200 dark:border-zinc-800 overflow-hidden ${
                     location === 'Unknown' ? 'opacity-50' : ''
                   }`}
                 >
-                  <div className="px-4 py-2.5 border-b border-zinc-800 bg-zinc-800/40">
+                  <div className="px-4 py-2.5 border-b border-stone-200 dark:border-zinc-800 bg-stone-100/40 dark:bg-zinc-800/40">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-zinc-600">{location === 'Unknown' ? '?' : '◎'}</span>
-                      <h3 className="font-medium text-zinc-300 text-sm">{location}</h3>
-                      <span className="ml-auto text-xs text-zinc-600">{chars.length}</span>
+                      <span className="text-xs text-stone-400 dark:text-zinc-600">{location === 'Unknown' ? '?' : '◎'}</span>
+                      <h3 className="font-medium text-stone-700 dark:text-zinc-300 text-sm">{location}</h3>
+                      <span className="ml-auto text-xs text-stone-400 dark:text-zinc-600">{chars.length}</span>
                     </div>
                     {description && (
-                      <p className="mt-1.5 text-xs text-zinc-500 leading-relaxed">{description}</p>
+                      <p className="mt-1.5 text-xs text-stone-400 dark:text-zinc-500 leading-relaxed">{description}</p>
                     )}
                   </div>
-                  <ul className="divide-y divide-zinc-800/50">
+                  <ul className="divide-y divide-stone-200/50 dark:divide-zinc-800/50">
                     {chars.map((c) => (
                       <li key={c.name} className="px-4 py-3 flex items-start gap-3">
                         <div className={`flex-shrink-0 w-7 h-7 rounded-md flex items-center justify-center text-xs font-bold ${nameColor(c.name)}`}>
                           {initials(c.name)}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-zinc-300 truncate">{c.name}</p>
-                          <p className="text-xs text-zinc-500 line-clamp-2 leading-relaxed">
+                          <p className="text-sm font-medium text-stone-700 dark:text-zinc-300 truncate">{c.name}</p>
+                          <p className="text-xs text-stone-400 dark:text-zinc-500 line-clamp-2 leading-relaxed">
                             {c.recentEvents || c.description.split('.')[0]}
                           </p>
                         </div>

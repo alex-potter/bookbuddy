@@ -3,14 +3,23 @@
 @tailwind utilities;
 
 html {
-  background-color: #09090b;
+  background-color: #fafaf9;
   height: 100%;
 }
 
+html.dark {
+  background-color: #09090b;
+}
+
 body {
+  background-color: #fafaf9;
+  color: #1c1917;
+  height: 100%;
+}
+
+html.dark body {
   background-color: #09090b;
   color: #f4f4f5;
-  height: 100%;
 }
 
 /* Remove 300ms tap delay on mobile */
@@ -26,8 +35,12 @@ button, a, label, [role="button"] {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #3f3f46;
+  background: #d6d3d1;
   border-radius: 2px;
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: #3f3f46;
 }
 
 .scrollbar-none {
