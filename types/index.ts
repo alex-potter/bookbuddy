@@ -66,6 +66,15 @@ export interface LocationPin {
   y: number;  // percentage of image height (0–100)
 }
 
+export interface QueueJob {
+  id: string;
+  title: string;
+  author: string;
+  status: 'waiting' | 'running' | 'done' | 'error';
+  progress?: { current: number; total: number; chapterTitle?: string };
+  error?: string;
+}
+
 export interface MapState {
   imageDataUrl: string;
   pins: Record<string, LocationPin>;  // location name → coordinates

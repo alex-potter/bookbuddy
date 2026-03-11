@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { parseEpub } from '@/lib/epub-parser';
-import type { AnalysisResult, Character, MapState, ParsedEbook, Snapshot } from '@/types';
+import type { AnalysisResult, Character, MapState, ParsedEbook, QueueJob, Snapshot } from '@/types';
 import CalibreLibrary from '@/components/CalibreLibrary';
 import CharacterCard from '@/components/CharacterCard';
 import ChapterSelector from '@/components/ChapterSelector';
@@ -14,6 +14,7 @@ import GithubLibrary from '@/components/GithubLibrary';
 import UploadZone from '@/components/UploadZone';
 import { normalizeTitle } from '@/lib/normalize-title';
 import { saveChapters, loadChapters, deleteChapters } from '@/lib/chapter-storage';
+import ProcessingQueue from '@/components/ProcessingQueue';
 
 type SortKey = 'importance' | 'name' | 'status';
 type MainTab = 'characters' | 'locations' | 'map';
@@ -253,6 +254,12 @@ export default function Home() {
   const rebuildCancelRef = useRef(false);
   const analyzeCancelRef = useRef(false);
 
+  const [queue, setQueue] = useState<QueueJob[]>([]);
+  const queueCancelRef = useRef(false);
+  const queueRunningRef = useRef(false);
+  // Stable ref to the active book so the queue processor doesn't capture a stale closure
+  const bookRef = useRef<ParsedEbook | null>(null);
+
   const [excludedBooks, setExcludedBooks] = useState<Set<number>>(new Set());
   const [excludedChapters, setExcludedChapters] = useState<Set<number>>(new Set());
   const [mapState, setMapState] = useState<MapState | null>(null);
@@ -340,6 +347,96 @@ export default function Home() {
 
   const storedRef = useRef<StoredBookState | null>(null);
   const seriesBaseRef = useRef<AnalysisResult | null>(null);
+
+  // Keep bookRef in sync so the queue processor can read the active book without stale closures
+  useEffect(() => { bookRef.current = book; }, [book]);
+
+  // Queue processor: runs one job at a time, saving results to localStorage
+  useEffect(() => {
+    if (queueRunningRef.current) return;
+    const job = queue.find((j) => j.status === 'waiting');
+    if (!job) return;
+
+    queueRunningRef.current = true;
+    queueCancelRef.current = false;
+    const { id, title, author } = job;
+    setQueue((q) => q.map((j) => j.id === id ? { ...j, status: 'running' as const } : j));
+
+    async function run() {
+      try {
+        const stored = loadStored(title, author);
+        if (!stored?.bookMeta) throw new Error('No book metadata — open the book first');
+
+        const entries = await loadChapters(title, author);
+        if (!entries?.length) throw new Error('EPUB text not available — re-upload the file');
+        const textMap = new Map(entries.map(({ id: cid, text }) => [cid, text]));
+
+        const chapters = stored.bookMeta.chapters.map((ch) => ({ ...ch, text: textMap.get(ch.id) ?? '' }));
+        const startIndex = stored.lastAnalyzedIndex >= 0 ? stored.lastAnalyzedIndex + 1 : 0;
+        const toIndex = chapters.length - 1;
+        const total = toIndex - startIndex + 1;
+
+        if (total <= 0) {
+          setQueue((q) => q.map((j) => j.id === id ? { ...j, status: 'done' as const } : j));
+          return;
+        }
+
+        let accumulated: AnalysisResult | null = stored.lastAnalyzedIndex >= 0 ? stored.result : null;
+        let snapshots = [...(stored.snapshots ?? [])];
+        const excludedBookSet = new Set(stored.excludedBooks ?? []);
+        const excludedChapterSet = new Set(stored.excludedChapters ?? []);
+        let latestStored: StoredBookState = { ...stored };
+
+        for (let i = startIndex; i <= toIndex; i++) {
+          if (queueCancelRef.current) {
+            setQueue((q) => q.map((j) => j.id === id ? { ...j, status: 'waiting' as const, progress: undefined } : j));
+            return;
+          }
+          setQueue((q) => q.map((j) => j.id === id
+            ? { ...j, progress: { current: i - startIndex + 1, total, chapterTitle: chapters[i]?.title } }
+            : j));
+
+          const ch = chapters[i];
+          if (ch.bookIndex !== undefined && excludedBookSet.has(ch.bookIndex)) continue;
+          if (excludedChapterSet.has(i) || isFrontMatter(ch)) {
+            if (accumulated) {
+              snapshots = upsertSnapshot(snapshots, i, accumulated);
+              latestStored = { ...latestStored, lastAnalyzedIndex: i, result: accumulated, snapshots };
+              saveStored(title, author, latestStored);
+              if (bookRef.current?.title === title && bookRef.current?.author === author) {
+                storedRef.current = latestStored;
+              }
+            }
+            continue;
+          }
+
+          const { result: chResult, model: chModel } = await analyzeChapter(title, author, { title: ch.title, text: ch.text }, accumulated);
+          accumulated = chResult;
+          snapshots = upsertSnapshot(snapshots, i, accumulated, chModel, APP_VERSION);
+          latestStored = { ...latestStored, lastAnalyzedIndex: i, result: accumulated, snapshots };
+          saveStored(title, author, latestStored);
+
+          // If this is the active book, update the live view too
+          if (bookRef.current?.title === title && bookRef.current?.author === author) {
+            storedRef.current = latestStored;
+            setResult(accumulated);
+            setViewingSnapshotIndex(null);
+          }
+        }
+
+        setQueue((q) => q.map((j) => j.id === id ? { ...j, status: 'done' as const, progress: undefined } : j));
+      } catch (err) {
+        setQueue((q) => q.map((j) => j.id === id
+          ? { ...j, status: 'error' as const, error: err instanceof Error ? err.message : 'Failed', progress: undefined }
+          : j));
+      } finally {
+        queueRunningRef.current = false;
+      }
+    }
+
+    run();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue]);
 
   function activateBook(parsed: ParsedEbook, initialStored: StoredBookState | null) {
     const bookMeta: BookMeta = {
@@ -692,13 +789,38 @@ export default function Home() {
                 </div>
               ) : (
                 <>
-                  <p className="text-xs font-medium text-stone-400 dark:text-zinc-600 uppercase tracking-wider mb-3">
-                    {savedBooks.length} saved book{savedBooks.length !== 1 ? 's' : ''}
-                  </p>
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-xs font-medium text-stone-400 dark:text-zinc-600 uppercase tracking-wider">
+                      {savedBooks.length} saved book{savedBooks.length !== 1 ? 's' : ''}
+                    </p>
+                    {savedBooks.some((e) => {
+                      const inQueue = queue.some((j) => j.title === e.title && j.author === e.author && (j.status === 'waiting' || j.status === 'running'));
+                      return !inQueue && (e.chapterCount == null || e.lastAnalyzedIndex < e.chapterCount - 1);
+                    }) && (
+                      <button
+                        onClick={() => {
+                          const toAdd = savedBooks.filter((e) => {
+                            const inQueue = queue.some((j) => j.title === e.title && j.author === e.author && (j.status === 'waiting' || j.status === 'running'));
+                            return !inQueue && (e.chapterCount == null || e.lastAnalyzedIndex < e.chapterCount - 1);
+                          });
+                          if (toAdd.length === 0) return;
+                          setQueue((q) => [
+                            ...q,
+                            ...toAdd.map((e) => ({ id: `${e.title}::${e.author}::${Date.now()}`, title: e.title, author: e.author, status: 'waiting' as const })),
+                          ]);
+                        }}
+                        className="text-xs text-stone-400 dark:text-zinc-600 hover:text-amber-400 transition-colors"
+                      >
+                        + Queue all unfinished
+                      </button>
+                    )}
+                  </div>
                   <ul className="space-y-2">
                     {savedBooks.map((entry) => {
                       const stored = loadStored(entry.title, entry.author);
                       const analyzed = entry.lastAnalyzedIndex >= 0;
+                      const queuedJob = queue.find((j) => j.title === entry.title && j.author === entry.author && (j.status === 'waiting' || j.status === 'running'));
+                      const fullyProcessed = entry.chapterCount != null && entry.lastAnalyzedIndex >= entry.chapterCount - 1;
                       return (
                         <li key={`${entry.title}::${entry.author}`} className="flex items-center gap-2">
                           <button
@@ -722,6 +844,23 @@ export default function Home() {
                               </div>
                             </div>
                           </button>
+                          {/* Queue button */}
+                          {!fullyProcessed && (
+                            <button
+                              onClick={() => {
+                                if (queuedJob) {
+                                  // Remove from queue
+                                  setQueue((q) => q.filter((j) => j.id !== queuedJob.id));
+                                } else {
+                                  setQueue((q) => [...q, { id: `${entry.title}::${entry.author}::${Date.now()}`, title: entry.title, author: entry.author, status: 'waiting' }]);
+                                }
+                              }}
+                              title={queuedJob ? 'Remove from queue' : 'Add to processing queue'}
+                              className={`flex-shrink-0 p-2 transition-colors text-sm ${queuedJob ? 'text-amber-400 hover:text-red-400' : 'text-stone-300 dark:text-zinc-700 hover:text-amber-400'}`}
+                            >
+                              {queuedJob ? (queuedJob.status === 'running' ? '◌' : '⏳') : '+'}
+                            </button>
+                          )}
                           {analyzed && (
                             <button
                               onClick={() => exportBook(entry.title, entry.author)}
@@ -751,6 +890,12 @@ export default function Home() {
             </div>
           )}
         </div>
+        <ProcessingQueue
+          jobs={queue}
+          onRemove={(id) => setQueue((q) => q.filter((j) => j.id !== id))}
+          onCancelCurrent={() => { queueCancelRef.current = true; }}
+          onClearDone={() => setQueue((q) => q.filter((j) => j.status !== 'done' && j.status !== 'error'))}
+        />
       </main>
     );
   }
@@ -1148,6 +1293,12 @@ export default function Home() {
           )}
         </div>
       </div>
+      <ProcessingQueue
+        jobs={queue}
+        onRemove={(id) => setQueue((q) => q.filter((j) => j.id !== id))}
+        onCancelCurrent={() => { queueCancelRef.current = true; }}
+        onClearDone={() => setQueue((q) => q.filter((j) => j.status !== 'done' && j.status !== 'error'))}
+      />
     </main>
   );
 }
