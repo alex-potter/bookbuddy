@@ -108,6 +108,16 @@ function posAlong(pts: [number, number][], t: number): [number, number] {
   return [pts[s][0] + (pts[s + 1][0] - pts[s][0]) * f, pts[s][1] + (pts[s + 1][1] - pts[s][1]) * f];
 }
 
+function findNearestNode(x: number, y: number, nodes: Node[]): Node {
+  let best = nodes[0];
+  let bestD = Infinity;
+  for (const n of nodes) {
+    const d = (n.x - x) ** 2 + (n.y - y) ** 2;
+    if (d < bestD) { bestD = d; best = n; }
+  }
+  return best;
+}
+
 /* ── Graph extraction (structure only — no character data) ────────────── */
 
 // Returns true only for real, concrete place names.
@@ -381,6 +391,8 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
     clusterX: number; clusterY: number; // final cluster slot (end of cluster phase)
   }>>(new Map());
   const charRafRef = useRef<number>(0);
+  type ActiveRoute = { x1: number; y1: number; x2: number; y2: number };
+  const [activeRoutes, setActiveRoutes] = useState<ActiveRoute[]>([]);
 
   // Rebuild graph structure when snapshots change (new chapters analyzed)
   useEffect(() => {
@@ -443,6 +455,18 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
     cancelAnimationFrame(charRafRef.current);
     if (trains.size === 0) return;
 
+    // Compute highlighted route segments (source node centre → dest node centre)
+    const routes: ActiveRoute[] = [];
+    for (const group of trains.values()) {
+      if (group.length === 0) continue;
+      const rep = group[0];
+      const srcNode = findNearestNode(rep.cur.x, rep.cur.y, graph.nodes);
+      const destNodeX = rep.target.nx ?? rep.target.x;
+      const destNodeY = rep.target.ny ?? rep.target.y;
+      routes.push({ x1: srcNode.x, y1: srcNode.y, x2: destNodeX, y2: destNodeY });
+    }
+    setActiveRoutes(routes);
+
     const STAGGER_MS = 75; // gap between each character in the train
     for (const group of trains.values()) {
       group.sort((a, b) => a.name.localeCompare(b.name)); // stable train order
@@ -487,6 +511,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
       }
       displayPosRef.current = pos;
       setDisplayPos(new Map(pos));
+      if (!anyActive) setActiveRoutes([]);
       if (anyActive) charRafRef.current = requestAnimationFrame(animate);
     }
     charRafRef.current = requestAnimationFrame(animate);
@@ -642,6 +667,20 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
           );
         })}
       </g>
+
+      {/* Active train route highlights — bright overlay on paths while characters travel */}
+      {activeRoutes.map(({ x1, y1, x2, y2 }, i) => (
+        <path
+          key={i}
+          d={subwayPath(x1, y1, x2, y2)}
+          fill="none"
+          stroke="rgba(255,255,255,0.55)"
+          strokeWidth={7}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          filter="url(#sm-glow)"
+        />
+      ))}
 
       {/* Station circles — rendered before labels so labels always appear on top */}
       {nodeData.map(({ n, primaryColor, r }) => (
