@@ -81,7 +81,7 @@ function ChapterItem({
 
   const color = isExcluded ? 'text-stone-200 dark:text-zinc-800 cursor-default'
     : isRebuildingThis ? 'bg-violet-500/10 text-violet-400'
-    : isCurrent ? 'bg-stone-100 dark:bg-zinc-800 text-stone-900 dark:text-zinc-100 font-medium'
+    : isCurrent ? 'bg-stone-300 dark:bg-zinc-800 text-stone-900 dark:text-zinc-100 font-semibold'
     : hasSnapshot ? 'text-amber-600/70 hover:bg-amber-950/30 hover:text-amber-500'
     : isAnalyzed || isLastAnalyzed ? 'text-stone-500 dark:text-zinc-400 hover:bg-stone-100/60 dark:hover:bg-zinc-800/60'
     : globalIndex <= frontier ? 'text-stone-400 dark:text-zinc-500 hover:bg-stone-100/60 dark:hover:bg-zinc-800/60'
