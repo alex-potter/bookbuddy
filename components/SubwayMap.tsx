@@ -8,11 +8,20 @@ import { withResolvedLocations } from '@/lib/resolve-locations';
 
 interface Node {
   id: string;
-  arc?: string;  // narrative arc zone this location belongs to
+  arc?: string;     // narrative arc this location belongs to
+  anchorX: number;  // target X derived from first-appearance chapter
+  anchorY: number;  // target Y = centre of arc lane
   x: number;
   y: number;
   vx: number;
   vy: number;
+}
+
+interface ArcLane {
+  name: string;     // raw arc string (empty string = unlabelled catch-all)
+  label: string;    // display label
+  y: number;        // centre Y of the band
+  height: number;   // pixel height of the band
 }
 
 interface Edge {
@@ -47,6 +56,11 @@ const W = 1040;
 const H = 580;
 const CX = W / 2;
 const CY = H / 2;
+
+const LANE_MARGIN_LEFT  = 108;
+const LANE_MARGIN_RIGHT =  24;
+const LANE_MARGIN_TOP   =  30;
+const LANE_MARGIN_BOT   =  30;
 
 const AVT_R = 7;
 const AVT_GAP = 2;
@@ -132,17 +146,23 @@ function isRealLocation(loc: string | undefined): loc is string {
   return t.length > 0 && !FAKE_LOC_RE.test(t);
 }
 
-function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[] } {
+function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[]; arcLanes: ArcLane[]; maxChapter: number } {
   const sorted = [...snapshots].sort((a, b) => a.index - b.index);
-  if (sorted.length === 0) return { nodes: [], edges: [] };
+  if (sorted.length === 0) return { nodes: [], edges: [], arcLanes: [], maxChapter: 0 };
 
-  // Collect all real location names ever seen, plus arc tags from location metadata
+  const maxChapter = sorted[sorted.length - 1].index;
+
+  // Collect all real location names, arc labels, and first-appearance chapter per location
   const allLocs = new Set<string>();
-  const locArc = new Map<string, string>(); // location name → narrative arc label
+  const locArc = new Map<string, string>();
+  const locFirstChapter = new Map<string, number>();
   for (const snap of sorted) {
     for (const c of snap.result.characters) {
       const loc = c.currentLocation?.trim();
-      if (isRealLocation(loc)) allLocs.add(loc);
+      if (isRealLocation(loc)) {
+        allLocs.add(loc);
+        if (!locFirstChapter.has(loc)) locFirstChapter.set(loc, snap.index);
+      }
     }
     for (const l of snap.result.locations ?? []) {
       const name = l.name?.trim();
@@ -162,7 +182,7 @@ function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[] } {
       const newLoc = c.currentLocation?.trim();
       const oldLoc = prevMap.get(c.name);
       if (!isRealLocation(newLoc) || !isRealLocation(oldLoc) || newLoc === oldLoc) continue;
-      const key = `${oldLoc}\x00${newLoc}`; // directed — no sort
+      const key = `${oldLoc}\x00${newLoc}`;
       dirCounts.set(key, (dirCounts.get(key) ?? 0) + 1);
     }
   }
@@ -173,7 +193,6 @@ function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[] } {
   sortedDir.forEach(([key], i) => dirColor.set(key, LINE_COLORS[i % LINE_COLORS.length]));
 
   // Collapse directed edges into undirected pairs (for physics + rendering)
-  // Each undirected edge stores per-endpoint colors to draw as a gradient
   const undirMap = new Map<string, { source: string; target: string; weight: number; sourceColor: string; targetColor: string }>();
   for (const [key, count] of dirCounts) {
     const [a, b] = key.split('\x00');
@@ -191,26 +210,59 @@ function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[] } {
     }
   }
 
-  const edges: Edge[] = [...undirMap.values()].map((e) => ({
-    ...e,
-    color: e.sourceColor,
-  }));
+  const edges: Edge[] = [...undirMap.values()].map((e) => ({ ...e, color: e.sourceColor }));
 
   // Nodes = locations with edges + any location seen in any snapshot
   const nodeIds = new Set<string>();
   for (const e of edges) { nodeIds.add(e.source); nodeIds.add(e.target); }
   for (const loc of allLocs) nodeIds.add(loc);
 
-  const nodes: Node[] = Array.from(nodeIds).map((id) => ({
-    id,
-    arc: locArc.get(id),
-    x: CX + (Math.random() - 0.5) * 700,
-    y: CY + (Math.random() - 0.5) * 450,
-    vx: 0,
-    vy: 0,
-  }));
+  // Build arc lanes sorted by earliest first-appearance among each arc's locations
+  const arcFirstChapter = new Map<string, number>();
+  for (const [loc, arc] of locArc) {
+    const ch = locFirstChapter.get(loc) ?? 0;
+    const prev = arcFirstChapter.get(arc);
+    if (prev === undefined || ch < prev) arcFirstChapter.set(arc, ch);
+  }
+  const namedArcs = [...arcFirstChapter.entries()]
+    .sort((a, b) => a[1] - b[1])
+    .map(([arc]) => arc);
+  const hasUnlabelled = [...nodeIds].some((id) => !locArc.has(id));
+  // Unlabelled locations go in a catch-all lane (empty string key) at the bottom
+  const allArcNames = hasUnlabelled ? [...namedArcs, ''] : namedArcs;
+  const totalLanes = Math.max(allArcNames.length, 1);
+  const laneH = (H - LANE_MARGIN_TOP - LANE_MARGIN_BOT) / totalLanes;
 
-  return { nodes, edges };
+  const arcLanes: ArcLane[] = allArcNames.map((name, i) => ({
+    name,
+    label: name || 'Other',
+    y: LANE_MARGIN_TOP + laneH * i + laneH / 2,
+    height: laneH,
+  }));
+  const laneByArc = new Map(arcLanes.map((l) => [l.name, l]));
+
+  // X mapping: first-appearance chapter → X position
+  const usableW = W - LANE_MARGIN_LEFT - LANE_MARGIN_RIGHT;
+
+  const nodes: Node[] = Array.from(nodeIds).map((id) => {
+    const arc = locArc.get(id) ?? '';
+    const lane = laneByArc.get(arc) ?? arcLanes[arcLanes.length - 1];
+    const ch = locFirstChapter.get(id) ?? 0;
+    const anchorX = LANE_MARGIN_LEFT + (maxChapter > 0 ? (ch / maxChapter) * usableW : usableW / 2);
+    const anchorY = lane.y;
+    return {
+      id,
+      arc: locArc.get(id),
+      anchorX,
+      anchorY,
+      x: anchorX + (Math.random() - 0.5) * 60,
+      y: anchorY + (Math.random() - 0.5) * (laneH * 0.5),
+      vx: 0,
+      vy: 0,
+    };
+  });
+
+  return { nodes, edges, arcLanes, maxChapter };
 }
 
 /* ── Physics ──────────────────────────────────────────────────────────── */
@@ -219,9 +271,8 @@ const REPULSION = 10000;
 const SPRING_K = 0.04;
 const SPRING_REST = 180;
 const DAMPING = 0.80;
-const GRAVITY = 0.006;
-const ARC_ZONE_R = 230;   // radius from canvas centre to arc zone anchors
-const ARC_GRAVITY = 0.020; // attraction strength toward arc zone anchor
+const ANCHOR_GRAVITY_Y = 0.08;   // strong: keeps nodes within their arc lane
+const ANCHOR_GRAVITY_X = 0.010;  // weak: gentle pull toward first-appearance X
 
 function tick(nodes: Node[], edges: Edge[]): Node[] {
   const next = nodes.map((n) => ({ ...n }));
@@ -252,28 +303,16 @@ function tick(nodes: Node[], edges: Edge[]): Node[] {
     next[ti].vx -= fx; next[ti].vy -= fy;
   }
 
-  // Arc zone clustering — pull each node toward its narrative arc's zone anchor.
-  // Anchors are evenly spaced on a circle; stable because sorted alphabetically.
-  const arcNames = [...new Set(next.map((n) => n.arc).filter(Boolean) as string[])].sort();
-  if (arcNames.length > 1) {
-    const arcAnchor = new Map(arcNames.map((arc, i) => {
-      const angle = (i / arcNames.length) * 2 * Math.PI - Math.PI / 2;
-      return [arc, { x: CX + Math.cos(angle) * ARC_ZONE_R, y: CY + Math.sin(angle) * ARC_ZONE_R }];
-    }));
-    for (const n of next) {
-      const anchor = n.arc ? arcAnchor.get(n.arc) : undefined;
-      if (!anchor) continue;
-      n.vx += (anchor.x - n.x) * ARC_GRAVITY;
-      n.vy += (anchor.y - n.y) * ARC_GRAVITY;
-    }
+  // Anchor gravity — strong Y pull keeps node in its arc lane; weak X pull toward first-appearance position
+  for (const n of next) {
+    n.vx += (n.anchorX - n.x) * ANCHOR_GRAVITY_X;
+    n.vy += (n.anchorY - n.y) * ANCHOR_GRAVITY_Y;
   }
 
   for (const n of next) {
-    n.vx += (CX - n.x) * GRAVITY;
-    n.vy += (CY - n.y) * GRAVITY;
     n.vx *= DAMPING; n.vy *= DAMPING;
-    n.x = Math.max(110, Math.min(W - 110, n.x + n.vx));
-    n.y = Math.max(70, Math.min(H - 70, n.y + n.vy));
+    n.x = Math.max(LANE_MARGIN_LEFT - 20, Math.min(W - LANE_MARGIN_RIGHT + 20, n.x + n.vx));
+    n.y = Math.max(LANE_MARGIN_TOP,       Math.min(H - LANE_MARGIN_BOT,        n.y + n.vy));
   }
 
   return next;
@@ -438,7 +477,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [], onCharact
     obs.observe(document.documentElement, { attributeFilter: ['class'] });
     return () => obs.disconnect();
   }, []);
-  const [graph, setGraph] = useState<{ nodes: Node[]; edges: Edge[] }>(() => buildGraph(snapshots));
+  const [graph, setGraph] = useState<{ nodes: Node[]; edges: Edge[]; arcLanes: ArcLane[]; maxChapter: number }>(() => buildGraph(snapshots));
   const [settled, setSettled] = useState(false);
   const frameRef = useRef<number>(0);
 
@@ -473,7 +512,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [], onCharact
         const maxV = next.reduce((m, n) => Math.max(m, Math.abs(n.vx) + Math.abs(n.vy)), 0);
         if (maxV < 0.08 || count >= MAX) setSettled(true);
         count++;
-        return { nodes: next, edges: prev.edges };
+        return { nodes: next, edges: prev.edges, arcLanes: prev.arcLanes, maxChapter: prev.maxChapter };
       });
       if (count < MAX) frameRef.current = requestAnimationFrame(loop);
     }
@@ -605,14 +644,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [], onCharact
   const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
   const maxW = Math.max(...graph.edges.map((e) => e.weight), 1);
 
-  // Arc zone anchors — same computation as tick() so the labels land at zone centres
-  const arcNames = [...new Set(graph.nodes.map((n) => n.arc).filter(Boolean) as string[])].sort();
-  const arcZoneAnchors = arcNames.length > 1
-    ? arcNames.map((arc, i) => {
-        const angle = (i / arcNames.length) * 2 * Math.PI - Math.PI / 2;
-        return { arc, x: CX + Math.cos(angle) * ARC_ZONE_R, y: CY + Math.sin(angle) * ARC_ZONE_R };
-      })
-    : [];
+  const { arcLanes, maxChapter } = graph;
 
   // ── Phase 1: collision-aware label placement ──────────────────────────
   // Nodes with more connections get label placement priority.
@@ -748,21 +780,65 @@ export default function SubwayMap({ snapshots, currentCharacters = [], onCharact
         })}
       </defs>
 
-      {/* Arc zone backgrounds — rendered first so everything else sits on top */}
-      {arcZoneAnchors.map(({ arc, x, y }) => (
-        <g key={`zone-${arc}`}>
-          <circle cx={x} cy={y} r={160} fill={zoneCircleFill} opacity={0.025} />
+      {/* Arc swimlane bands — rendered first so everything else sits on top */}
+      {arcLanes.map((lane, i) => (
+        <g key={`lane-${lane.name || '_other'}`}>
+          {/* Alternating band shading */}
+          {i % 2 === 0 && (
+            <rect
+              x={LANE_MARGIN_LEFT - 4} y={lane.y - lane.height / 2}
+              width={W - LANE_MARGIN_LEFT - LANE_MARGIN_RIGHT + 4} height={lane.height}
+              fill={zoneCircleFill} opacity={0.018}
+            />
+          )}
+          {/* Divider line between lanes */}
+          {i > 0 && (
+            <line
+              x1={LANE_MARGIN_LEFT - 4} y1={lane.y - lane.height / 2}
+              x2={W - LANE_MARGIN_RIGHT} y2={lane.y - lane.height / 2}
+              stroke={zoneCircleFill} strokeWidth={0.5} opacity={0.1}
+            />
+          )}
+          {/* Arc label — left margin, vertically centred in band */}
           <text
-            x={x} y={y}
-            textAnchor="middle" dominantBaseline="central"
-            fontSize={11} fontWeight="700" letterSpacing="0.08em"
-            fill={zoneCircleFill} opacity={0.1}
+            x={LANE_MARGIN_LEFT - 8} y={lane.y}
+            textAnchor="end" dominantBaseline="central"
+            fontSize={8.5} fontWeight="700" letterSpacing="0.07em"
+            fill={zoneCircleFill} opacity={0.28}
             style={{ textTransform: 'uppercase', userSelect: 'none' }}
           >
-            {arc.toUpperCase()}
+            {lane.label.toUpperCase()}
           </text>
         </g>
       ))}
+
+      {/* Time axis — subtle chapter markers along the top */}
+      {maxChapter > 0 && (() => {
+        const usableW = W - LANE_MARGIN_LEFT - LANE_MARGIN_RIGHT;
+        const tickCount = Math.min(maxChapter + 1, 8);
+        const ticks = Array.from({ length: tickCount }, (_, i) =>
+          Math.round((i / Math.max(tickCount - 1, 1)) * maxChapter),
+        );
+        return (
+          <g>
+            {ticks.map((ch) => {
+              const tx = LANE_MARGIN_LEFT + (ch / maxChapter) * usableW;
+              return (
+                <g key={ch}>
+                  <line x1={tx} y1={LANE_MARGIN_TOP - 6} x2={tx} y2={LANE_MARGIN_TOP - 2}
+                    stroke={zoneCircleFill} strokeWidth={0.8} opacity={0.18} />
+                  <text x={tx} y={LANE_MARGIN_TOP - 8}
+                    textAnchor="middle" dominantBaseline="auto"
+                    fontSize={7} fill={zoneCircleFill} opacity={0.22}
+                    style={{ userSelect: 'none' }}>
+                    Ch.{ch + 1}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        );
+      })()}
 
       {/* Transit lines */}
       <g>
