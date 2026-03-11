@@ -13,6 +13,7 @@ import SettingsModal from '@/components/SettingsModal';
 import GithubLibrary from '@/components/GithubLibrary';
 import UploadZone from '@/components/UploadZone';
 import { normalizeTitle } from '@/lib/normalize-title';
+import { saveChapters, loadChapters, deleteChapters } from '@/lib/chapter-storage';
 
 type SortKey = 'importance' | 'name' | 'status';
 type MainTab = 'characters' | 'locations' | 'map';
@@ -72,6 +73,7 @@ function saveStored(title: string, author: string, state: StoredBookState) {
 function deleteStored(title: string, author: string) {
   localStorage.removeItem(storageKey(title, author));
   localStorage.removeItem(mapStorageKey(title, author));
+  deleteChapters(title, author).catch(() => {});
 }
 
 function mapStorageKey(title: string, author: string) {
@@ -349,6 +351,11 @@ export default function Home() {
       : { lastAnalyzedIndex: -2, result: { characters: [], summary: '' }, snapshots: [], bookMeta };
     storedRef.current = stateToSave;
     saveStored(parsed.title, parsed.author, stateToSave);
+    // Persist chapter texts in IndexedDB so re-upload is not required next session
+    const chaptersWithText = parsed.chapters.filter((ch) => ch.text).map(({ id, text }) => ({ id, text }));
+    if (chaptersWithText.length > 0) {
+      saveChapters(parsed.title, parsed.author, chaptersWithText).catch(() => {});
+    }
     seriesBaseRef.current = initialStored?.lastAnalyzedIndex === -1 ? initialStored.result : null;
     setExcludedBooks(initialStored?.excludedBooks ? new Set(initialStored.excludedBooks) : new Set());
     setExcludedChapters(initialStored?.excludedChapters ? new Set(initialStored.excludedChapters) : new Set());
@@ -364,14 +371,22 @@ export default function Home() {
     }
   }
 
-  function loadBookFromMeta(title: string, author: string) {
+  async function loadBookFromMeta(title: string, author: string) {
     const stored = loadStored(title, author);
     if (!stored) return;
+    // Try to restore chapter texts from IndexedDB
+    let textMap: Map<string, string> | null = null;
+    try {
+      const entries = await loadChapters(title, author);
+      if (entries && entries.length > 0) {
+        textMap = new Map(entries.map(({ id, text }) => [id, text]));
+      }
+    } catch { /* IndexedDB unavailable — proceed without text */ }
     const parsed: ParsedEbook = stored.bookMeta
       ? {
           title,
           author,
-          chapters: stored.bookMeta.chapters.map((ch) => ({ ...ch, text: '' })),
+          chapters: stored.bookMeta.chapters.map((ch) => ({ ...ch, text: textMap?.get(ch.id) ?? '' })),
           books: stored.bookMeta.books,
         }
       : {
