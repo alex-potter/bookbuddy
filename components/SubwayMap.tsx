@@ -40,8 +40,8 @@ const STATUS_HEX: Record<Character['status'], string> = {
   uncertain: '#f59e0b',
 };
 
-const W = 780;
-const H = 420;
+const W = 1040;
+const H = 580;
 const CX = W / 2;
 const CY = H / 2;
 
@@ -123,8 +123,8 @@ function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[] } {
 
   const nodes: Node[] = Array.from(nodeIds).map((id) => ({
     id,
-    x: CX + (Math.random() - 0.5) * 400,
-    y: CY + (Math.random() - 0.5) * 280,
+    x: CX + (Math.random() - 0.5) * 700,
+    y: CY + (Math.random() - 0.5) * 450,
     vx: 0,
     vy: 0,
   }));
@@ -173,8 +173,8 @@ function tick(nodes: Node[], edges: Edge[]): Node[] {
     n.vx += (CX - n.x) * GRAVITY;
     n.vy += (CY - n.y) * GRAVITY;
     n.vx *= DAMPING; n.vy *= DAMPING;
-    n.x = Math.max(70, Math.min(W - 70, n.x + n.vx));
-    n.y = Math.max(50, Math.min(H - 50, n.y + n.vy));
+    n.x = Math.max(110, Math.min(W - 110, n.x + n.vx));
+    n.y = Math.max(70, Math.min(H - 70, n.y + n.vy));
   }
 
   return next;
@@ -182,9 +182,14 @@ function tick(nodes: Node[], edges: Edge[]): Node[] {
 
 /* ── Label placement ──────────────────────────────────────────────────── */
 
-// 16 candidates at 22.5° intervals for finer granularity
-const LABEL_CANDIDATES = Array.from({ length: 16 }, (_, i) => (i * 22.5 * Math.PI) / 180);
+// 32 candidates at 11.25° intervals for fine-grained placement
+const LABEL_CANDIDATES = Array.from({ length: 32 }, (_, i) => (i * 11.25 * Math.PI) / 180);
 const NEARBY_RADIUS = 200; // px — nearby nodes also act as label obstacles
+
+const LABEL_R_OFFSET = 16;  // px from node edge to label anchor
+const LABEL_FONT = 9.5;
+const LABEL_CHAR_W = LABEL_FONT * 0.57; // approximate SVG text char width
+const TRUNC_LEN = 28;
 
 function angularDist(a: number, b: number): number {
   const d = Math.abs(a - b) % (2 * Math.PI);
@@ -220,7 +225,6 @@ function pickLabelAngle(node: Node, edges: Edge[], allNodes: Node[]): number {
 
   const obstacles: number[] = [...edgeAngles];
   for (const { angle, weight } of nearbyAngles) {
-    // Expand nearby obstacles: repeat them proportional to weight so they count more when closer
     const copies = Math.round(1 + weight * 3);
     for (let k = 0; k < copies; k++) obstacles.push(angle);
   }
@@ -234,6 +238,44 @@ function pickLabelAngle(node: Node, edges: Edge[], allNodes: Node[]): number {
     if (score > bestScore) { bestScore = score; bestAngle = cand; }
   }
   return bestAngle;
+}
+
+/* ── Label bbox helpers ───────────────────────────────────────────────── */
+
+type LabelInfo = {
+  lx: number; ly: number;
+  anchor: 'start' | 'end' | 'middle';
+  baseline: 'hanging' | 'auto' | 'central';
+};
+
+function angleToLabel(node: Node, r: number, angle: number): LabelInfo {
+  const lx = node.x + Math.cos(angle) * (r + LABEL_R_OFFSET);
+  const ly = node.y + Math.sin(angle) * (r + LABEL_R_OFFSET);
+  const anchor = (Math.cos(angle) > 0.3 ? 'start' : Math.cos(angle) < -0.3 ? 'end' : 'middle') as 'start' | 'end' | 'middle';
+  const baseline = (Math.sin(angle) > 0.3 ? 'hanging' : Math.sin(angle) < -0.3 ? 'auto' : 'central') as 'hanging' | 'auto' | 'central';
+  return { lx, ly, anchor, baseline };
+}
+
+function labelBbox(info: LabelInfo, textLen: number) {
+  const w = textLen * LABEL_CHAR_W + 4;
+  const h = LABEL_FONT + 4;
+  let { lx: x, ly: y } = info;
+  if (info.anchor === 'end') x -= w;
+  else if (info.anchor === 'middle') x -= w / 2;
+  if (info.baseline === 'auto') y -= h;
+  else if (info.baseline === 'central') y -= h / 2;
+  return { x, y, w, h };
+}
+
+function bboxOverlap(
+  a: { x: number; y: number; w: number; h: number },
+  b: { x: number; y: number; w: number; h: number },
+) {
+  return !(a.x + a.w < b.x || b.x + b.w < a.x || a.y + a.h < b.y || b.y + b.h < a.y);
+}
+
+function truncLabel(id: string) {
+  return id.length > TRUNC_LEN ? id.slice(0, TRUNC_LEN - 1) + '…' : id;
 }
 
 /* ── Subway routing ───────────────────────────────────────────────────── */
@@ -307,7 +349,44 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
   const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
   const maxW = Math.max(...graph.edges.map((e) => e.weight), 1);
 
-  // Pre-compute per-node render data AND absolute avatar positions in one pass.
+  // ── Phase 1: collision-aware label placement ──────────────────────────
+  // Nodes with more connections get label placement priority.
+  const nodeDegree = new Map<string, number>();
+  for (const e of graph.edges) {
+    nodeDegree.set(e.source, (nodeDegree.get(e.source) ?? 0) + 1);
+    nodeDegree.set(e.target, (nodeDegree.get(e.target) ?? 0) + 1);
+  }
+  const sortedForLabels = [...graph.nodes].sort(
+    (a, b) => (nodeDegree.get(b.id) ?? 0) - (nodeDegree.get(a.id) ?? 0),
+  );
+
+  const placedBoxes: Array<{ x: number; y: number; w: number; h: number }> = [];
+  const resolvedAngles = new Map<string, number>();
+
+  for (const n of sortedForLabels) {
+    const r = (liveByLoc.get(n.id)?.length ?? 0) > 0 ? 9 : 6;
+    const text = truncLabel(n.id);
+    const preferred = pickLabelAngle(n, graph.edges, graph.nodes);
+    // Try candidates closest to preferred first; pick the one with fewest bbox overlaps
+    const ordered = [...LABEL_CANDIDATES].sort((a, b) => angularDist(a, preferred) - angularDist(b, preferred));
+    let chosenAngle = preferred;
+    let bestOverlaps = Infinity;
+    for (const angle of ordered) {
+      const info = angleToLabel(n, r, angle);
+      const box = labelBbox(info, text.length);
+      const oc = placedBoxes.filter((b) => bboxOverlap(box, b)).length;
+      if (oc < bestOverlaps) {
+        bestOverlaps = oc;
+        chosenAngle = angle;
+        if (oc === 0) break;
+      }
+    }
+    const chosen = angleToLabel(n, r, chosenAngle);
+    placedBoxes.push(labelBbox(chosen, text.length));
+    resolvedAngles.set(n.id, chosenAngle);
+  }
+
+  // ── Phase 2: build render data using resolved label angles ─────────────
   // Avatars are rendered as a flat list (keyed by char name) so the same DOM element
   // persists across snapshot changes — CSS transition then animates the position change.
   const charPositions = new Map<string, { x: number; y: number; status: CharAvatar['status'] }>();
@@ -318,12 +397,10 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
     const primaryColor = colors[0] ?? '#71717a';
     const chars = liveByLoc.get(n.id) ?? [];
     const r = chars.length > 0 ? 9 : 6;
+    const text = truncLabel(n.id);
 
-    const labelAngle = pickLabelAngle(n, graph.edges, graph.nodes);
-    const labelX = n.x + Math.cos(labelAngle) * (r + 15);
-    const labelY = n.y + Math.sin(labelAngle) * (r + 15);
-    const labelAnchor = (Math.cos(labelAngle) > 0.3 ? 'start' : Math.cos(labelAngle) < -0.3 ? 'end' : 'middle') as 'start' | 'end' | 'middle';
-    const labelBaseline = (Math.sin(labelAngle) > 0.3 ? 'hanging' : Math.sin(labelAngle) < -0.3 ? 'auto' : 'central') as 'hanging' | 'auto' | 'central';
+    const labelAngle = resolvedAngles.get(n.id) ?? pickLabelAngle(n, graph.edges, graph.nodes);
+    const { lx: labelX, ly: labelY, anchor: labelAnchor, baseline: labelBaseline } = angleToLabel(n, r, labelAngle);
 
     // Avatar cluster on opposite side of label
     const charAngle = labelAngle + Math.PI;
@@ -341,7 +418,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
       overflowBadges.push({ x: positions[MAX_SHOW].x, y: positions[MAX_SHOW].y, count: extra });
     }
 
-    return { n, primaryColor, r, labelX, labelY, labelAnchor, labelBaseline };
+    return { n, primaryColor, r, text, labelX, labelY, labelAnchor, labelBaseline };
   });
 
   // Grid as a CSS background so it covers the full container, not just the SVG viewBox
@@ -390,7 +467,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
       </g>
 
       {/* Station markers + labels (no avatars here) */}
-      {nodeData.map(({ n, primaryColor, r, labelX, labelY, labelAnchor, labelBaseline }) => (
+      {nodeData.map(({ n, primaryColor, r, text, labelX, labelY, labelAnchor, labelBaseline }) => (
         <g key={n.id}>
           <g filter="url(#sm-glow)">
             <circle cx={n.x} cy={n.y} r={r + 3} fill={primaryColor} opacity={0.2} />
@@ -402,7 +479,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
             fontSize="9.5" fontWeight="600" fill="#e4e4e7"
             style={{ textShadow: '0 1px 4px #000, 0 0 8px #000' }}
           >
-            {n.id.length > 22 ? n.id.slice(0, 20) + '…' : n.id}
+            {text}
           </text>
         </g>
       ))}
