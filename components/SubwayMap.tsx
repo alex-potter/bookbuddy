@@ -843,15 +843,27 @@ export default function SubwayMap({ snapshots, currentCharacters = [], onCharact
             />
           )}
           {/* Arc label — left margin, vertically centred in band */}
-          <text
-            x={LANE_MARGIN_LEFT - 8} y={lane.y}
-            textAnchor="end" dominantBaseline="central"
-            fontSize={8.5} fontWeight="700" letterSpacing="0.07em"
-            fill={zoneCircleFill} opacity={0.28}
-            style={{ textTransform: 'uppercase', userSelect: 'none' }}
-          >
-            {lane.label.toUpperCase()}
-          </text>
+          {(() => {
+            const arcColor = lane.name ? LINE_COLORS[i % LINE_COLORS.length] : (isDark ? '#52525b' : '#a8a29e');
+            return (
+              <>
+                <line
+                  x1={LANE_MARGIN_LEFT - 4} y1={lane.y - lane.height / 2}
+                  x2={LANE_MARGIN_LEFT - 4} y2={lane.y + lane.height / 2}
+                  stroke={arcColor} strokeWidth={2} opacity={0.5}
+                />
+                <text
+                  x={LANE_MARGIN_LEFT - 10} y={lane.y}
+                  textAnchor="end" dominantBaseline="central"
+                  fontSize={9.5} fontWeight="700" letterSpacing="0.06em"
+                  fill={arcColor} opacity={0.85}
+                  style={{ userSelect: 'none' }}
+                >
+                  {lane.label.toUpperCase()}
+                </text>
+              </>
+            );
+          })()}
         </g>
       ))}
 
