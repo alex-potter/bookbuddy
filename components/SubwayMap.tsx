@@ -399,7 +399,13 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
     (a, b) => (nodeDegree.get(b.id) ?? 0) - (nodeDegree.get(a.id) ?? 0),
   );
 
-  const placedBoxes: Array<{ x: number; y: number; w: number; h: number }> = [];
+  // Pre-seed with node circle bboxes so labels won't be placed over any circle
+  const NODE_PAD = 4;
+  const placedBoxes: Array<{ x: number; y: number; w: number; h: number }> = graph.nodes.map((n) => {
+    const nr = (liveByLoc.get(n.id)?.length ?? 0) > 0 ? 9 : 6;
+    const half = nr + NODE_PAD;
+    return { x: n.x - half, y: n.y - half, w: half * 2, h: half * 2 };
+  });
   const resolvedAngles = new Map<string, number>();
 
   for (const n of sortedForLabels) {
@@ -505,26 +511,29 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
         })}
       </g>
 
-      {/* Station markers + labels (no avatars here) */}
-      {nodeData.map(({ n, primaryColor, r, lines, labelX, labelY, labelAnchor, labelBaseline }) => {
+      {/* Station circles — rendered before labels so labels always appear on top */}
+      {nodeData.map(({ n, primaryColor, r }) => (
+        <g key={n.id} filter="url(#sm-glow)">
+          <circle cx={n.x} cy={n.y} r={r + 3} fill={primaryColor} opacity={0.2} />
+          <circle cx={n.x} cy={n.y} r={r} fill="#18181b" stroke={primaryColor} strokeWidth={2.5} />
+        </g>
+      ))}
+
+      {/* Station labels — rendered after all circles so no circle obscures a label */}
+      {nodeData.map(({ n, lines, labelX, labelY, labelAnchor, labelBaseline }) => {
         const startY = blockTopY(labelY, labelBaseline, lines.length);
         return (
-          <g key={n.id}>
-            <g filter="url(#sm-glow)">
-              <circle cx={n.x} cy={n.y} r={r + 3} fill={primaryColor} opacity={0.2} />
-              <circle cx={n.x} cy={n.y} r={r} fill="#18181b" stroke={primaryColor} strokeWidth={2.5} />
-            </g>
-            <text
-              x={labelX} y={startY}
-              textAnchor={labelAnchor} dominantBaseline="hanging"
-              fontSize={LABEL_FONT} fontWeight="600" fill="#e4e4e7"
-              style={{ textShadow: '0 1px 4px #000, 0 0 8px #000' }}
-            >
-              {lines.map((line, i) => (
-                <tspan key={i} x={labelX} dy={i === 0 ? 0 : LINE_HEIGHT}>{line}</tspan>
-              ))}
-            </text>
-          </g>
+          <text
+            key={n.id}
+            x={labelX} y={startY}
+            textAnchor={labelAnchor} dominantBaseline="hanging"
+            fontSize={LABEL_FONT} fontWeight="600" fill="#e4e4e7"
+            style={{ textShadow: '0 1px 4px #000, 0 0 8px #000' }}
+          >
+            {lines.map((line, i) => (
+              <tspan key={i} x={labelX} dy={i === 0 ? 0 : LINE_HEIGHT}>{line}</tspan>
+            ))}
+          </text>
         );
       })}
 
