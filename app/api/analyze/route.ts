@@ -56,7 +56,7 @@ const SCHEMA = `{
   ],
   "locations": [
     {
-      "name": "Proper place name only — a city, station, planet, region, or named landmark (NOT a generic room, corridor, or activity description)",
+      "name": "Broad canonical place name — city, castle, region, planet, ship (NOT a generic room, corridor, or sub-location). Prefer the containing location over sub-locations.",
       "arc": "Short narrative arc label (2–4 words max) grouping related locations into the same broad storyline thread. Aim for 3–5 arc labels total for the whole book — broad strokes like 'The Journey', 'The War', 'The Shire', not a new label per chapter. If a location fits an existing arc, use that exact label.",
       "description": "1–2 sentence description of this place — what kind of place it is, its significance, atmosphere, or notable features as established in the text",
       "recentEvents": "1–2 sentences describing what happened at this location in the current chapter — key events, arrivals, departures, or confrontations. Omit if nothing notable occurred here."
@@ -96,6 +96,11 @@ function existingArcLabels(locs: AnalysisResult['locations']): string[] {
   return [...seen];
 }
 
+// Collect existing location names for consolidation hints
+function existingLocationNames(locs: AnalysisResult['locations']): string[] {
+  return (locs ?? []).map((l) => l.name).filter(Boolean);
+}
+
 // Delta schema — only new/changed characters and locations
 const DELTA_SCHEMA = `{
   "updatedCharacters": [
@@ -115,7 +120,7 @@ const DELTA_SCHEMA = `{
   ],
   "updatedLocations": [
     {
-      "name": "Proper place name only — a city, station, planet, region, or named landmark (NOT a generic room, corridor, or activity description)",
+      "name": "Broad canonical place name — city, castle, region, planet, ship. Prefer the name of the containing location over sub-locations (use 'Minas Tirith' not 'the great hall of Minas Tirith'). Use an EXISTING LOCATION NAME if the place is the same, nearby, or contained within it.",
       "arc": "Use one of the EXISTING ARC LABELS listed above whenever it fits. Only create a new label if no existing one applies — and keep the total number of distinct arcs to 5 or fewer for the whole book.",
       "description": "1–2 sentence description of this place as revealed so far",
       "recentEvents": "1–2 sentences describing what happened at this location in this chapter — key events, arrivals, departures, or confrontations. Omit if nothing notable occurred here."
@@ -133,13 +138,17 @@ function buildUpdatePrompt(
 ): string {
   const prevCount = previousResult.characters.length;
   const arcs = existingArcLabels(previousResult.locations);
+  const locs = existingLocationNames(previousResult.locations);
   const arcLine = arcs.length > 0
     ? `\nEXISTING ARC LABELS (reuse these exactly — do not invent new ones unless none fit): ${arcs.join(', ')}`
+    : '';
+  const locLine = locs.length > 0
+    ? `\nEXISTING LOCATIONS (${locs.length} already tracked — reuse the exact name if a new location is the same place, nearby, or contained within one of these): ${locs.join(', ')}`
     : '';
   return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${currentChapterTitle}".
 
 EXISTING CHARACTERS (${prevCount} already tracked — DO NOT reproduce this list in your output):
-${compactCharacterList(previousResult.characters)}${arcLine}
+${compactCharacterList(previousResult.characters)}${arcLine}${locLine}
 
 NEW CHAPTER TEXT TO PROCESS:
 ${newChaptersText}
@@ -149,7 +158,7 @@ INSTRUCTIONS — RETURN ONLY CHANGES, NOT THE FULL LIST:
 2. For each character who APPEARS in the new chapter: include them in "updatedCharacters" with updated fields (status, currentLocation, recentEvents, lastSeen). Keep description/relationships from existing state unless the chapter changes them.
 3. For any BRAND NEW named character introduced in this chapter: include them in "updatedCharacters" with all fields filled in. NEVER group individuals — each person gets their own entry.
 4. Do NOT include characters from the existing list who do not appear in the new chapter.
-5. For significant named places (cities, stations, planets, regions, named landmarks) that appear in this chapter: include them in "updatedLocations". Do NOT include generic rooms, corridors, vehicle interiors, or vague descriptions — only real proper-noun locations.
+5. For significant named places in this chapter: include them in "updatedLocations". CONSOLIDATION RULES — prefer fewer, broader locations: (a) if the place is inside or part of an existing location (e.g. a room in a castle, a district of a city), use the existing location name instead; (b) if the place is immediately adjacent to or commonly grouped with an existing location, use the existing location name; (c) only add a genuinely new entry if the place is distinct and would appear as a separate node on a map.
 6. Update the summary to reflect the story as of the current chapter.
 7. Do NOT use any knowledge of this book beyond what is listed above and the new chapter text.
 
