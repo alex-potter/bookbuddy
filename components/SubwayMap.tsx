@@ -81,16 +81,25 @@ function clusterCenter(nx: number, ny: number, nodeR: number, angle: number, row
 
 /* ── Graph extraction (structure only — no character data) ────────────── */
 
+// Returns true only for real, concrete place names.
+// Filters out placeholder values the LLM emits when a location is uncertain.
+const FAKE_LOC_RE = /^(unknown|not specified|unspecified|unclear|n\/a|none|various|travelling|traveling|en route|in transit)/i;
+function isRealLocation(loc: string | undefined): loc is string {
+  if (!loc) return false;
+  const t = loc.trim();
+  return t.length > 0 && !FAKE_LOC_RE.test(t);
+}
+
 function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[] } {
   const sorted = [...snapshots].sort((a, b) => a.index - b.index);
   if (sorted.length === 0) return { nodes: [], edges: [] };
 
-  // Collect all location names ever seen
+  // Collect all real location names ever seen
   const allLocs = new Set<string>();
   for (const snap of sorted) {
     for (const c of snap.result.characters) {
       const loc = c.currentLocation?.trim();
-      if (loc && loc !== 'Unknown') allLocs.add(loc);
+      if (isRealLocation(loc)) allLocs.add(loc);
     }
   }
 
@@ -99,12 +108,13 @@ function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[] } {
   for (let i = 1; i < sorted.length; i++) {
     const prevMap = new Map<string, string>();
     for (const c of sorted[i - 1].result.characters) {
-      if (c.currentLocation?.trim()) prevMap.set(c.name, c.currentLocation.trim());
+      const loc = c.currentLocation?.trim();
+      if (isRealLocation(loc)) prevMap.set(c.name, loc);
     }
     for (const c of sorted[i].result.characters) {
       const newLoc = c.currentLocation?.trim();
       const oldLoc = prevMap.get(c.name);
-      if (!newLoc || newLoc === 'Unknown' || !oldLoc || oldLoc === 'Unknown' || newLoc === oldLoc) continue;
+      if (!isRealLocation(newLoc) || !isRealLocation(oldLoc) || newLoc === oldLoc) continue;
       const key = [oldLoc, newLoc].sort().join('\x00');
       edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
     }
@@ -340,7 +350,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
   const liveByLoc = new Map<string, CharAvatar[]>();
   for (const c of resolvedCharacters) {
     const loc = c.currentLocation?.trim();
-    if (loc && loc !== 'Unknown') {
+    if (isRealLocation(loc)) {
       if (!liveByLoc.has(loc)) liveByLoc.set(loc, []);
       liveByLoc.get(loc)!.push({ name: c.name, status: c.status });
     }
