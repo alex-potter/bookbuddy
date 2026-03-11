@@ -79,6 +79,32 @@ function clusterCenter(nx: number, ny: number, nodeR: number, angle: number, row
   return { cx: nx + Math.cos(angle) * dist, cy: ny + Math.sin(angle) * dist };
 }
 
+/* ── Character path animation helpers ────────────────────────────────── */
+
+type CharPos = { x: number; y: number; status: Character['status'] };
+const CHAR_ANIM_MS = 700;
+
+/** Subway-style L-path waypoints between two pixel points. */
+function pathWaypoints(x1: number, y1: number, x2: number, y2: number): [number, number][] {
+  const dx = x2 - x1, dy = y2 - y1;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return [[x1, y1], [x1 + Math.sign(dx) * Math.abs(dy), y2], [x2, y2]];
+  }
+  return [[x1, y1], [x2, y1 + Math.sign(dy) * Math.abs(dx)], [x2, y2]];
+}
+
+function easeInOut(t: number): number {
+  return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+}
+
+function posAlong(pts: [number, number][], t: number): [number, number] {
+  const segs = pts.length - 1;
+  const st = t * segs;
+  const s = Math.min(Math.floor(st), segs - 1);
+  const f = st - s;
+  return [pts[s][0] + (pts[s + 1][0] - pts[s][0]) * f, pts[s][1] + (pts[s + 1][1] - pts[s][1]) * f];
+}
+
 /* ── Graph extraction (structure only — no character data) ────────────── */
 
 // Returns true only for real, concrete place names.
@@ -340,6 +366,13 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
   const [settled, setSettled] = useState(false);
   const frameRef = useRef<number>(0);
 
+  // Character path-following animation
+  const [displayPos, setDisplayPos] = useState<Map<string, CharPos>>(new Map());
+  const displayPosRef = useRef<Map<string, CharPos>>(new Map());
+  const targetPosRef = useRef<Map<string, CharPos>>(new Map());
+  const pendingAnims = useRef<Map<string, { waypoints: [number, number][]; t0: number; status: Character['status'] }>>(new Map());
+  const charRafRef = useRef<number>(0);
+
   // Rebuild graph structure when snapshots change (new chapters analyzed)
   useEffect(() => {
     setGraph(buildGraph(snapshots));
@@ -363,6 +396,58 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
     frameRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(frameRef.current);
   }, [settled]);
+
+  // Animate character avatars along subway paths when their location changes
+  useEffect(() => {
+    if (!settled) return;
+    const targets = targetPosRef.current;
+    const current = displayPosRef.current;
+    const now = performance.now();
+
+    for (const [name, target] of targets) {
+      const cur = current.get(name);
+      if (!cur) {
+        // First appearance: place immediately
+        current.set(name, target);
+        continue;
+      }
+      const dx = target.x - cur.x, dy = target.y - cur.y;
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) {
+        if (cur.status !== target.status) current.set(name, { ...cur, status: target.status });
+        continue;
+      }
+      pendingAnims.current.set(name, {
+        waypoints: pathWaypoints(cur.x, cur.y, target.x, target.y),
+        t0: now,
+        status: target.status,
+      });
+    }
+    // Remove departed characters
+    for (const name of [...current.keys()]) {
+      if (!targets.has(name)) current.delete(name);
+    }
+    setDisplayPos(new Map(current));
+
+    cancelAnimationFrame(charRafRef.current);
+    if (pendingAnims.current.size === 0) return;
+
+    function animate(ts: number) {
+      const pos = new Map(displayPosRef.current);
+      let anyActive = false;
+      for (const [name, anim] of pendingAnims.current) {
+        const t = Math.min((ts - anim.t0) / CHAR_ANIM_MS, 1);
+        const [x, y] = posAlong(anim.waypoints, easeInOut(t));
+        pos.set(name, { x, y, status: anim.status });
+        if (t >= 1) pendingAnims.current.delete(name);
+        else anyActive = true;
+      }
+      displayPosRef.current = pos;
+      setDisplayPos(new Map(pos));
+      if (anyActive) charRafRef.current = requestAnimationFrame(animate);
+    }
+    charRafRef.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(charRafRef.current);
+  }, [currentCharacters, settled]);
 
   if (graph.nodes.length === 0) {
     return (
@@ -466,6 +551,9 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
     return { n, primaryColor, r, lines, labelX, labelY, labelAnchor, labelBaseline };
   });
 
+  // Expose computed target positions to the animation effect
+  targetPosRef.current = charPositions;
+
   // Grid as a CSS background so it covers the full container, not just the SVG viewBox
   const gridBg = `url("data:image/svg+xml,%3Csvg width='30' height='30' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M 30 0 L 0 0 0 30' fill='none' stroke='%2327272a' stroke-width='0.5'/%3E%3C/svg%3E")`;
 
@@ -545,17 +633,13 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
         </g>
       ))}
 
-      {/* Character avatars — flat list keyed by name so the same DOM element persists
-          across snapshot changes, letting CSS transition animate the position. */}
-      {Array.from(charPositions.entries()).map(([name, { x, y, status }]) => {
+      {/* Character avatars — positions driven by JS path animation, not CSS transition */}
+      {Array.from(displayPos.entries()).map(([name, { x, y, status }]) => {
         const hex = STATUS_HEX[status];
         return (
           <g
             key={name}
-            style={{
-              transform: `translate(${x}px, ${y}px)`,
-              transition: settled ? 'transform 0.65s cubic-bezier(0.4, 0, 0.2, 1)' : 'none',
-            }}
+            style={{ transform: `translate(${x}px, ${y}px)` }}
           >
             <title>{name} ({status})</title>
             <circle r={AVT_R} fill={hex + '28'} stroke={hex} strokeWidth="1.5" />
