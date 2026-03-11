@@ -16,6 +16,7 @@ import { normalizeTitle } from '@/lib/normalize-title';
 import { saveChapters, loadChapters, deleteChapters } from '@/lib/chapter-storage';
 import ProcessingQueue from '@/components/ProcessingQueue';
 import ChatPanel from '@/components/ChatPanel';
+import { buildShareMarkdown, shareReadingContext } from '@/lib/share-context';
 
 type SortKey = 'importance' | 'name' | 'status';
 type MainTab = 'characters' | 'locations' | 'map';
@@ -252,6 +253,24 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showChat, setShowChat] = useState(false);
+  const [shareLabel, setShareLabel] = useState<'Share' | 'Copied!' | 'Shared!'>('Share');
+
+  async function handleShare() {
+    if (!book || !result || !stored || stored.lastAnalyzedIndex < 0) return;
+    const chapterTitles = book.chapters.map((c) => c.title);
+    const currentChapterTitle = chapterTitles[stored.lastAnalyzedIndex] ?? `Chapter ${stored.lastAnalyzedIndex + 1}`;
+    const markdown = buildShareMarkdown(
+      book.title, book.author, stored.lastAnalyzedIndex, currentChapterTitle,
+      book.chapters.length, result, stored.snapshots, chapterTitles,
+    );
+    try {
+      const outcome = await shareReadingContext(markdown, book.title);
+      setShareLabel(outcome === 'shared' ? 'Shared!' : 'Copied!');
+      setTimeout(() => setShareLabel('Share'), 2500);
+    } catch {
+      // AbortError — user cancelled share sheet; do nothing
+    }
+  }
 
   async function handleImport(file: File) {
     setImportError(null);
@@ -954,6 +973,15 @@ export default function Home() {
               title="Export .bookbuddy file"
             >
               Export
+            </button>
+          )}
+          {hasStoredState && stored.lastAnalyzedIndex >= 0 && (
+            <button
+              onClick={handleShare}
+              className="text-xs text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300 transition-colors"
+              title="Share reading context with any AI assistant (Gemini, ChatGPT, Claude…)"
+            >
+              {shareLabel}
             </button>
           )}
           {hasStoredState && (
