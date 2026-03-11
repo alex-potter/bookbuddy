@@ -48,6 +48,7 @@ export interface LocationRelationship {
 
 export interface LocationInfo {
   name: string;
+  aliases?: string[];                    // alternative names (e.g. "Ceres" for "Ceres Station")
   arc?: string;                          // narrative arc / storyline this location belongs to
   description: string;                   // 1–2 sentence description of the place
   recentEvents?: string;                 // what happened at this location in the most recent chapter

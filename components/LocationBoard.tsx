@@ -92,6 +92,7 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
 
   const locationDescMap = new Map((locations ?? []).map((l) => [l.name.toLowerCase(), l.description]));
   const locationRelMap = new Map((locations ?? []).map((l) => [l.name.toLowerCase(), l.relationships ?? []]));
+  const locationAliasMap = new Map((locations ?? []).map((l) => [l.name.toLowerCase(), l.aliases ?? []]));
 
   const resolvedCharacters = withResolvedLocations(characters, snapshots);
 
@@ -340,7 +341,15 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
                         ) : (
                           <span className="text-xs text-stone-400 dark:text-zinc-600">{location === 'Unknown' ? '?' : '◎'}</span>
                         )}
-                        <h3 className="font-medium text-stone-700 dark:text-zinc-300 text-sm flex-1 truncate">{location}</h3>
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-medium text-stone-700 dark:text-zinc-300 text-sm truncate">{location}</h3>
+                          {(() => {
+                            const aliases = locationAliasMap.get(location.toLowerCase()) ?? [];
+                            return aliases.length > 0 ? (
+                              <p className="text-[10px] text-stone-400 dark:text-zinc-600 truncate">aka {aliases.join(', ')}</p>
+                            ) : null;
+                          })()}
+                        </div>
                         {hasHistory && !showTimeline && (
                           <button
                             onClick={() => setExpandedLocation(location)}

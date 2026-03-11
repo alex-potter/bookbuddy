@@ -57,6 +57,7 @@ const SCHEMA = `{
   "locations": [
     {
       "name": "Broad canonical place name — city, castle, region, planet, ship (NOT a generic room, corridor, or sub-location). Prefer the containing location over sub-locations.",
+      "aliases": ["shorter or alternate names readers use for this place — e.g. 'Ceres' for 'Ceres Station', 'the Pits' for 'Hellas Basin'"],
       "arc": "Short narrative arc label (2–4 words max) grouping related locations into the same broad storyline thread. Aim for 3–5 arc labels total for the whole book — broad strokes like 'The Journey', 'The War', 'The Shire', not a new label per chapter. If a location fits an existing arc, use that exact label.",
       "description": "1–2 sentence description of this place — what kind of place it is, its significance, atmosphere, or notable features as established in the text",
       "recentEvents": "1–2 sentences describing what happened at this location in the current chapter — key events, arrivals, departures, or confrontations. Omit if nothing notable occurred here.",
@@ -143,6 +144,7 @@ const DELTA_SCHEMA = `{
   "updatedLocations": [
     {
       "name": "Broad canonical place name — city, castle, region, planet, ship. Prefer the name of the containing location over sub-locations (use 'Minas Tirith' not 'the great hall of Minas Tirith'). Use an EXISTING LOCATION NAME if the place is the same, nearby, or contained within it.",
+      "aliases": ["shorter or alternate names readers use for this place — only include if genuinely used in the text"],
       "arc": "Use one of the EXISTING ARC LABELS listed above whenever it fits. Only create a new label if no existing one applies — and keep the total number of distinct arcs to 5 or fewer for the whole book.",
       "description": "1–2 sentence description of this place as revealed so far",
       "recentEvents": "1–2 sentences describing what happened at this location in this chapter — key events, arrivals, departures, or confrontations. Omit if nothing notable occurred here.",
@@ -213,31 +215,63 @@ function normLoc(name: string): string {
     .split(/\s+/).sort().join(' ');
 }
 
-/** Deduplicate locations, merging prefix-word subsets ("Eros" → "Eros Station"). */
+/** Deduplicate locations, merging prefix-word subsets and alias matches. */
 function deduplicateLocations(locs: AnalysisResult['locations']): AnalysisResult['locations'] {
   if (!locs?.length) return locs;
   type LocRel = { location: string; relationship: string };
-  type Entry = { canonical: string; description: string; arc?: string; recentEvents?: string; relationships: LocRel[] };
+  type Entry = { canonical: string; aliases: string[]; description: string; arc?: string; recentEvents?: string; relationships: LocRel[] };
   function mergeRels(a: LocRel[], b: LocRel[]): LocRel[] {
     const seen = new Map(a.map((r) => [r.location.toLowerCase(), r]));
     for (const r of b) if (!seen.has(r.location.toLowerCase())) seen.set(r.location.toLowerCase(), r);
     return [...seen.values()];
   }
-  // Group by normalised key
+  function mergeAliases(a: string[], b: string[], canonical: string): string[] {
+    const set = new Set([...a, ...b].map((s) => s.trim()).filter((s) => s && s.toLowerCase() !== canonical.toLowerCase()));
+    return [...set];
+  }
+
+  // Group by normalised key; also maintain an alias lookup map
   const groups = new Map<string, Entry>();
+  // aliasLookup: normalised alias → group key
+  const aliasLookup = new Map<string, string>();
+
+  function findGroupKey(name: string, aliases: string[]): string | undefined {
+    const nk = normLoc(name);
+    if (groups.has(nk)) return nk;
+    if (aliasLookup.has(nk)) return aliasLookup.get(nk);
+    for (const a of aliases) {
+      const nа = normLoc(a);
+      if (groups.has(nа)) return nа;
+      if (aliasLookup.has(nа)) return aliasLookup.get(nа);
+    }
+    return undefined;
+  }
+
+  function registerAliases(groupKey: string, name: string, aliases: string[]) {
+    aliasLookup.set(normLoc(name), groupKey);
+    for (const a of aliases) aliasLookup.set(normLoc(a), groupKey);
+  }
+
   for (const loc of locs) {
-    const key = normLoc(loc.name);
-    const existing = groups.get(key);
-    if (existing) {
+    const locAliases = loc.aliases ?? [];
+    const existingKey = findGroupKey(loc.name, locAliases);
+    if (existingKey) {
+      const existing = groups.get(existingKey)!;
       if (loc.name.length > existing.canonical.length) existing.canonical = loc.name;
+      existing.aliases = mergeAliases(existing.aliases, locAliases, existing.canonical);
       if (loc.description.length > existing.description.length) existing.description = loc.description;
       if (!existing.arc && loc.arc) existing.arc = loc.arc;
       if (loc.recentEvents && (!existing.recentEvents || loc.recentEvents.length > existing.recentEvents.length)) existing.recentEvents = loc.recentEvents;
       if (loc.relationships?.length) existing.relationships = mergeRels(existing.relationships, loc.relationships);
+      registerAliases(existingKey, loc.name, locAliases);
     } else {
-      groups.set(key, { canonical: loc.name, description: loc.description, arc: loc.arc, recentEvents: loc.recentEvents, relationships: loc.relationships ?? [] });
+      const key = normLoc(loc.name);
+      const entry: Entry = { canonical: loc.name, aliases: locAliases, description: loc.description, arc: loc.arc, recentEvents: loc.recentEvents, relationships: loc.relationships ?? [] };
+      groups.set(key, entry);
+      registerAliases(key, loc.name, locAliases);
     }
   }
+
   // Merge prefix-word subsets: "eros" merges into "eros station"
   const keys = [...groups.keys()];
   for (const shorter of keys) {
@@ -248,6 +282,7 @@ function deduplicateLocations(locs: AnalysisResult['locations']): AnalysisResult
         const gs = groups.get(shorter)!;
         const gl = groups.get(longer)!;
         if (gs.canonical.length > gl.canonical.length) gl.canonical = gs.canonical;
+        gl.aliases = mergeAliases(gl.aliases, [...gs.aliases, gs.canonical !== gl.canonical ? gs.canonical : ''].filter(Boolean), gl.canonical);
         if (gs.description.length > gl.description.length) gl.description = gs.description;
         if (!gl.arc && gs.arc) gl.arc = gs.arc;
         if (gs.recentEvents && (!gl.recentEvents || gs.recentEvents.length > gl.recentEvents.length)) gl.recentEvents = gs.recentEvents;
@@ -257,9 +292,12 @@ function deduplicateLocations(locs: AnalysisResult['locations']): AnalysisResult
       }
     }
   }
-  return [...groups.values()].map(({ canonical, description, arc, recentEvents, relationships }) => ({
-    name: canonical, description,
+
+  return [...groups.values()].map(({ canonical, aliases, description, arc, recentEvents, relationships }) => ({
+    name: canonical,
+    ...(aliases.length > 0 ? { aliases } : {}),
     ...(arc ? { arc } : {}),
+    description,
     ...(recentEvents ? { recentEvents } : {}),
     ...(relationships.length > 0 ? { relationships } : {}),
   }));
@@ -328,9 +366,14 @@ function mergeDelta(
   const mergedLocations = [...prevLocations];
   for (const updated of delta.updatedLocations ?? []) {
     if (!updated.name) continue;
-    const idx = mergedLocations.findIndex((l) => l.name?.toLowerCase() === updated.name.toLowerCase());
+    const updatedNames = new Set([updated.name, ...(updated.aliases ?? [])].map((s) => s.toLowerCase()));
+    const idx = mergedLocations.findIndex((l) =>
+      [l.name, ...(l.aliases ?? [])].some((n) => updatedNames.has(n.toLowerCase())),
+    );
     if (idx >= 0) {
-      mergedLocations[idx] = { ...mergedLocations[idx], ...updated };
+      const existing = mergedLocations[idx];
+      const mergedAliases = [...new Set([...(existing.aliases ?? []), ...(updated.aliases ?? [])].filter((a) => a.toLowerCase() !== updated.name.toLowerCase() && a.toLowerCase() !== existing.name.toLowerCase()))];
+      mergedLocations[idx] = { ...existing, ...updated, aliases: mergedAliases.length > 0 ? mergedAliases : undefined };
     } else {
       mergedLocations.push(updated);
     }

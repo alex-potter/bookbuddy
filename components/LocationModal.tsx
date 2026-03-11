@@ -50,6 +50,7 @@ export default function LocationModal({ locationName, snapshots, chapterTitles, 
   const sorted = [...snapshots].sort((a, b) => a.index - b.index);
   let description = '';
   let arc = '';
+  let aliases: string[] = [];
   let relationships: LocationRelationship[] = [];
   for (const snap of sorted) {
     const info = snap.result.locations?.find(
@@ -57,6 +58,7 @@ export default function LocationModal({ locationName, snapshots, chapterTitles, 
     );
     if (info?.description) description = info.description;
     if (info?.arc) arc = info.arc;
+    if (info?.aliases?.length) aliases = info.aliases;
     if (info?.relationships?.length) relationships = info.relationships;
   }
 
@@ -116,6 +118,9 @@ export default function LocationModal({ locationName, snapshots, chapterTitles, 
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
                   <h2 className="text-lg font-bold text-stone-900 dark:text-zinc-100 leading-tight">{locationName}</h2>
+                  {aliases.length > 0 && (
+                    <p className="text-xs text-stone-400 dark:text-zinc-500 mt-0.5">aka {aliases.join(', ')}</p>
+                  )}
                   {arc && (
                     <span className="inline-block mt-1 text-xs px-2 py-0.5 rounded-md bg-violet-500/10 text-violet-400 border border-violet-500/20 font-medium">
                       {arc}
