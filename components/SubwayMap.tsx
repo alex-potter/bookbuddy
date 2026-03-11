@@ -81,8 +81,11 @@ function clusterCenter(nx: number, ny: number, nodeR: number, angle: number, row
 
 /* ── Character path animation helpers ────────────────────────────────── */
 
-type CharPos = { x: number; y: number; status: Character['status'] };
-const CHAR_ANIM_MS = 700;
+// nx/ny = destination node centre (used for train path; optional for positions
+// that haven't been through a full animation yet)
+type CharPos = { x: number; y: number; status: Character['status']; nx?: number; ny?: number };
+const CHAR_ANIM_MS = 700;  // ms for train phase (source → dest node centre)
+const CLUSTER_PHASE_MS = 220; // ms for cluster phase (dest node centre → cluster slot)
 
 /** Subway-style L-path waypoints between two pixel points. */
 function pathWaypoints(x1: number, y1: number, x2: number, y2: number): [number, number][] {
@@ -370,7 +373,13 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
   const [displayPos, setDisplayPos] = useState<Map<string, CharPos>>(new Map());
   const displayPosRef = useRef<Map<string, CharPos>>(new Map());
   const targetPosRef = useRef<Map<string, CharPos>>(new Map());
-  const pendingAnims = useRef<Map<string, { waypoints: [number, number][]; t0: number; status: Character['status'] }>>(new Map());
+  const pendingAnims = useRef<Map<string, {
+    waypoints: [number, number][];  // source cluster → dest node centre
+    t0: number;                     // start time (staggered for train effect)
+    status: Character['status'];
+    nodeX: number; nodeY: number;   // dest node centre (end of train phase)
+    clusterX: number; clusterY: number; // final cluster slot (end of cluster phase)
+  }>>(new Map());
   const charRafRef = useRef<number>(0);
 
   // Rebuild graph structure when snapshots change (new chapters analyzed)
@@ -397,30 +406,33 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
     return () => cancelAnimationFrame(frameRef.current);
   }, [settled]);
 
-  // Animate character avatars along subway paths when their location changes
+  // Animate character avatars along subway paths when their location changes.
+  // Characters moving from the same source area to the same destination travel
+  // in a staggered single-file "train"; on arrival they fan out to cluster slots.
   useEffect(() => {
     if (!settled) return;
     const targets = targetPosRef.current;
     const current = displayPosRef.current;
     const now = performance.now();
 
+    // Group moving characters into trains: same source area + same dest node centre
+    type MovingChar = { name: string; cur: CharPos; target: CharPos };
+    const trains = new Map<string, MovingChar[]>();
+
     for (const [name, target] of targets) {
       const cur = current.get(name);
-      if (!cur) {
-        // First appearance: place immediately
-        current.set(name, target);
-        continue;
-      }
+      if (!cur) { current.set(name, target); continue; }
       const dx = target.x - cur.x, dy = target.y - cur.y;
       if (Math.abs(dx) < 1 && Math.abs(dy) < 1) {
         if (cur.status !== target.status) current.set(name, { ...cur, status: target.status });
         continue;
       }
-      pendingAnims.current.set(name, {
-        waypoints: pathWaypoints(cur.x, cur.y, target.x, target.y),
-        t0: now,
-        status: target.status,
-      });
+      // Group key: source 40px bucket + exact dest node centre
+      const srcKey = `${Math.round(cur.x / 40)},${Math.round(cur.y / 40)}`;
+      const dstKey = `${target.nx ?? Math.round(target.x)},${target.ny ?? Math.round(target.y)}`;
+      const key = `${srcKey}->${dstKey}`;
+      if (!trains.has(key)) trains.set(key, []);
+      trains.get(key)!.push({ name, cur, target });
     }
     // Remove departed characters
     for (const name of [...current.keys()]) {
@@ -429,16 +441,48 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
     setDisplayPos(new Map(current));
 
     cancelAnimationFrame(charRafRef.current);
-    if (pendingAnims.current.size === 0) return;
+    if (trains.size === 0) return;
+
+    const STAGGER_MS = 75; // gap between each character in the train
+    for (const group of trains.values()) {
+      group.sort((a, b) => a.name.localeCompare(b.name)); // stable train order
+      group.forEach(({ name, cur, target }, i) => {
+        const nodeX = target.nx ?? target.x;
+        const nodeY = target.ny ?? target.y;
+        pendingAnims.current.set(name, {
+          // Path goes from source cluster slot → dest node centre (shared subway line)
+          waypoints: pathWaypoints(cur.x, cur.y, nodeX, nodeY),
+          t0: now + i * STAGGER_MS,
+          status: target.status,
+          nodeX, nodeY,
+          clusterX: target.x,
+          clusterY: target.y,
+        });
+      });
+    }
 
     function animate(ts: number) {
       const pos = new Map(displayPosRef.current);
       let anyActive = false;
       for (const [name, anim] of pendingAnims.current) {
-        const t = Math.min((ts - anim.t0) / CHAR_ANIM_MS, 1);
-        const [x, y] = posAlong(anim.waypoints, easeInOut(t));
+        const elapsed = ts - anim.t0;
+        let x: number, y: number;
+        if (elapsed <= 0) {
+          // Waiting in train queue — stay at source position
+          [x, y] = anim.waypoints[0];
+        } else if (elapsed < CHAR_ANIM_MS) {
+          // Train phase: travel along subway path to dest node centre
+          [x, y] = posAlong(anim.waypoints, easeInOut(elapsed / CHAR_ANIM_MS));
+        } else if (elapsed < CHAR_ANIM_MS + CLUSTER_PHASE_MS) {
+          // Cluster phase: fan out from node centre to individual slot
+          const ct = easeInOut((elapsed - CHAR_ANIM_MS) / CLUSTER_PHASE_MS);
+          x = anim.nodeX + (anim.clusterX - anim.nodeX) * ct;
+          y = anim.nodeY + (anim.clusterY - anim.nodeY) * ct;
+        } else {
+          x = anim.clusterX; y = anim.clusterY;
+        }
         pos.set(name, { x, y, status: anim.status });
-        if (t >= 1) pendingAnims.current.delete(name);
+        if (elapsed >= CHAR_ANIM_MS + CLUSTER_PHASE_MS) pendingAnims.current.delete(name);
         else anyActive = true;
       }
       displayPosRef.current = pos;
@@ -519,7 +563,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
   // ── Phase 2: build render data using resolved label angles ─────────────
   // Avatars are rendered as a flat list (keyed by char name) so the same DOM element
   // persists across snapshot changes — CSS transition then animates the position change.
-  const charPositions = new Map<string, { x: number; y: number; status: CharAvatar['status'] }>();
+  const charPositions = new Map<string, CharPos>();
   const overflowBadges: Array<{ x: number; y: number; count: number }> = [];
 
   const nodeData = graph.nodes.map((n) => {
@@ -542,7 +586,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [] }: Props) 
     const positions = clusterPositions(showCount, aCX, aCY);
 
     displayChars.forEach((c, i) => {
-      if (positions[i]) charPositions.set(c.name, { x: positions[i].x, y: positions[i].y, status: c.status });
+      if (positions[i]) charPositions.set(c.name, { x: positions[i].x, y: positions[i].y, status: c.status, nx: n.x, ny: n.y });
     });
     if (extra > 0 && positions[MAX_SHOW]) {
       overflowBadges.push({ x: positions[MAX_SHOW].x, y: positions[MAX_SHOW].y, count: extra });
