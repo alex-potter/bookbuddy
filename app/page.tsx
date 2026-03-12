@@ -633,6 +633,7 @@ export default function Home() {
     let accumulated: AnalysisResult | null =
       stored && stored.lastAnalyzedIndex >= 0 ? stored.result : seriesBaseRef.current;
     let snapshots: Snapshot[] = stored?.snapshots ?? [];
+    const analyzeBase = stored ?? { lastAnalyzedIndex: -1, result: { characters: [], summary: '' }, snapshots: [] };
 
     try {
       for (let i = startIndex; i <= endIndex; i++) {
@@ -643,7 +644,7 @@ export default function Home() {
         if (excludedChapters.has(i) || isFrontMatter(ch)) {
           if (accumulated) {
             snapshots = upsertSnapshot(snapshots, i, accumulated);
-            const partial: StoredBookState = { lastAnalyzedIndex: i, result: accumulated, snapshots };
+            const partial: StoredBookState = { ...analyzeBase, lastAnalyzedIndex: i, result: accumulated, snapshots };
             storedRef.current = partial;
             saveStored(book.title, book.author, partial);
           }
@@ -652,7 +653,7 @@ export default function Home() {
         const { result: chapterResult, model: chapterModel } = await analyzeChapter(book.title, book.author, { title: ch.title, text: ch.text }, accumulated, book.chapters.map((c) => c.title));
         accumulated = chapterResult;
         snapshots = upsertSnapshot(snapshots, i, accumulated, chapterModel, APP_VERSION);
-        const partial: StoredBookState = { lastAnalyzedIndex: i, result: accumulated, snapshots };
+        const partial: StoredBookState = { ...analyzeBase, lastAnalyzedIndex: i, result: accumulated, snapshots };
         storedRef.current = partial;
         saveStored(book.title, book.author, partial);
         setResult(accumulated);
@@ -679,6 +680,7 @@ export default function Home() {
 
     let accumulated: AnalysisResult | null = seriesBaseRef.current;
     let snapshots: Snapshot[] = storedRef.current?.snapshots ?? [];
+    const rebuildBase = storedRef.current ?? { lastAnalyzedIndex: -1, result: { characters: [], summary: '' }, snapshots: [] };
 
     try {
       for (let i = rebuildRangeStart; i <= rebuildRangeEnd; i++) {
@@ -689,7 +691,7 @@ export default function Home() {
         if (excludedChapters.has(i) || isFrontMatter(ch)) {
           if (accumulated) {
             snapshots = upsertSnapshot(snapshots, i, accumulated);
-            const partial: StoredBookState = { lastAnalyzedIndex: i, result: accumulated, snapshots };
+            const partial: StoredBookState = { ...rebuildBase, lastAnalyzedIndex: i, result: accumulated, snapshots };
             storedRef.current = partial;
             saveStored(book.title, book.author, partial);
           }
@@ -699,7 +701,7 @@ export default function Home() {
         const { result: rebuildResult, model: rebuildModel } = await analyzeChapter(book.title, book.author, chapter, accumulated, book.chapters.map((c) => c.title));
         accumulated = rebuildResult;
         snapshots = upsertSnapshot(snapshots, i, accumulated, rebuildModel, APP_VERSION);
-        const partial: StoredBookState = { lastAnalyzedIndex: i, result: accumulated, snapshots };
+        const partial: StoredBookState = { ...rebuildBase, lastAnalyzedIndex: i, result: accumulated, snapshots };
         storedRef.current = partial;
         saveStored(book.title, book.author, partial);
         setResult(accumulated);
@@ -727,6 +729,7 @@ export default function Home() {
 
     let accumulated: AnalysisResult | null = seriesBaseRef.current;
     let snapshots: Snapshot[] = storedRef.current?.snapshots ?? [];
+    const processBase = storedRef.current ?? { lastAnalyzedIndex: -1, result: { characters: [], summary: '' }, snapshots: [] };
 
     try {
       for (let i = rangeStart; i <= rangeEnd; i++) {
@@ -737,7 +740,7 @@ export default function Home() {
         if (excludedChapters.has(i) || isFrontMatter(ch)) {
           if (accumulated) {
             snapshots = upsertSnapshot(snapshots, i, accumulated);
-            const partial: StoredBookState = { lastAnalyzedIndex: i, result: accumulated, snapshots, chapterRange: chapterRange ?? undefined };
+            const partial: StoredBookState = { ...processBase, lastAnalyzedIndex: i, result: accumulated, snapshots };
             storedRef.current = partial;
             saveStored(book.title, book.author, partial);
           }
@@ -747,7 +750,7 @@ export default function Home() {
         const { result: chResult, model: chModel } = await analyzeChapter(book.title, book.author, chapter, accumulated, book.chapters.map((c) => c.title));
         accumulated = chResult;
         snapshots = upsertSnapshot(snapshots, i, accumulated, chModel, APP_VERSION);
-        const partial: StoredBookState = { lastAnalyzedIndex: i, result: accumulated, snapshots, chapterRange: chapterRange ?? undefined };
+        const partial: StoredBookState = { ...processBase, lastAnalyzedIndex: i, result: accumulated, snapshots };
         storedRef.current = partial;
         saveStored(book.title, book.author, partial);
         setResult(accumulated);

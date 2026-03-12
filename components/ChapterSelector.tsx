@@ -533,7 +533,7 @@ export default function ChapterSelector({
             </span>
           </div>
           <p className="text-[10px] text-stone-300 dark:text-zinc-700">Hover a chapter below to set ⌞ start or ⌟ end</p>
-          {onProcessBook && (
+          {onProcessBook && chapterRange && (
             <button
               onClick={onProcessBook}
               disabled={busy}
@@ -567,9 +567,13 @@ export default function ChapterSelector({
             if (focusedGroup) {
               const [focusedBookIdx, { items }] = focusedGroup;
               const isFocusedExcluded = excludedBooks?.has(focusedBookIdx) ?? false;
+              const visibleItems = items.filter(({ globalIndex }) =>
+                (rangeStart === undefined || globalIndex >= rangeStart) &&
+                (rangeEnd === undefined || globalIndex <= rangeEnd),
+              );
               return (
                 <ul className="space-y-0.5">
-                  {items.map(({ ch, globalIndex }) => (
+                  {visibleItems.map(({ ch, globalIndex }) => (
                     <ChapterItem key={ch.id} ch={ch} globalIndex={globalIndex} isExcluded={isFocusedExcluded || (excludedChapters?.has(globalIndex) ?? false)} isRangeStart={rangeStart === globalIndex} isRangeEnd={rangeEnd === globalIndex} {...itemProps} />
                   ))}
                 </ul>
@@ -579,12 +583,17 @@ export default function ChapterSelector({
             return (
           <ul className="space-y-1.5">
             {[...bookGroups.entries()].map(([bookIdx, { bookTitle, items }]) => {
+              const rangeFilteredItems = items.filter(({ globalIndex }) =>
+                (rangeStart === undefined || globalIndex >= rangeStart) &&
+                (rangeEnd === undefined || globalIndex <= rangeEnd),
+              );
+              if (rangeFilteredItems.length === 0) return null;
               const isExpanded = expandedBooks.has(bookIdx);
               const isExcluded = excludedBooks?.has(bookIdx) ?? false;
-              const analyzedCount = items.filter(({ globalIndex }) =>
+              const analyzedCount = rangeFilteredItems.filter(({ globalIndex }) =>
                 lastAnalyzedIndex !== null && globalIndex <= lastAnalyzedIndex,
               ).length;
-              const isCurrent = items.some(({ globalIndex }) => globalIndex === currentIndex);
+              const isCurrent = rangeFilteredItems.some(({ globalIndex }) => globalIndex === currentIndex);
 
               return (
                 <li key={bookIdx}>
@@ -630,7 +639,7 @@ export default function ChapterSelector({
                   {/* Chapters (expanded) */}
                   {isExpanded && (
                     <ul className="mt-0.5 ml-2 space-y-0.5 border-l border-stone-200 dark:border-zinc-800 pl-2">
-                      {items.map(({ ch, globalIndex }) => (
+                      {rangeFilteredItems.map(({ ch, globalIndex }) => (
                         <ChapterItem key={ch.id} ch={ch} globalIndex={globalIndex} isExcluded={isExcluded || (excludedChapters?.has(globalIndex) ?? false)} isRangeStart={rangeStart === globalIndex} isRangeEnd={rangeEnd === globalIndex} {...itemProps} />
                       ))}
                     </ul>
@@ -644,9 +653,11 @@ export default function ChapterSelector({
         ) : (
           /* Flat list for non-omnibus */
           <ul className="space-y-0.5">
-            {chapters.map((ch, i) => (
-              <ChapterItem key={ch.id} ch={ch} globalIndex={i} isExcluded={excludedChapters?.has(i) ?? false} isRangeStart={rangeStart === i} isRangeEnd={rangeEnd === i} {...itemProps} />
-            ))}
+            {chapters.map((ch, i) => {
+              if (rangeStart !== undefined && i < rangeStart) return null;
+              if (rangeEnd !== undefined && i > rangeEnd) return null;
+              return <ChapterItem key={ch.id} ch={ch} globalIndex={i} isExcluded={excludedChapters?.has(i) ?? false} isRangeStart={rangeStart === i} isRangeEnd={rangeEnd === i} {...itemProps} />;
+            })}
           </ul>
         )}
       </div>
