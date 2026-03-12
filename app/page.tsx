@@ -714,6 +714,55 @@ export default function Home() {
     }
   }, [book, currentIndex, excludedBooks, excludedChapters, chapterRange]);
 
+  // Process the full range start→end regardless of currentIndex
+  const handleProcessBook = useCallback(async () => {
+    if (!book) return;
+    rebuildCancelRef.current = false;
+    setRebuilding(true);
+    setAnalyzeError(null);
+    const rangeStart = chapterRange?.start ?? 0;
+    const rangeEnd = chapterRange?.end ?? (book.chapters.length - 1);
+    const total = rangeEnd - rangeStart + 1;
+    setRebuildProgress({ current: 0, total });
+
+    let accumulated: AnalysisResult | null = seriesBaseRef.current;
+    let snapshots: Snapshot[] = storedRef.current?.snapshots ?? [];
+
+    try {
+      for (let i = rangeStart; i <= rangeEnd; i++) {
+        if (rebuildCancelRef.current) break;
+        setRebuildProgress({ current: i - rangeStart + 1, total });
+        const ch = book.chapters[i];
+        if (ch.bookIndex !== undefined && excludedBooks.has(ch.bookIndex)) continue;
+        if (excludedChapters.has(i) || isFrontMatter(ch)) {
+          if (accumulated) {
+            snapshots = upsertSnapshot(snapshots, i, accumulated);
+            const partial: StoredBookState = { lastAnalyzedIndex: i, result: accumulated, snapshots, chapterRange: chapterRange ?? undefined };
+            storedRef.current = partial;
+            saveStored(book.title, book.author, partial);
+          }
+          continue;
+        }
+        const chapter = { title: ch.title, text: ch.text };
+        const { result: chResult, model: chModel } = await analyzeChapter(book.title, book.author, chapter, accumulated, book.chapters.map((c) => c.title));
+        accumulated = chResult;
+        snapshots = upsertSnapshot(snapshots, i, accumulated, chModel, APP_VERSION);
+        const partial: StoredBookState = { lastAnalyzedIndex: i, result: accumulated, snapshots, chapterRange: chapterRange ?? undefined };
+        storedRef.current = partial;
+        saveStored(book.title, book.author, partial);
+        setResult(accumulated);
+        setCurrentIndex(i);
+        setViewingSnapshotIndex(null);
+      }
+    } catch (err) {
+      setAnalyzeError(err instanceof Error ? err.message : 'Process failed.');
+    } finally {
+      setRebuilding(false);
+      setRebuildProgress(null);
+      rebuildCancelRef.current = false;
+    }
+  }, [book, excludedBooks, excludedChapters, chapterRange]);
+
   const handleDeleteSnapshot = useCallback((index: number) => {
     if (!book || !storedRef.current) return;
     const cur = storedRef.current;
@@ -1095,6 +1144,7 @@ export default function Home() {
             onCancelAnalyze={() => { analyzeCancelRef.current = true; }}
             onRebuild={handleRebuild}
             onCancelRebuild={() => { rebuildCancelRef.current = true; }}
+            onProcessBook={handleProcessBook}
             analyzing={analyzing}
             rebuilding={rebuilding}
             rebuildProgress={rebuildProgress}

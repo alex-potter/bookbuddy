@@ -23,6 +23,7 @@ interface Props {
   onToggleChapter?: (chapterIndex: number) => void;
   chapterRange?: { start: number; end: number } | null;
   onSetRange?: (range: { start: number; end: number } | null) => void;
+  onProcessBook?: () => void;
   onDeleteSnapshot?: (chapterIndex: number) => void;
   metaOnly?: boolean;
 }
@@ -337,7 +338,7 @@ export default function ChapterSelector({
   chapters, currentIndex, onChange, onAnalyze, onCancelAnalyze, onRebuild, onCancelRebuild,
   analyzing, rebuilding, rebuildProgress, lastAnalyzedIndex,
   snapshotIndices, excludedBooks, onToggleBook, excludedChapters, onToggleChapter,
-  chapterRange, onSetRange, onDeleteSnapshot, metaOnly,
+  chapterRange, onSetRange, onProcessBook, onDeleteSnapshot, metaOnly,
 }: Props) {
   const [mode, setMode] = useState<'chapter' | 'location'>('chapter');
   const [locationInput, setLocationInput] = useState('');
@@ -532,6 +533,19 @@ export default function ChapterSelector({
             </span>
           </div>
           <p className="text-[10px] text-stone-300 dark:text-zinc-700">Hover a chapter below to set ⌞ start or ⌟ end</p>
+          {onProcessBook && (
+            <button
+              onClick={onProcessBook}
+              disabled={busy}
+              className={`w-full mt-1 py-1.5 rounded-md text-xs font-semibold transition-colors ${
+                busy
+                  ? 'bg-stone-100 dark:bg-zinc-800 text-stone-300 dark:text-zinc-700 cursor-not-allowed'
+                  : 'bg-amber-500/15 text-amber-500 hover:bg-amber-500/25 border border-amber-500/30'
+              }`}
+            >
+              ⌖ Process entire book
+            </button>
+          )}
         </div>
       )}
 
