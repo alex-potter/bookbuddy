@@ -21,6 +21,8 @@ interface Props {
   onToggleBook?: (bookIndex: number) => void;
   excludedChapters?: Set<number>;
   onToggleChapter?: (chapterIndex: number) => void;
+  chapterRange?: { start: number; end: number } | null;
+  onSetRange?: (range: { start: number; end: number } | null) => void;
   onDeleteSnapshot?: (chapterIndex: number) => void;
   metaOnly?: boolean;
 }
@@ -58,11 +60,16 @@ interface ChapterItemProps {
   setLocationInput: (v: string) => void;
   onToggleChapter?: (index: number) => void;
   onDeleteSnapshot?: (index: number) => void;
+  isRangeStart?: boolean;
+  isRangeEnd?: boolean;
+  onSetRangeStart?: (index: number) => void;
+  onSetRangeEnd?: (index: number) => void;
 }
 
 function ChapterItem({
   ch, globalIndex, currentIndex, lastAnalyzedIndex, snapshotIndices,
   isExcluded, rebuilding, rebuildProgress, mode, chapters, onChange, setLocationInput, onToggleChapter, onDeleteSnapshot,
+  isRangeStart, isRangeEnd, onSetRangeStart, onSetRangeEnd,
 }: ChapterItemProps) {
   const isRebuildingThis = rebuilding && rebuildProgress && globalIndex === rebuildProgress.current - 1;
   const hasSnapshot = snapshotIndices?.has(globalIndex) ?? false;
@@ -73,6 +80,9 @@ function ChapterItem({
   const frontier = Math.max(currentIndex, lastAnalyzedIndex ?? -1);
 
   const marker = isExcluded ? '✗'
+    : isRangeStart && isRangeEnd ? '⊡'
+    : isRangeStart ? '⌞'
+    : isRangeEnd ? '⌟'
     : isRebuildingThis ? '↻'
     : isLastAnalyzed ? '★'
     : hasSnapshot ? '◆'
@@ -106,11 +116,37 @@ function ChapterItem({
           <span className="ml-1 text-stone-400 dark:text-zinc-600">~{chapterIndexToLocation(globalIndex, chapters).toLocaleString()}</span>
         )}
       </button>
+      {onSetRangeStart && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onSetRangeStart(globalIndex); }}
+          title="Set as analysis start"
+          className={`flex-shrink-0 ml-0.5 w-4 h-4 flex items-center justify-center rounded text-[9px] transition-opacity ${
+            isRangeStart
+              ? 'text-amber-500 opacity-100'
+              : 'text-stone-300 dark:text-zinc-700 hover:text-amber-500 opacity-0 group-hover:opacity-100'
+          }`}
+        >
+          ⌞
+        </button>
+      )}
+      {onSetRangeEnd && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onSetRangeEnd(globalIndex); }}
+          title="Set as analysis end"
+          className={`flex-shrink-0 ml-0.5 w-4 h-4 flex items-center justify-center rounded text-[9px] transition-opacity ${
+            isRangeEnd
+              ? 'text-amber-500 opacity-100'
+              : 'text-stone-300 dark:text-zinc-700 hover:text-amber-500 opacity-0 group-hover:opacity-100'
+          }`}
+        >
+          ⌟
+        </button>
+      )}
       {onToggleChapter && (
         <button
           onClick={(e) => { e.stopPropagation(); onToggleChapter(globalIndex); }}
           title={isExcluded ? 'Include in analysis' : 'Exclude from analysis'}
-          className={`flex-shrink-0 ml-1 w-4 h-4 flex items-center justify-center rounded text-[9px] opacity-0 group-hover:opacity-100 transition-opacity ${
+          className={`flex-shrink-0 ml-0.5 w-4 h-4 flex items-center justify-center rounded text-[9px] opacity-0 group-hover:opacity-100 transition-opacity ${
             isExcluded
               ? 'text-stone-400 dark:text-zinc-500 hover:text-stone-800 dark:hover:text-zinc-300 opacity-100'
               : 'text-stone-300 dark:text-zinc-700 hover:text-red-500/70'
@@ -300,7 +336,8 @@ function ChapterCombobox({ chapters, currentIndex, lastAnalyzedIndex, isOmnibus,
 export default function ChapterSelector({
   chapters, currentIndex, onChange, onAnalyze, onCancelAnalyze, onRebuild, onCancelRebuild,
   analyzing, rebuilding, rebuildProgress, lastAnalyzedIndex,
-  snapshotIndices, excludedBooks, onToggleBook, excludedChapters, onToggleChapter, onDeleteSnapshot, metaOnly,
+  snapshotIndices, excludedBooks, onToggleBook, excludedChapters, onToggleChapter,
+  chapterRange, onSetRange, onDeleteSnapshot, metaOnly,
 }: Props) {
   const [mode, setMode] = useState<'chapter' | 'location'>('chapter');
   const [locationInput, setLocationInput] = useState('');
@@ -356,7 +393,24 @@ export default function ChapterSelector({
     if (next === 'location') setLocationInput(String(chapterIndexToLocation(currentIndex, chapters)));
   }
 
-  const itemProps = { currentIndex, lastAnalyzedIndex, snapshotIndices, rebuilding, rebuildProgress, mode, chapters, onChange, setLocationInput, onToggleChapter, onDeleteSnapshot };
+  function handleSetRangeStart(index: number) {
+    const end = chapterRange?.end ?? (chapters.length - 1);
+    onSetRange?.({ start: index, end: Math.max(index, end) });
+  }
+
+  function handleSetRangeEnd(index: number) {
+    const start = chapterRange?.start ?? 0;
+    onSetRange?.({ start: Math.min(start, index), end: index });
+  }
+
+  const rangeStart = chapterRange?.start;
+  const rangeEnd = chapterRange?.end;
+  const itemProps = {
+    currentIndex, lastAnalyzedIndex, snapshotIndices, rebuilding, rebuildProgress, mode, chapters, onChange, setLocationInput,
+    onToggleChapter, onDeleteSnapshot,
+    onSetRangeStart: onSetRange ? handleSetRangeStart : undefined,
+    onSetRangeEnd: onSetRange ? handleSetRangeEnd : undefined,
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -446,6 +500,41 @@ export default function ChapterSelector({
         {!busy && <p className="mt-1 text-xs text-center text-stone-300 dark:text-zinc-700">Re-analyze ch.1–{currentIndex + 1} from scratch</p>}
       </div>
 
+      {/* Analysis range */}
+      {onSetRange && (
+        <div className="mt-3 p-2.5 rounded-lg border border-stone-200 dark:border-zinc-800 bg-stone-50 dark:bg-zinc-900/50 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] font-semibold text-stone-400 dark:text-zinc-500 uppercase tracking-wider">Analysis range</p>
+            {chapterRange && (
+              <button
+                onClick={() => onSetRange(null)}
+                className="text-[10px] text-stone-400 dark:text-zinc-600 hover:text-red-500 transition-colors"
+                title="Clear range"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 text-xs text-stone-500 dark:text-zinc-400">
+            <span className="text-amber-500">⌞</span>
+            <span className="truncate flex-1 min-w-0">
+              {rangeStart !== undefined
+                ? (normalizeTitle(chapters[rangeStart]?.title ?? '') || `Ch. ${rangeStart + 1}`)
+                : <span className="text-stone-300 dark:text-zinc-700 italic">First chapter</span>}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5 text-xs text-stone-500 dark:text-zinc-400">
+            <span className="text-amber-500">⌟</span>
+            <span className="truncate flex-1 min-w-0">
+              {rangeEnd !== undefined
+                ? (normalizeTitle(chapters[rangeEnd]?.title ?? '') || `Ch. ${rangeEnd + 1}`)
+                : <span className="text-stone-300 dark:text-zinc-700 italic">Last chapter</span>}
+            </span>
+          </div>
+          <p className="text-[10px] text-stone-300 dark:text-zinc-700">Hover a chapter below to set ⌞ start or ⌟ end</p>
+        </div>
+      )}
+
       {/* Chapter list */}
       <div className="mt-5 flex-1 overflow-y-auto">
         <p className="text-xs font-medium text-stone-400 dark:text-zinc-600 uppercase tracking-wider mb-2">Chapters</p>
@@ -505,7 +594,7 @@ export default function ChapterSelector({
                   {isExpanded && (
                     <ul className="mt-0.5 ml-2 space-y-0.5 border-l border-stone-200 dark:border-zinc-800 pl-2">
                       {items.map(({ ch, globalIndex }) => (
-                        <ChapterItem key={ch.id} ch={ch} globalIndex={globalIndex} isExcluded={isExcluded || (excludedChapters?.has(globalIndex) ?? false)} {...itemProps} />
+                        <ChapterItem key={ch.id} ch={ch} globalIndex={globalIndex} isExcluded={isExcluded || (excludedChapters?.has(globalIndex) ?? false)} isRangeStart={rangeStart === globalIndex} isRangeEnd={rangeEnd === globalIndex} {...itemProps} />
                       ))}
                     </ul>
                   )}
@@ -517,7 +606,7 @@ export default function ChapterSelector({
           /* Flat list for non-omnibus */
           <ul className="space-y-0.5">
             {chapters.map((ch, i) => (
-              <ChapterItem key={ch.id} ch={ch} globalIndex={i} isExcluded={excludedChapters?.has(i) ?? false} {...itemProps} />
+              <ChapterItem key={ch.id} ch={ch} globalIndex={i} isExcluded={excludedChapters?.has(i) ?? false} isRangeStart={rangeStart === i} isRangeEnd={rangeEnd === i} {...itemProps} />
             ))}
           </ul>
         )}

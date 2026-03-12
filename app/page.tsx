@@ -39,6 +39,7 @@ interface StoredBookState {
   snapshots: Snapshot[];
   excludedBooks?: number[];
   excludedChapters?: number[];  // global chapter indices excluded from analysis
+  chapterRange?: { start: number; end: number }; // inclusive chapter index range for analysis
   bookMeta?: BookMeta;
 }
 
@@ -299,6 +300,7 @@ export default function Home() {
 
   const [excludedBooks, setExcludedBooks] = useState<Set<number>>(new Set());
   const [excludedChapters, setExcludedChapters] = useState<Set<number>>(new Set());
+  const [chapterRange, setChapterRangeState] = useState<{ start: number; end: number } | null>(null);
   const [mapState, setMapState] = useState<MapState | null>(null);
 
   function toggleBook(bookIndex: number) {
@@ -325,6 +327,16 @@ export default function Home() {
       }
       return next;
     });
+  }
+
+  function setChapterRange(range: { start: number; end: number } | null) {
+    setChapterRangeState(range);
+    if (book && storedRef.current) {
+      const updated: StoredBookState = { ...storedRef.current };
+      if (range) updated.chapterRange = range; else delete updated.chapterRange;
+      storedRef.current = updated;
+      saveStored(book.title, book.author, updated);
+    }
   }
 
   const [tab, setTab] = useState<MainTab>('characters');
@@ -493,6 +505,7 @@ export default function Home() {
     seriesBaseRef.current = initialStored?.lastAnalyzedIndex === -1 ? initialStored.result : null;
     setExcludedBooks(initialStored?.excludedBooks ? new Set(initialStored.excludedBooks) : new Set());
     setExcludedChapters(initialStored?.excludedChapters ? new Set(initialStored.excludedChapters) : new Set());
+    setChapterRangeState(initialStored?.chapterRange ?? null);
     setMapState(loadMapState(parsed.title, parsed.author));
     setBook(parsed);
     setViewingSnapshotIndex(null);
@@ -609,8 +622,12 @@ export default function Home() {
     setAnalyzeError(null);
 
     const stored = storedRef.current;
-    const startIndex = stored && stored.lastAnalyzedIndex >= 0 ? stored.lastAnalyzedIndex + 1 : 0;
-    const total = currentIndex - startIndex + 1;
+    const rangeStart = chapterRange?.start ?? 0;
+    const rangeEnd = chapterRange?.end ?? (book.chapters.length - 1);
+    const lastAnalyzed = stored && stored.lastAnalyzedIndex >= 0 ? stored.lastAnalyzedIndex : -1;
+    const startIndex = Math.max(lastAnalyzed + 1, rangeStart);
+    const endIndex = Math.min(currentIndex, rangeEnd);
+    const total = endIndex - startIndex + 1;
     setRebuildProgress({ current: 0, total });
 
     let accumulated: AnalysisResult | null =
@@ -618,12 +635,12 @@ export default function Home() {
     let snapshots: Snapshot[] = stored?.snapshots ?? [];
 
     try {
-      for (let i = startIndex; i <= currentIndex; i++) {
+      for (let i = startIndex; i <= endIndex; i++) {
         if (analyzeCancelRef.current) break;
         setRebuildProgress({ current: i - startIndex + 1, total });
         const ch = book.chapters[i];
         if (ch.bookIndex !== undefined && excludedBooks.has(ch.bookIndex)) continue;
-        if (isFrontMatter(ch)) {
+        if (excludedChapters.has(i) || isFrontMatter(ch)) {
           if (accumulated) {
             snapshots = upsertSnapshot(snapshots, i, accumulated);
             const partial: StoredBookState = { lastAnalyzedIndex: i, result: accumulated, snapshots };
@@ -648,22 +665,25 @@ export default function Home() {
       setRebuildProgress(null);
       analyzeCancelRef.current = false;
     }
-  }, [book, currentIndex, excludedBooks]);
+  }, [book, currentIndex, excludedBooks, excludedChapters, chapterRange]);
 
   const handleRebuild = useCallback(async () => {
     if (!book) return;
     rebuildCancelRef.current = false;
     setRebuilding(true);
     setAnalyzeError(null);
-    setRebuildProgress({ current: 0, total: currentIndex + 1 });
+    const rebuildRangeStart = chapterRange?.start ?? 0;
+    const rebuildRangeEnd = Math.min(currentIndex, chapterRange?.end ?? currentIndex);
+    const rebuildTotal = rebuildRangeEnd - rebuildRangeStart + 1;
+    setRebuildProgress({ current: 0, total: rebuildTotal });
 
     let accumulated: AnalysisResult | null = seriesBaseRef.current;
     let snapshots: Snapshot[] = storedRef.current?.snapshots ?? [];
 
     try {
-      for (let i = 0; i <= currentIndex; i++) {
+      for (let i = rebuildRangeStart; i <= rebuildRangeEnd; i++) {
         if (rebuildCancelRef.current) break;
-        setRebuildProgress({ current: i + 1, total: currentIndex + 1 });
+        setRebuildProgress({ current: i - rebuildRangeStart + 1, total: rebuildTotal });
         const ch = book.chapters[i];
         if (ch.bookIndex !== undefined && excludedBooks.has(ch.bookIndex)) continue;
         if (excludedChapters.has(i) || isFrontMatter(ch)) {
@@ -692,7 +712,7 @@ export default function Home() {
       setRebuildProgress(null);
       rebuildCancelRef.current = false;
     }
-  }, [book, currentIndex, excludedBooks, excludedChapters]);
+  }, [book, currentIndex, excludedBooks, excludedChapters, chapterRange]);
 
   const handleDeleteSnapshot = useCallback((index: number) => {
     if (!book || !storedRef.current) return;
@@ -1084,6 +1104,8 @@ export default function Home() {
             onToggleBook={toggleBook}
             excludedChapters={excludedChapters}
             onToggleChapter={toggleChapter}
+            chapterRange={chapterRange}
+            onSetRange={setChapterRange}
             onDeleteSnapshot={handleDeleteSnapshot}
             metaOnly={isMetaOnly}
           />
