@@ -6,7 +6,6 @@ import type { AnalysisResult } from '@/types';
 // Undici agent with no headers/body timeout — our AbortController handles cancellation
 const ollamaAgent = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
 
-
 const anthropic = new Anthropic();
 
 // Max chars of new chapter text to send in incremental mode
@@ -15,7 +14,9 @@ const MAX_NEW_CHARS = 120_000;
 const MAX_CHARS = 180_000;
 const HEAD_CHARS = 50_000;
 
-const SYSTEM_PROMPT = `You are a literary companion that helps readers keep track of characters in the book they are currently reading. Your most important rule is NEVER SPOILING anything beyond what appears in the text provided.
+// ─── System prompts (one per pass) ───────────────────────────────────────────
+
+const ANTI_SPOILER = `Your most important rule is NEVER SPOILING anything beyond what appears in the text provided.
 
 STRICT ANTI-SPOILER RULES (follow these without exception):
 1. Base ALL information SOLELY on the text excerpt provided — nothing else.
@@ -23,7 +24,12 @@ STRICT ANTI-SPOILER RULES (follow these without exception):
 3. Only report facts that are explicitly stated or clearly implied by the text given.
 4. If a character's fate, location, or status is uncertain based on the text, say so — do NOT infer from broader knowledge.
 5. Do NOT hint at, foreshadow, or allude to future events in any way.
-6. If a character has not appeared yet in the provided text, do NOT include them.
+
+Your output must be valid JSON and nothing else.`;
+
+const ARCS_SYSTEM = `You are a narrative arc analyst for a literary reading companion. ${ANTI_SPOILER}`;
+
+const CHARACTERS_SYSTEM = `You are a character tracker for a literary reading companion. ${ANTI_SPOILER}
 
 CHARACTER COMPLETENESS RULES:
 - Include EVERY named character who appears in the text, no matter how briefly — protagonists, antagonists, and minor characters alike.
@@ -34,11 +40,39 @@ CHARACTER COMPLETENESS RULES:
 DEDUPLICATION RULES (critical):
 - A character must appear EXACTLY ONCE regardless of how many names or nicknames they are called by.
 - If the same person is referred to by multiple names (e.g. "Matrim Cauthon" and "Mat"), create ONE entry using their fullest known name and list all shorter forms in "aliases".
-- Never create separate entries for a full name and its nickname or shortened form.
+- Never create separate entries for a full name and its nickname or shortened form.`;
 
-Your output must be valid JSON and nothing else.`;
+const LOCATIONS_SYSTEM = `You are a location and world-building tracker for a literary reading companion. ${ANTI_SPOILER}`;
 
-const SCHEMA = `{
+// ─── Schemas ──────────────────────────────────────────────────────────────────
+
+const ARC_SCHEMA = `{
+  "arcs": [
+    {
+      "name": "Short name for this plot thread (e.g. 'Frodo\\'s journey to Mordor')",
+      "status": "active" | "resolved" | "dormant",
+      "characters": ["character names involved in this arc"],
+      "summary": "1–2 sentences on where this arc stands right now"
+    }
+  ]
+}`;
+
+const ARC_DELTA_SCHEMA = `{
+  "updatedArcs": [
+    {
+      "name": "Arc name — must exactly match an existing arc name (or renamedArcs new name), or be genuinely new",
+      "status": "active" | "resolved" | "dormant",
+      "characters": ["character names involved"],
+      "summary": "1–2 sentences on where this arc stands after this chapter"
+    }
+  ],
+  "renamedArcs": [
+    { "from": "exact existing arc name", "to": "new arc name reflecting its evolved scope or phase" }
+  ],
+  "retiredArcs": ["exact name of any arc being permanently dropped — NOT ones being renamed"]
+}`;
+
+const CHARACTER_SCHEMA = `{
   "characters": [
     {
       "name": "Full character name",
@@ -53,79 +87,10 @@ const SCHEMA = `{
       ],
       "recentEvents": "Key things that have happened to or involving this character in the most recent chapters read"
     }
-  ],
-  "locations": [
-    {
-      "name": "Broad canonical place name — city, castle, region, planet, ship (NOT a generic room, corridor, or sub-location). Prefer the containing location over sub-locations.",
-      "aliases": ["shorter or alternate names readers use for this place — e.g. 'Ceres' for 'Ceres Station', 'the Pits' for 'Hellas Basin'"],
-      "arc": "Short narrative arc label (2–4 words max) grouping related locations into the same broad storyline thread. Aim for 3–5 arc labels total for the whole book — broad strokes like 'The Journey', 'The War', 'The Shire', not a new label per chapter. If a location fits an existing arc, use that exact label.",
-      "description": "1–2 sentence description of this place — what kind of place it is, its significance, atmosphere, or notable features as established in the text",
-      "recentEvents": "1–2 sentences describing what happened at this location in the current chapter — key events, arrivals, departures, or confrontations. Omit if nothing notable occurred here.",
-      "relationships": [
-        { "location": "Another location name", "relationship": "How these places relate — e.g. 'contains', 'part of', 'adjacent to', 'connected by road to', 'visible from', 'governs', 'supplies'" }
-      ]
-    }
-  ],
-  "arcs": [
-    {
-      "name": "Short name for this plot thread (e.g. 'Frodo\\'s journey to Mordor')",
-      "status": "active" | "resolved" | "dormant",
-      "characters": ["character names involved in this arc"],
-      "summary": "1–2 sentences on where this arc stands right now"
-    }
-  ],
-  "summary": "2–3 sentence summary of where the story stands as of the current chapter, from the reader's perspective"
+  ]
 }`;
 
-function buildFullPrompt(
-  bookTitle: string,
-  bookAuthor: string,
-  currentChapterTitle: string,
-  text: string,
-  allChapterTitles?: string[],
-): string {
-  const tocBlock = allChapterTitles && allChapterTitles.length > 1
-    ? `\nTABLE OF CONTENTS (${allChapterTitles.length} chapters total — use this to calibrate arc scope):\n${allChapterTitles.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n`
-    : '';
-  return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${currentChapterTitle}".
-${tocBlock}
-Analyze the text below and extract a COMPLETE character roster — every named character who appears, from major protagonists to characters who appear in a single scene. Do not skip anyone because they seem minor.
-
-TEXT I HAVE READ:
-${text}
-
-ARC RULES:
-- Identify 3–7 major plot threads (fewer is better — combine closely related threads into one).
-- Each arc should span multiple chapters and drive meaningful story action.
-- Do not create an arc for every scene; only for threads that have clear ongoing stakes.
-- "status": "active" = ongoing, "resolved" = concluded, "dormant" = paused/not mentioned recently.
-- The table of contents above shows the full scope of the book — create arcs broad enough to last, not micro-arcs for individual scenes.
-
-Return ONLY a JSON object matching this exact schema (no markdown fences, no explanation):
-${SCHEMA}`;
-}
-
-// Compact representation of previous characters for the delta prompt
-function compactCharacterList(chars: AnalysisResult['characters']): string {
-  return chars
-    .map((c) => `- ${c.name} (${c.status}, last: ${c.lastSeen ?? '?'}, loc: ${c.currentLocation ?? '?'})`)
-    .join('\n');
-}
-
-// Collect distinct arc labels already in use
-function existingArcLabels(locs: AnalysisResult['locations']): string[] {
-  const seen = new Set<string>();
-  for (const l of locs ?? []) if (l.arc?.trim()) seen.add(l.arc.trim());
-  return [...seen];
-}
-
-// Collect existing location names for consolidation hints
-function existingLocationNames(locs: AnalysisResult['locations']): string[] {
-  return (locs ?? []).map((l) => l.name).filter(Boolean);
-}
-
-// Delta schema — only new/changed characters and locations
-const DELTA_SCHEMA = `{
+const CHARACTER_DELTA_SCHEMA = `{
   "updatedCharacters": [
     {
       "name": "Full character name",
@@ -140,76 +105,239 @@ const DELTA_SCHEMA = `{
       ],
       "recentEvents": "Key things that happened in the NEW chapter only"
     }
-  ],
-  "updatedLocations": [
+  ]
+}`;
+
+const LOCATION_SCHEMA = `{
+  "locations": [
     {
-      "name": "Broad canonical place name — city, castle, region, planet, ship. Prefer the name of the containing location over sub-locations (use 'Minas Tirith' not 'the great hall of Minas Tirith'). Use an EXISTING LOCATION NAME if the place is the same, nearby, or contained within it.",
-      "aliases": ["shorter or alternate names readers use for this place — only include if genuinely used in the text"],
-      "arc": "Use one of the EXISTING ARC LABELS listed above whenever it fits. Only create a new label if no existing one applies — and keep the total number of distinct arcs to 5 or fewer for the whole book.",
-      "description": "1–2 sentence description of this place as revealed so far",
-      "recentEvents": "1–2 sentences describing what happened at this location in this chapter — key events, arrivals, departures, or confrontations. Omit if nothing notable occurred here.",
+      "name": "Broad canonical place name — city, castle, region, planet, ship (NOT a generic room, corridor, or sub-location). Prefer the containing location over sub-locations.",
+      "aliases": ["shorter or alternate names readers use for this place — e.g. 'Ceres' for 'Ceres Station', 'the Pits' for 'Hellas Basin'"],
+      "arc": "Short narrative arc label (2–4 words max) grouping related locations into the same broad storyline thread. Use one of the arc names provided above whenever it fits. Aim for 3–5 arc labels total for the whole book.",
+      "description": "1–2 sentence description of this place — what kind of place it is, its significance, atmosphere, or notable features as established in the text",
+      "recentEvents": "1–2 sentences describing what happened at this location in the current chapter. Omit if nothing notable occurred here.",
       "relationships": [
         { "location": "Another location name", "relationship": "How these places relate — e.g. 'contains', 'part of', 'adjacent to', 'connected by road to', 'visible from', 'governs', 'supplies'" }
       ]
     }
   ],
-  "updatedArcs": [
+  "summary": "2–3 sentence summary of where the story stands as of the current chapter, from the reader's perspective"
+}`;
+
+const LOCATION_DELTA_SCHEMA = `{
+  "updatedLocations": [
     {
-      "name": "Arc name — must exactly match an existing arc name (or renamedArcs new name), or be genuinely new",
-      "status": "active" | "resolved" | "dormant",
-      "characters": ["character names involved"],
-      "summary": "1–2 sentences on where this arc stands after this chapter"
+      "name": "Broad canonical place name — city, castle, region, planet, ship. Use an EXISTING LOCATION NAME if the place is the same, nearby, or contained within it.",
+      "aliases": ["shorter or alternate names readers use for this place — only include if genuinely used in the text"],
+      "arc": "Use one of the arc names provided above. Only create a new label if no existing one applies — keep total distinct arcs to 5 or fewer.",
+      "description": "1–2 sentence description of this place as revealed so far",
+      "recentEvents": "1–2 sentences describing what happened at this location in this chapter. Omit if nothing notable occurred here.",
+      "relationships": [
+        { "location": "Another location name", "relationship": "How these places relate" }
+      ]
     }
   ],
-  "renamedArcs": [
-    { "from": "exact existing arc name", "to": "new arc name reflecting its evolved scope or phase" }
-  ],
-  "retiredArcs": ["exact name of any arc being permanently dropped — NOT ones being renamed"],
   "summary": "2–3 sentence summary of where the story stands as of the current chapter"
 }`;
 
-function buildUpdatePrompt(
+// ─── Prompt builders ──────────────────────────────────────────────────────────
+
+function buildArcsFullPrompt(
   bookTitle: string,
   bookAuthor: string,
-  currentChapterTitle: string,
-  previousResult: AnalysisResult,
-  newChaptersText: string,
+  chapterTitle: string,
+  text: string,
+  allChapterTitles?: string[],
 ): string {
-  const prevCount = previousResult.characters.length;
-  const locationArcLabels = existingArcLabels(previousResult.locations);
-  const locs = existingLocationNames(previousResult.locations);
-  const arcLine = locationArcLabels.length > 0
-    ? `\nEXISTING ARC LABELS (reuse these exactly — do not invent new ones unless none fit): ${locationArcLabels.join(', ')}`
+  const tocBlock = allChapterTitles && allChapterTitles.length > 1
+    ? `\nTABLE OF CONTENTS (${allChapterTitles.length} chapters total — use this to calibrate arc scope):\n${allChapterTitles.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n`
     : '';
-  const locLine = locs.length > 0
-    ? `\nEXISTING LOCATIONS (${locs.length} already tracked — reuse the exact name if a new location is the same place, nearby, or contained within one of these): ${locs.join(', ')}`
-    : '';
-  const narrativeArcs = previousResult.arcs ?? [];
-  const arcCount = narrativeArcs.length;
-  const narrativeArcLine = narrativeArcs.length > 0
-    ? `\nEXISTING NARRATIVE ARCS (${arcCount} total — target is 3–6; use "retiredArcs" to drop any that have been absorbed or concluded):\n${narrativeArcs.map((a) => `- ${a.name} [${a.status}]: ${a.summary}`).join('\n')}`
-    : '';
-  return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${currentChapterTitle}".
+  return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${chapterTitle}".
+${tocBlock}
+Identify the major narrative plot threads (arcs) present in the text below.
+
+TEXT:
+${text}
+
+ARC RULES:
+- Identify 3–7 major plot threads (fewer is better — combine closely related threads into one).
+- Each arc should span multiple chapters and drive meaningful story action.
+- Do not create an arc for every scene; only for threads that have clear ongoing stakes.
+- "status": "active" = ongoing, "resolved" = concluded, "dormant" = paused/not mentioned recently.
+- The table of contents above shows the full scope of the book — create arcs broad enough to last, not micro-arcs for individual scenes.
+
+Return ONLY a JSON object (no markdown fences, no explanation):
+${ARC_SCHEMA}`;
+}
+
+function buildArcsDeltaPrompt(
+  bookTitle: string,
+  bookAuthor: string,
+  chapterTitle: string,
+  previousArcs: AnalysisResult['arcs'],
+  text: string,
+): string {
+  const arcCount = previousArcs?.length ?? 0;
+  const arcLines = (previousArcs ?? [])
+    .map((a) => `- ${a.name} [${a.status}]: ${a.summary}`)
+    .join('\n');
+  return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${chapterTitle}".
+
+EXISTING NARRATIVE ARCS (${arcCount} total — target is 3–6; use "retiredArcs" to drop any that have been absorbed or concluded):
+${arcLines}
+
+NEW CHAPTER TEXT:
+${text}
+
+Update the arcs based on this new chapter. ARC CONTINUITY RULES:
+- If an arc cleanly transitions into a new phase with the same characters and storyline, use "renamedArcs" to rename it rather than retiring and creating a new one.
+- If two arcs converge into one thread, rename the broader arc and retire the narrower one.
+- Only use "retiredArcs" for arcs that are truly finished with no continuation.
+- If the total arc count would exceed 6, you MUST rename/merge at least one.
+- Include in "updatedArcs" only arcs that progressed, changed status, or are new this chapter.
+
+Return ONLY a JSON object (no markdown fences, no explanation):
+${ARC_DELTA_SCHEMA}`;
+}
+
+function arcsSummary(arcs: AnalysisResult['arcs']): string {
+  if (!arcs?.length) return 'No arcs identified yet.';
+  return arcs.map((a) => `- ${a.name} [${a.status}]: ${a.summary}`).join('\n');
+}
+
+function buildCharactersFullPrompt(
+  bookTitle: string,
+  bookAuthor: string,
+  chapterTitle: string,
+  arcs: AnalysisResult['arcs'],
+  text: string,
+): string {
+  return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${chapterTitle}".
+
+NARRATIVE ARCS (for context — use arc names when describing character involvement):
+${arcsSummary(arcs)}
+
+TEXT:
+${text}
+
+Extract a COMPLETE character roster — every named character who appears, from major protagonists to characters who appear in a single scene. Do not skip anyone because they seem minor.
+
+Return ONLY a JSON object (no markdown fences, no explanation):
+${CHARACTER_SCHEMA}`;
+}
+
+function buildCharactersDeltaPrompt(
+  bookTitle: string,
+  bookAuthor: string,
+  chapterTitle: string,
+  arcs: AnalysisResult['arcs'],
+  previousCharacters: AnalysisResult['characters'],
+  text: string,
+): string {
+  const prevCount = previousCharacters.length;
+  const charLines = previousCharacters
+    .map((c) => `- ${c.name} (${c.status}, last: ${c.lastSeen ?? '?'}, loc: ${c.currentLocation ?? '?'})`)
+    .join('\n');
+  return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${chapterTitle}".
+
+NARRATIVE ARCS (for context):
+${arcsSummary(arcs)}
 
 EXISTING CHARACTERS (${prevCount} already tracked — DO NOT reproduce this list in your output):
-${compactCharacterList(previousResult.characters)}${arcLine}${locLine}${narrativeArcLine}
+${charLines}
 
-NEW CHAPTER TEXT TO PROCESS:
-${newChaptersText}
+NEW CHAPTER TEXT:
+${text}
 
 INSTRUCTIONS — RETURN ONLY CHANGES, NOT THE FULL LIST:
-1. Read the new chapter text carefully.
-2. For each character who APPEARS in the new chapter: include them in "updatedCharacters" with updated fields (status, currentLocation, recentEvents, lastSeen). Keep description/relationships from existing state unless the chapter changes them.
-3. For any BRAND NEW named character introduced in this chapter: include them in "updatedCharacters" with all fields filled in. NEVER group individuals — each person gets their own entry.
-4. Do NOT include characters from the existing list who do not appear in the new chapter.
-5. For significant named places in this chapter: include them in "updatedLocations". CONSOLIDATION RULES — prefer fewer, broader locations: (a) if the place is inside or part of an existing location (e.g. a room in a castle, a district of a city), use the existing location name instead; (b) if the place is immediately adjacent to or commonly grouped with an existing location, use the existing location name; (c) only add a genuinely new entry if the place is distinct and would appear as a separate node on a map.
-6. For narrative arcs: include in "updatedArcs" only arcs that progressed, changed status, or are new this chapter. ARC CONTINUITY RULES — prefer continuity over creating new arcs: (a) if an arc cleanly transitions into a new phase with the same characters and storyline (e.g. "The Escape" becomes "The Pursuit"), use "renamedArcs" to rename it rather than retiring and creating a new one; (b) if two arcs converge into one thread, rename the broader arc and retire the narrower one; (c) only use "retiredArcs" for arcs that are truly finished with no continuation. If the total arc count would exceed 6, you MUST rename/merge at least one — prefer combining related arcs over keeping them separate.
-7. Update the summary to reflect the story as of the current chapter.
-8. Do NOT use any knowledge of this book beyond what is listed above and the new chapter text.
+1. For each character who APPEARS in the new chapter: include them in "updatedCharacters" with updated fields (status, currentLocation, recentEvents, lastSeen). Keep description/relationships from existing state unless the chapter changes them.
+2. For any BRAND NEW named character introduced in this chapter: include them in "updatedCharacters" with all fields filled in. NEVER group individuals — each person gets their own entry.
+3. Do NOT include characters from the existing list who do not appear in the new chapter.
+4. Do NOT use any knowledge of this book beyond what is listed above and the new chapter text.
 
-Return ONLY a JSON object with "updatedCharacters", "updatedLocations", "updatedArcs", "retiredArcs", and "summary" (no markdown fences, no explanation):
-${DELTA_SCHEMA}`;
+Return ONLY a JSON object (no markdown fences, no explanation):
+${CHARACTER_DELTA_SCHEMA}`;
 }
+
+function charactersSummary(chars: AnalysisResult['characters']): string {
+  if (!chars?.length) return 'No characters yet.';
+  return chars
+    .map((c) => `- ${c.name} (loc: ${c.currentLocation ?? 'Unknown'}, status: ${c.status})`)
+    .join('\n');
+}
+
+function buildLocationsFullPrompt(
+  bookTitle: string,
+  bookAuthor: string,
+  chapterTitle: string,
+  arcs: AnalysisResult['arcs'],
+  characters: AnalysisResult['characters'],
+  text: string,
+  allChapterTitles?: string[],
+): string {
+  const tocBlock = allChapterTitles && allChapterTitles.length > 1
+    ? `\nTABLE OF CONTENTS:\n${allChapterTitles.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n`
+    : '';
+  return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${chapterTitle}".
+${tocBlock}
+NARRATIVE ARCS (use these exact names for the "arc" field):
+${arcsSummary(arcs)}
+
+CHARACTERS AND THEIR CURRENT LOCATIONS (for cross-referencing):
+${charactersSummary(characters)}
+
+TEXT:
+${text}
+
+Extract all significant named locations from this text. Also write a story summary.
+
+LOCATION RULES:
+- Prefer broad canonical place names (city, castle, planet, ship) over sub-locations (rooms, corridors, hallways).
+- If a place is inside or part of another location already listed, use the containing location's name instead.
+- Include aliases — common shorter names readers might use for the same place.
+- Use the arc names listed above for the "arc" field.
+
+Return ONLY a JSON object (no markdown fences, no explanation):
+${LOCATION_SCHEMA}`;
+}
+
+function buildLocationsDeltaPrompt(
+  bookTitle: string,
+  bookAuthor: string,
+  chapterTitle: string,
+  arcs: AnalysisResult['arcs'],
+  characters: AnalysisResult['characters'],
+  previousLocations: AnalysisResult['locations'],
+  text: string,
+): string {
+  const existingLocs = (previousLocations ?? []).map((l) => l.name).filter(Boolean);
+  const locLine = existingLocs.length > 0
+    ? `\nEXISTING LOCATIONS (${existingLocs.length} already tracked — reuse the exact name if a new location is the same place, nearby, or contained within one of these): ${existingLocs.join(', ')}`
+    : '';
+  return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${chapterTitle}".
+
+NARRATIVE ARCS (use these exact names for the "arc" field):
+${arcsSummary(arcs)}
+
+CHARACTERS AND THEIR CURRENT LOCATIONS (for cross-referencing):
+${charactersSummary(characters)}
+${locLine}
+
+NEW CHAPTER TEXT:
+${text}
+
+For significant named places in this chapter: include them in "updatedLocations". CONSOLIDATION RULES:
+- If the place is inside or part of an existing location (e.g. a room in a castle, a district of a city), use the existing location name instead.
+- If the place is immediately adjacent to or commonly grouped with an existing location, use the existing location name.
+- Only add a genuinely new entry if the place is distinct and would appear as a separate node on a map.
+- Use arc names from above for the "arc" field.
+Also write an updated story summary.
+
+Return ONLY a JSON object (no markdown fences, no explanation):
+${LOCATION_DELTA_SCHEMA}`;
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function normLoc(name: string): string {
   return name.toLowerCase()
@@ -233,9 +361,7 @@ function deduplicateLocations(locs: AnalysisResult['locations']): AnalysisResult
     return [...set];
   }
 
-  // Group by normalised key; also maintain an alias lookup map
   const groups = new Map<string, Entry>();
-  // aliasLookup: normalised alias → group key
   const aliasLookup = new Map<string, string>();
 
   function findGroupKey(name: string, aliases: string[]): string | undefined {
@@ -243,9 +369,9 @@ function deduplicateLocations(locs: AnalysisResult['locations']): AnalysisResult
     if (groups.has(nk)) return nk;
     if (aliasLookup.has(nk)) return aliasLookup.get(nk);
     for (const a of aliases) {
-      const nа = normLoc(a);
-      if (groups.has(nа)) return nа;
-      if (aliasLookup.has(nа)) return aliasLookup.get(nа);
+      const na = normLoc(a);
+      if (groups.has(na)) return na;
+      if (aliasLookup.has(na)) return aliasLookup.get(na);
     }
     return undefined;
   }
@@ -297,7 +423,6 @@ function deduplicateLocations(locs: AnalysisResult['locations']): AnalysisResult
   }
 
   // Cross-reference pass: merge any two groups that share a canonical name or alias
-  // (handles cases where processing order prevented alias-based merging earlier)
   function mergeInto(target: Entry, source: Entry) {
     if (source.canonical.length > target.canonical.length) target.canonical = source.canonical;
     target.aliases = mergeAliases(target.aliases, [...source.aliases, source.canonical !== target.canonical ? source.canonical : ''].filter(Boolean), target.canonical);
@@ -315,7 +440,6 @@ function deduplicateLocations(locs: AnalysisResult['locations']): AnalysisResult
         if (keyA === keyB) continue;
         const normsB = [groupB.canonical, ...groupB.aliases].map(normLoc);
         if (normsB.some((n) => normsA.has(n))) {
-          // Keep the entry with the longer canonical name (more specific); merge the other in
           const [keepKey, keep, drop, dropKey] =
             groupA.canonical.length >= groupB.canonical.length
               ? [keyA, groupA, groupB, keyB]
@@ -344,7 +468,6 @@ function deduplicateLocations(locs: AnalysisResult['locations']): AnalysisResult
 function deduplicateCharacters(chars: AnalysisResult['characters']): AnalysisResult['characters'] {
   const norm = (s: string) => s.toLowerCase().trim();
   const result: AnalysisResult['characters'] = [];
-  // nameIndex maps every known normalised name/alias → index into result[]
   const nameIndex = new Map<string, number>();
 
   for (const char of chars) {
@@ -355,7 +478,6 @@ function deduplicateCharacters(chars: AnalysisResult['characters']): AnalysisRes
     );
 
     if (existingIdx !== undefined) {
-      // Merge into existing entry: keep longer name as canonical, union aliases
       const existing = result[existingIdx];
       const canonical = existing.name.length >= char.name.length ? existing.name : char.name;
       const aliasSet = new Set([
@@ -365,7 +487,6 @@ function deduplicateCharacters(chars: AnalysisResult['characters']): AnalysisRes
         char.name !== canonical ? char.name : '',
       ].map(s => s.trim()).filter(Boolean));
       result[existingIdx] = { ...existing, ...char, name: canonical, aliases: [...aliasSet] };
-      // Register any new names
       allNames.forEach(n => nameIndex.set(n, existingIdx));
     } else {
       const idx = result.length;
@@ -376,9 +497,8 @@ function deduplicateCharacters(chars: AnalysisResult['characters']): AnalysisRes
   return result;
 }
 
-const MAX_ARCS = 8; // hard cap — prune oldest dormant/resolved if exceeded
+const MAX_ARCS = 8;
 
-// Merge a delta result into the previous full result
 function mergeDelta(
   previous: AnalysisResult,
   delta: { updatedCharacters?: AnalysisResult['characters']; updatedLocations?: AnalysisResult['locations']; updatedArcs?: AnalysisResult['arcs']; renamedArcs?: { from: string; to: string }[]; retiredArcs?: string[]; summary?: string },
@@ -387,7 +507,6 @@ function mergeDelta(
   const norm = (s: string) => s.toLowerCase().trim();
   for (const updated of delta.updatedCharacters ?? []) {
     if (!updated.name) continue;
-    // Match by name OR any alias in either direction (handles renames like Strider→Aragorn)
     const updatedNames = new Set([updated.name, ...(updated.aliases ?? [])].map(norm));
     const idx = merged.findIndex((c) =>
       [c.name, ...(c.aliases ?? [])].some((n) => updatedNames.has(norm(n))),
@@ -417,7 +536,6 @@ function mergeDelta(
     );
     if (idx >= 0) {
       const existing = mergedLocations[idx];
-      // Prefer the longer (more specific) name as canonical
       const canonicalName = updated.name.length >= existing.name.length ? updated.name : existing.name;
       const allAliases = [...new Set([
         ...(existing.aliases ?? []),
@@ -431,7 +549,6 @@ function mergeDelta(
     }
   }
 
-  // Apply renames first so updatedArcs can reference the new names
   const retired = new Set((delta.retiredArcs ?? []).map((n) => n.toLowerCase()));
   let prevArcs = (previous.arcs ?? []).filter((a) => !retired.has(a.name.toLowerCase()));
   for (const { from, to } of delta.renamedArcs ?? []) {
@@ -449,7 +566,6 @@ function mergeDelta(
       mergedArcs.push(updated);
     }
   }
-  // Hard cap: if still over limit, prune resolved then dormant (oldest first)
   if (mergedArcs.length > MAX_ARCS) {
     const order = { resolved: 0, dormant: 1, active: 2 };
     mergedArcs.sort((a, b) => order[a.status] - order[b.status]);
@@ -464,77 +580,8 @@ function mergeDelta(
   };
 }
 
-/** Extract complete JSON objects from an array field that may be truncated. */
-function extractObjectsFromArray(raw: string, fieldName: string): AnalysisResult['characters'] {
-  const key = `"${fieldName}"`;
-  const keyPos = raw.indexOf(key);
-  if (keyPos === -1) return [];
-  const bracketStart = raw.indexOf('[', keyPos);
-  if (bracketStart === -1) return [];
+// ─── LLM providers ───────────────────────────────────────────────────────────
 
-  const items: AnalysisResult['characters'] = [];
-  let i = bracketStart + 1;
-  while (i < raw.length) {
-    while (i < raw.length && /[\s,]/.test(raw[i])) i++;
-    if (i >= raw.length || raw[i] !== '{') break;
-
-    let depth = 0, j = i, inString = false, escape = false;
-    while (j < raw.length) {
-      const ch = raw[j];
-      if (escape) { escape = false; j++; continue; }
-      if (ch === '\\' && inString) { escape = true; j++; continue; }
-      if (ch === '"') { inString = !inString; j++; continue; }
-      if (!inString) {
-        if (ch === '{') depth++;
-        else if (ch === '}') { depth--; if (depth === 0) { j++; break; } }
-      }
-      j++;
-    }
-    if (depth !== 0) break; // truncated — stop
-    try { items.push(JSON.parse(raw.slice(i, j))); } catch { /* skip malformed */ }
-    i = j;
-  }
-  return items;
-}
-
-// Attempt to recover partial/truncated JSON by extracting complete character objects
-function recoverPartialJson(raw: string, previousResult?: AnalysisResult): AnalysisResult | null {
-  try {
-    // Try a full JSON.parse on the outermost {...} slice first
-    const braceStart = raw.indexOf('{');
-    const braceEnd = raw.lastIndexOf('}');
-    if (braceStart >= 0 && braceEnd > braceStart) {
-      try {
-        const candidate = raw.slice(braceStart, braceEnd + 1);
-        const p = JSON.parse(candidate) as Record<string, unknown>;
-        if (p.characters || p.updatedCharacters !== undefined) return p as unknown as AnalysisResult;
-      } catch { /* fall through to object-by-object extraction */ }
-    }
-
-    // Try full format first ("characters"), then delta format ("updatedCharacters")
-    const characters = extractObjectsFromArray(raw, 'characters');
-    const updatedCharacters = extractObjectsFromArray(raw, 'updatedCharacters');
-
-    const summaryMatch = raw.match(/"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-    const summary = summaryMatch
-      ? summaryMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"')
-      : previousResult?.summary ?? '';
-
-    if (characters.length > 0) {
-      return { characters, summary };
-    }
-    if (previousResult) {
-      // Even an empty updatedCharacters is valid (no changes this chapter)
-      console.warn('[analyze] Recovered delta from truncated JSON —', updatedCharacters.length, 'updates');
-      return mergeDelta(previousResult, { updatedCharacters, summary });
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-// --- Anthropic provider ---
 async function callAnthropic(system: string, userPrompt: string, opts: { apiKey?: string; model?: string } = {}): Promise<string> {
   const client = opts.apiKey ? new Anthropic({ apiKey: opts.apiKey }) : anthropic;
   const response = await client.messages.create({
@@ -548,13 +595,10 @@ async function callAnthropic(system: string, userPrompt: string, opts: { apiKey?
   return block.text;
 }
 
-// --- Local / OpenAI-compatible provider (Ollama, LM Studio, etc.) ---
 async function callLocal(system: string, userPrompt: string, opts: { baseUrl?: string; model?: string } = {}): Promise<string> {
   const baseUrl = opts.baseUrl ?? process.env.LOCAL_MODEL_URL ?? 'http://localhost:11434/v1';
   const model = opts.model ?? process.env.LOCAL_MODEL_NAME ?? 'llama3.1:8b';
 
-  // Use undici fetch with a custom agent — disables the default 300s headersTimeout
-  // that fires independently of AbortController for slow local models.
   const res = await undiciFetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -580,6 +624,165 @@ async function callLocal(system: string, userPrompt: string, opts: { baseUrl?: s
   return text;
 }
 
+type CallOpts = { baseUrl?: string; model?: string } | { apiKey?: string; model?: string };
+
+async function callLLM(system: string, userPrompt: string, useLocal: boolean, callOpts: CallOpts): Promise<string> {
+  return useLocal
+    ? callLocal(system, userPrompt, callOpts as { baseUrl?: string; model?: string })
+    : callAnthropic(system, userPrompt, callOpts as { apiKey?: string; model?: string });
+}
+
+async function callAndParseJSON<T>(
+  system: string,
+  userPrompt: string,
+  useLocal: boolean,
+  callOpts: CallOpts,
+  label: string,
+): Promise<T | null> {
+  async function attempt(): Promise<T | null> {
+    const raw = await callLLM(system, userPrompt, useLocal, callOpts);
+    let cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+    try {
+      return JSON.parse(cleaned) as T;
+    } catch {
+      console.warn(`[analyze] ${label} JSON parse failed. Preview:`, cleaned.slice(-200));
+      return null;
+    }
+  }
+
+  let result = await attempt();
+  if (!result) {
+    console.warn(`[analyze] ${label}: retrying after parse failure…`);
+    result = await attempt();
+  }
+  return result;
+}
+
+// ─── Multi-pass analysis ──────────────────────────────────────────────────────
+
+interface ArcDeltaResult {
+  updatedArcs?: AnalysisResult['arcs'];
+  renamedArcs?: { from: string; to: string }[];
+  retiredArcs?: string[];
+}
+
+interface CharDeltaResult {
+  updatedCharacters?: AnalysisResult['characters'];
+}
+
+interface LocResult {
+  locations?: AnalysisResult['locations'];
+  summary?: string;
+}
+
+interface LocDeltaResult {
+  updatedLocations?: AnalysisResult['locations'];
+  summary?: string;
+}
+
+async function runMultiPassFull(
+  bookTitle: string,
+  bookAuthor: string,
+  chapterTitle: string,
+  text: string,
+  allChapterTitles: string[] | undefined,
+  useLocal: boolean,
+  callOpts: CallOpts,
+): Promise<AnalysisResult> {
+  // Pass 1: Arcs
+  console.log('[analyze] Pass 1: arcs');
+  const arcsResult = await callAndParseJSON<{ arcs?: AnalysisResult['arcs'] }>(
+    ARCS_SYSTEM,
+    buildArcsFullPrompt(bookTitle, bookAuthor, chapterTitle, text, allChapterTitles),
+    useLocal, callOpts, 'arcs-full',
+  );
+  const arcs = arcsResult?.arcs ?? [];
+  console.log(`[analyze] Pass 1 done: ${arcs.length} arcs`);
+
+  // Pass 2: Characters
+  console.log('[analyze] Pass 2: characters');
+  const charsResult = await callAndParseJSON<{ characters?: AnalysisResult['characters'] }>(
+    CHARACTERS_SYSTEM,
+    buildCharactersFullPrompt(bookTitle, bookAuthor, chapterTitle, arcs, text),
+    useLocal, callOpts, 'characters-full',
+  );
+  const characters = charsResult?.characters ?? [];
+  console.log(`[analyze] Pass 2 done: ${characters.length} characters`);
+
+  // Pass 3: Locations + summary
+  console.log('[analyze] Pass 3: locations');
+  const locsResult = await callAndParseJSON<LocResult>(
+    LOCATIONS_SYSTEM,
+    buildLocationsFullPrompt(bookTitle, bookAuthor, chapterTitle, arcs, characters, text, allChapterTitles),
+    useLocal, callOpts, 'locations-full',
+  );
+  const locations = locsResult?.locations ?? [];
+  const summary = locsResult?.summary ?? '';
+  console.log(`[analyze] Pass 3 done: ${locations.length} locations`);
+
+  return { characters, locations: locations.length > 0 ? locations : undefined, arcs: arcs.length > 0 ? arcs : undefined, summary };
+}
+
+async function runMultiPassDelta(
+  bookTitle: string,
+  bookAuthor: string,
+  chapterTitle: string,
+  text: string,
+  previousResult: AnalysisResult,
+  useLocal: boolean,
+  callOpts: CallOpts,
+): Promise<AnalysisResult> {
+  // Pass 1: Arcs
+  console.log('[analyze] Pass 1: arcs (delta)');
+  const arcsResult = await callAndParseJSON<ArcDeltaResult>(
+    ARCS_SYSTEM,
+    buildArcsDeltaPrompt(bookTitle, bookAuthor, chapterTitle, previousResult.arcs, text),
+    useLocal, callOpts, 'arcs-delta',
+  );
+  // Apply arc renames/retires to get current arc state for use as context in passes 2+3
+  const arcDelta = {
+    updatedArcs: arcsResult?.updatedArcs,
+    renamedArcs: arcsResult?.renamedArcs,
+    retiredArcs: arcsResult?.retiredArcs,
+  };
+  const afterArcs = mergeDelta(previousResult, arcDelta);
+  const currentArcs = afterArcs.arcs ?? [];
+  console.log(`[analyze] Pass 1 done: ${arcDelta.updatedArcs?.length ?? 0} arc changes → ${currentArcs.length} arcs`);
+
+  // Pass 2: Characters
+  console.log('[analyze] Pass 2: characters (delta)');
+  const charsResult = await callAndParseJSON<CharDeltaResult>(
+    CHARACTERS_SYSTEM,
+    buildCharactersDeltaPrompt(bookTitle, bookAuthor, chapterTitle, currentArcs, previousResult.characters, text),
+    useLocal, callOpts, 'characters-delta',
+  );
+  const charDelta = { updatedCharacters: charsResult?.updatedCharacters };
+  // Merge char delta into afterArcs state to get current character list for pass 3 context
+  const afterChars = mergeDelta(afterArcs, charDelta);
+  const currentCharacters = afterChars.characters;
+  console.log(`[analyze] Pass 2 done: ${charDelta.updatedCharacters?.length ?? 0} char changes → ${currentCharacters.length} chars`);
+
+  // Pass 3: Locations + summary
+  console.log('[analyze] Pass 3: locations (delta)');
+  const locsResult = await callAndParseJSON<LocDeltaResult>(
+    LOCATIONS_SYSTEM,
+    buildLocationsDeltaPrompt(bookTitle, bookAuthor, chapterTitle, currentArcs, currentCharacters, previousResult.locations, text),
+    useLocal, callOpts, 'locations-delta',
+  );
+  const locDelta = { updatedLocations: locsResult?.updatedLocations, summary: locsResult?.summary };
+  console.log(`[analyze] Pass 3 done: ${locDelta.updatedLocations?.length ?? 0} location changes`);
+
+  // Final merge: combine all deltas
+  const finalResult = mergeDelta(afterChars, locDelta);
+  console.log(`[analyze] Delta complete: ${finalResult.characters.length} chars, ${finalResult.arcs?.length ?? 0} arcs, ${finalResult.locations?.length ?? 0} locs`);
+  return finalResult;
+}
+
+// ─── Route handlers ───────────────────────────────────────────────────────────
+
 /** GET /api/analyze — returns the server's AI provider status (no secrets exposed) */
 export async function GET() {
   const hasEnvKey = !!process.env.ANTHROPIC_API_KEY;
@@ -601,7 +804,6 @@ export async function POST(req: NextRequest) {
       bookTitle: string;
       bookAuthor: string;
       previousResult?: AnalysisResult;
-      // Client-provided AI settings — used when server has no env config
       _provider?: 'anthropic' | 'ollama';
       _apiKey?: string;
       _ollamaUrl?: string;
@@ -610,17 +812,16 @@ export async function POST(req: NextRequest) {
     const { chaptersRead, newChapters, allChapterTitles, currentChapterTitle, bookTitle, bookAuthor, previousResult,
       _provider, _apiKey, _ollamaUrl, _model } = body;
 
-    // Server env vars take priority; fall back to client-provided settings
     const serverHasKey = !!process.env.ANTHROPIC_API_KEY;
     const serverUsesLocal = process.env.USE_LOCAL_MODEL === 'true';
     const serverConfigured = serverHasKey || serverUsesLocal;
 
     const useLocal = serverConfigured ? serverUsesLocal : (_provider !== 'anthropic');
-    const callOpts = useLocal
+    const callOpts: CallOpts = useLocal
       ? { baseUrl: process.env.LOCAL_MODEL_URL ?? _ollamaUrl, model: process.env.LOCAL_MODEL_NAME ?? _model }
       : { apiKey: process.env.ANTHROPIC_API_KEY ?? _apiKey, model: _model };
 
-    if (!useLocal && !callOpts.apiKey) {
+    if (!useLocal && !(callOpts as { apiKey?: string }).apiKey) {
       return NextResponse.json(
         { error: 'No Anthropic API key configured. Open ⚙ Settings to add your key.' },
         { status: 400 },
@@ -629,22 +830,18 @@ export async function POST(req: NextRequest) {
 
     const isDelta = !!(previousResult && newChapters?.length);
     const modelName = useLocal
-      ? (callOpts.model ?? process.env.LOCAL_MODEL_NAME ?? 'qwen2.5:14b')
-      : (callOpts.model ?? 'claude-haiku-4-5-20251001');
+      ? ((callOpts as { model?: string }).model ?? process.env.LOCAL_MODEL_NAME ?? 'qwen2.5:14b')
+      : ((callOpts as { model?: string }).model ?? 'claude-haiku-4-5-20251001');
 
-    let userPrompt: string;
+    let result: AnalysisResult;
 
     if (isDelta) {
-      // Delta mode: ask only for new/changed characters, merge server-side
       const newText = newChapters!
         .map((ch) => `=== ${ch.title} ===\n\n${ch.text}`)
         .join('\n\n---\n\n');
-      const truncatedNew = newText.length > MAX_NEW_CHARS
-        ? newText.slice(-MAX_NEW_CHARS)
-        : newText;
-      userPrompt = buildUpdatePrompt(bookTitle, bookAuthor, currentChapterTitle, previousResult!, truncatedNew);
+      const truncatedNew = newText.length > MAX_NEW_CHARS ? newText.slice(-MAX_NEW_CHARS) : newText;
+      result = await runMultiPassDelta(bookTitle, bookAuthor, currentChapterTitle, truncatedNew, previousResult!, useLocal, callOpts);
     } else {
-      // Full analysis mode
       if (!chaptersRead?.length) {
         return NextResponse.json({ error: 'No chapter text provided.' }, { status: 400 });
       }
@@ -657,65 +854,7 @@ export async function POST(req: NextRequest) {
         const tail = fullText.slice(-(MAX_CHARS - HEAD_CHARS));
         return `${head}\n\n[... middle chapters omitted to fit context ...]\n\n${tail}`;
       })();
-      userPrompt = buildFullPrompt(bookTitle, bookAuthor, currentChapterTitle, truncated, allChapterTitles);
-    }
-
-    type ParseOutcome =
-      | { ok: true; parsed: Record<string, unknown>; recovered: false }
-      | { ok: true; parsed: AnalysisResult; recovered: true }
-      | { ok: false };
-
-    async function callAndParse(): Promise<ParseOutcome> {
-      const raw = useLocal
-        ? await callLocal(SYSTEM_PROMPT, userPrompt, callOpts)
-        : await callAnthropic(SYSTEM_PROMPT, userPrompt, callOpts);
-
-      let cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
-      const firstBrace = cleaned.indexOf('{');
-      const lastBrace = cleaned.lastIndexOf('}');
-      if (firstBrace >= 0 && lastBrace > firstBrace) cleaned = cleaned.slice(firstBrace, lastBrace + 1);
-
-      try {
-        return { ok: true, parsed: JSON.parse(cleaned) as Record<string, unknown>, recovered: false };
-      } catch {
-        const recovered = recoverPartialJson(cleaned, previousResult);
-        if (recovered) {
-          console.warn('[analyze] Recovered from truncated JSON — kept', recovered.characters.length, 'characters');
-          return { ok: true, parsed: recovered, recovered: true };
-        }
-        console.warn('[analyze] Unrecoverable JSON. Raw length:', cleaned.length, 'Preview:', cleaned.slice(-200));
-        return { ok: false };
-      }
-    }
-
-    let outcome = await callAndParse();
-    if (!outcome.ok) {
-      console.warn('[analyze] Retrying after unrecoverable JSON…');
-      outcome = await callAndParse();
-    }
-    if (!outcome.ok) {
-      return NextResponse.json({ error: 'Model returned malformed JSON. Try again.' }, { status: 500 });
-    }
-
-    // Recovered path: AnalysisResult already merged by recoverPartialJson
-    if (outcome.recovered) {
-      const r = outcome.parsed;
-      const finalResult = isDelta
-        ? mergeDelta(previousResult!, { updatedCharacters: r.characters, summary: r.summary })
-        : r;
-      return NextResponse.json({ ...finalResult, characters: deduplicateCharacters(finalResult.characters), locations: deduplicateLocations(finalResult.locations), _model: modelName });
-    }
-
-    const parsed = outcome.parsed;
-
-    let result: AnalysisResult;
-    if (isDelta) {
-      // Delta response: merge updated/new characters into previous full state
-      const delta = parsed as { updatedCharacters?: AnalysisResult['characters']; updatedLocations?: AnalysisResult['locations']; updatedArcs?: AnalysisResult['arcs']; renamedArcs?: { from: string; to: string }[]; retiredArcs?: string[]; summary?: string };
-      result = mergeDelta(previousResult!, delta);
-      console.log(`[analyze] Delta merge: ${delta.updatedCharacters?.length ?? 0} char changes, ${delta.updatedArcs?.length ?? 0} arc changes → ${result.characters.length} chars, ${result.arcs?.length ?? 0} arcs`);
-    } else {
-      result = parsed as unknown as AnalysisResult;
+      result = await runMultiPassFull(bookTitle, bookAuthor, currentChapterTitle, truncated, allChapterTitles, useLocal, callOpts);
     }
 
     result = { ...result, characters: deduplicateCharacters(result.characters), locations: deduplicateLocations(result.locations) };
