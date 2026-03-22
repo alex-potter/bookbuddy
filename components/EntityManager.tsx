@@ -12,6 +12,8 @@ import LocationModal from './LocationModal';
 import NarrativeArcModal from './NarrativeArcModal';
 import EntityPicker from './EntityPicker';
 
+const IS_MOBILE = process.env.NEXT_PUBLIC_MOBILE === 'true';
+
 type EntityTab = 'characters' | 'locations' | 'arcs';
 
 interface Props {
@@ -186,6 +188,20 @@ export default function EntityManager({ snapshots, currentResult, chapterTitles,
     }, 1000);
 
     try {
+      if (IS_MOBILE) {
+        setEvalProgress((prev) => prev ? { ...prev, phase: 'calling_ai' } : null);
+        const { reconcileProposeClient } = await import('@/lib/ai-client');
+        const proposals = await reconcileProposeClient(
+          type, currentResult, bookTitle, bookAuthor,
+          currentResult.summary ?? undefined,
+        );
+        setProposals(proposals);
+        setAcceptedIds(new Set());
+        setRejectedIds(new Set());
+        setProposalStatus('reviewing');
+        return;
+      }
+
       let aiSettings: Record<string, string> = {};
       try {
         const { loadAiSettings } = await import('@/lib/ai-client');

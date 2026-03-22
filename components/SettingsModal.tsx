@@ -1,26 +1,27 @@
 'use client';
 
 import { useState } from 'react';
-import { loadAiSettings, saveAiSettings, testConnection, type AiSettings } from '@/lib/ai-client';
+import { loadAiSettings, saveAiSettings, testConnection, diagnoseOllamaConnection, type AiSettings } from '@/lib/ai-client';
 
 interface Props {
   onClose: () => void;
 }
 
-const OLLAMA_MODELS = ['qwen2.5:14b', 'qwen2.5:7b', 'llama3.1:8b', 'mistral', 'gemma3:12b'];
+const OLLAMA_MODELS = ['qwen2.5:32b', 'qwen2.5:14b', 'qwen2.5:7b', 'llama3.1:8b', 'mistral', 'gemma3:12b'];
 const ANTHROPIC_MODELS = [
   { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5 (fast, cheap)' },
   { id: 'claude-sonnet-4-5-20251022', label: 'Sonnet 4.5 (smarter)' },
   { id: 'claude-opus-4-5-20251101', label: 'Opus 4.5 (best)' },
 ];
 
-type TestState = 'idle' | 'testing' | 'ok' | 'error';
+type TestState = 'idle' | 'testing' | 'ok' | 'error' | 'cors-error' | 'unreachable';
 
 export default function SettingsModal({ onClose }: Props) {
   const [settings, setSettings] = useState<AiSettings>(loadAiSettings);
   const [saved, setSaved] = useState(false);
   const [testState, setTestState] = useState<TestState>('idle');
   const [testMsg, setTestMsg] = useState('');
+  const [guideOpen, setGuideOpen] = useState(false);
 
   function set<K extends keyof AiSettings>(key: K, value: AiSettings[K]) {
     setSettings((prev) => ({ ...prev, [key]: value }));
@@ -38,6 +39,21 @@ export default function SettingsModal({ onClose }: Props) {
     setTestState('testing');
     setTestMsg('');
     try {
+      // Run Ollama-specific diagnostics first
+      if (settings.provider === 'ollama' && settings.ollamaUrl) {
+        const diag = await diagnoseOllamaConnection(settings.ollamaUrl);
+        if (!diag.reachable) {
+          setTestState('unreachable');
+          setTestMsg(diag.hint ?? 'Cannot reach Ollama.');
+          return;
+        }
+        if (!diag.corsOk) {
+          setTestState('cors-error');
+          setTestMsg(diag.hint ?? 'CORS blocked.');
+          setGuideOpen(true);
+          return;
+        }
+      }
       const reply = await testConnection(settings);
       setTestState('ok');
       setTestMsg(reply.slice(0, 80));
@@ -118,6 +134,34 @@ export default function SettingsModal({ onClose }: Props) {
                 ))}
               </div>
             </div>
+
+            {/* Ollama Setup Guide */}
+            <div className="rounded-lg border border-stone-300 dark:border-zinc-700 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setGuideOpen(!guideOpen)}
+                className="w-full flex items-center justify-between px-3 py-2 text-xs font-medium text-stone-500 dark:text-zinc-400 hover:text-stone-700 dark:hover:text-zinc-300 transition-colors"
+              >
+                <span>Ollama Setup Guide</span>
+                <span className="text-[10px]">{guideOpen ? '▲' : '▼'}</span>
+              </button>
+              {guideOpen && (
+                <div className="px-3 pb-3 space-y-2 text-xs text-stone-500 dark:text-zinc-400">
+                  <p>To use Ollama from this site, allow cross-origin requests:</p>
+                  <div className="space-y-1.5">
+                    <p className="font-medium text-stone-600 dark:text-zinc-300">macOS / Linux:</p>
+                    <pre className="bg-stone-100 dark:bg-zinc-800 rounded px-2 py-1.5 font-mono text-[11px] overflow-x-auto">OLLAMA_ORIGINS=* ollama serve</pre>
+                    <p className="font-medium text-stone-600 dark:text-zinc-300">Windows (PowerShell):</p>
+                    <pre className="bg-stone-100 dark:bg-zinc-800 rounded px-2 py-1.5 font-mono text-[11px] overflow-x-auto">$env:OLLAMA_ORIGINS=&quot;*&quot;; ollama serve</pre>
+                    <p className="font-medium text-stone-600 dark:text-zinc-300">Windows (cmd):</p>
+                    <pre className="bg-stone-100 dark:bg-zinc-800 rounded px-2 py-1.5 font-mono text-[11px] overflow-x-auto">set OLLAMA_ORIGINS=* &amp;&amp; ollama serve</pre>
+                    <p className="font-medium text-stone-600 dark:text-zinc-300">Docker:</p>
+                    <pre className="bg-stone-100 dark:bg-zinc-800 rounded px-2 py-1.5 font-mono text-[11px] overflow-x-auto">docker run -e OLLAMA_ORIGINS=* -p 11434:11434 ollama/ollama</pre>
+                  </div>
+                  <p className="text-stone-400 dark:text-zinc-500">Restart Ollama after changing the environment variable.</p>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -175,6 +219,22 @@ export default function SettingsModal({ onClose }: Props) {
           </button>
           {testState === 'ok' && (
             <p className="mt-1.5 text-xs text-emerald-400 text-center">✓ Connected — model replied: &ldquo;{testMsg}&rdquo;</p>
+          )}
+          {testState === 'cors-error' && (
+            <div className="mt-1.5 text-center space-y-1">
+              <p className="text-xs text-red-400">✗ {testMsg}</p>
+              {!guideOpen && (
+                <button
+                  onClick={() => setGuideOpen(true)}
+                  className="text-[11px] text-amber-400 hover:text-amber-300 transition-colors"
+                >
+                  Show setup guide ↑
+                </button>
+              )}
+            </div>
+          )}
+          {testState === 'unreachable' && (
+            <p className="mt-1.5 text-xs text-red-400 text-center">✗ {testMsg}</p>
           )}
           {testState === 'error' && (
             <p className="mt-1.5 text-xs text-red-400 text-center">✗ {testMsg}</p>

@@ -229,6 +229,11 @@ async function reconcileResult(
   result: AnalysisResult,
   recentChapterText?: string,
 ): Promise<AnalysisResult> {
+  if (IS_MOBILE) {
+    const { reconcileResultClient } = await import('@/lib/ai-client');
+    return reconcileResultClient(bookTitle, bookAuthor, result, recentChapterText);
+  }
+
   let aiSettings: Record<string, string> = {};
   try {
     const { loadAiSettings } = await import('@/lib/ai-client');

@@ -37,10 +37,21 @@ export function aggregateEntities(
   const sorted = [...snapshots].sort((a, b) => a.index - b.index);
 
   // -- Characters --
+  // Resolve old snapshot names to canonical current names via aliases
+  const charAliasToCanonical = new Map<string, string>();
+  for (const c of latestResult.characters) {
+    const canonical = norm(c.name);
+    charAliasToCanonical.set(canonical, canonical);
+    for (const alias of c.aliases ?? []) {
+      charAliasToCanonical.set(norm(alias), canonical);
+    }
+  }
+
   const charMap = new Map<string, AggregatedCharacter>();
   for (const snap of sorted) {
     for (const c of snap.result.characters) {
-      const key = norm(c.name);
+      const rawKey = norm(c.name);
+      const key = charAliasToCanonical.get(rawKey) ?? rawKey;
       const existing = charMap.get(key);
       if (existing) {
         existing.character = c;
@@ -78,10 +89,21 @@ export function aggregateEntities(
   }
 
   // -- Locations --
+  // Resolve old snapshot names to canonical current names via aliases
+  const locAliasToCanonical = new Map<string, string>();
+  for (const l of latestResult.locations ?? []) {
+    const canonical = norm(l.name);
+    locAliasToCanonical.set(canonical, canonical);
+    for (const alias of l.aliases ?? []) {
+      locAliasToCanonical.set(norm(alias), canonical);
+    }
+  }
+
   const locMap = new Map<string, AggregatedLocation>();
   for (const snap of sorted) {
     for (const l of snap.result.locations ?? []) {
-      const key = norm(l.name);
+      const rawKey = norm(l.name);
+      const key = locAliasToCanonical.get(rawKey) ?? rawKey;
       const existing = locMap.get(key);
       if (existing) {
         existing.location = l;
