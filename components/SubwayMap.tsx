@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { Character, Snapshot } from '@/types';
+import type { Character, LocationInfo, Snapshot } from '@/types';
 import { withResolvedLocations, buildLocationAliasMap, resolveLocationName } from '@/lib/resolve-locations';
 
 /* ── Types ────────────────────────────────────────────────────────────── */
@@ -146,15 +146,19 @@ function isRealLocation(loc: string | undefined): loc is string {
   return t.length > 0 && !FAKE_LOC_RE.test(t);
 }
 
-function buildGraph(snapshots: Snapshot[]): { nodes: Node[]; edges: Edge[]; arcLanes: ArcLane[]; maxChapter: number } {
+function buildGraph(snapshots: Snapshot[], locationMergeMap?: Map<string, string>, currentLocations?: LocationInfo[], prebuiltAliasMap?: Map<string, string>): { nodes: Node[]; edges: Edge[]; arcLanes: ArcLane[]; maxChapter: number } {
   const sorted = [...snapshots].sort((a, b) => a.index - b.index);
   if (sorted.length === 0) return { nodes: [], edges: [], arcLanes: [], maxChapter: 0 };
 
   const maxChapter = sorted[sorted.length - 1].index;
 
-  // Build alias map from all snapshots so old "Ceres" entries resolve to "Ceres Station"
-  const aliasMap = buildLocationAliasMap(snapshots);
-  const resolveLoc = (name: string | undefined) => resolveLocationName(name, aliasMap);
+  // Use pre-built alias map if provided, otherwise build from snapshots
+  const aliasMap = prebuiltAliasMap ?? buildLocationAliasMap(snapshots, currentLocations ?? sorted[sorted.length - 1]?.result.locations);
+  const resolveLoc = (name: string | undefined) => {
+    const resolved = resolveLocationName(name, aliasMap);
+    if (!resolved || !locationMergeMap) return resolved;
+    return locationMergeMap.get(resolved) ?? resolved;
+  };
 
   // Collect all real location names, arc labels, and first-appearance chapter per location
   const allLocs = new Set<string>();
@@ -488,12 +492,15 @@ function perpOffset(x1: number, y1: number, x2: number, y2: number, d: number): 
 interface Props {
   snapshots: Snapshot[];
   currentCharacters?: Character[];  // characters at the currently viewed snapshot
+  currentLocations?: LocationInfo[];  // full current result locations for alias resolution
+  locationMergeMap?: Map<string, string>;  // child location → root parent name
+  locationAliasMap?: Map<string, string>;  // pre-built canonical alias map
   onCharacterClick?: (name: string) => void;
   onLocationClick?: (name: string) => void;
   onArcClick?: (arcName: string) => void;
 }
 
-export default function SubwayMap({ snapshots, currentCharacters = [], onCharacterClick, onLocationClick, onArcClick }: Props) {
+export default function SubwayMap({ snapshots, currentCharacters = [], currentLocations, locationMergeMap, locationAliasMap: aliasMapProp, onCharacterClick, onLocationClick, onArcClick }: Props) {
   const [charSearch, setCharSearch] = useState('');
   const [isDark, setIsDark] = useState(() =>
     typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
@@ -506,7 +513,7 @@ export default function SubwayMap({ snapshots, currentCharacters = [], onCharact
     obs.observe(document.documentElement, { attributeFilter: ['class'] });
     return () => obs.disconnect();
   }, []);
-  const [graph, setGraph] = useState<{ nodes: Node[]; edges: Edge[]; arcLanes: ArcLane[]; maxChapter: number }>(() => buildGraph(snapshots));
+  const [graph, setGraph] = useState<{ nodes: Node[]; edges: Edge[]; arcLanes: ArcLane[]; maxChapter: number }>(() => buildGraph(snapshots, locationMergeMap, currentLocations, aliasMapProp));
   const [settled, setSettled] = useState(false);
   const frameRef = useRef<number>(0);
 
@@ -525,11 +532,11 @@ export default function SubwayMap({ snapshots, currentCharacters = [], onCharact
   type ActiveRoute = { x1: number; y1: number; x2: number; y2: number };
   const [activeRoutes, setActiveRoutes] = useState<ActiveRoute[]>([]);
 
-  // Rebuild graph structure when snapshots change (new chapters analyzed)
+  // Rebuild graph structure when snapshots, merge map, or current locations change
   useEffect(() => {
-    setGraph(buildGraph(snapshots));
+    setGraph(buildGraph(snapshots, locationMergeMap, currentLocations, aliasMapProp));
     setSettled(false);
-  }, [snapshots]);
+  }, [snapshots, locationMergeMap, currentLocations, aliasMapProp]);
 
   useEffect(() => {
     if (settled) return;

@@ -1,17 +1,14 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import type { Character, LocationInfo, Snapshot } from '@/types';
+import type { AnalysisResult, Character, LocationInfo, PinUpdates, Snapshot } from '@/types';
+import type { SnapshotTransform } from '@/lib/propagate-edit';
 import LocationGraph from './LocationGraph';
 import SubwayMap from './SubwayMap';
 import CharacterModal from './CharacterModal';
-import { withResolvedLocations, buildLocationAliasMap, resolveLocationName } from '@/lib/resolve-locations';
-
-interface LocationGroup {
-  location: string;
-  characters: Character[];
-  description?: string;
-}
+import LocationModal from './LocationModal';
+import { buildLocationAliasMap, resolveLocationName } from '@/lib/resolve-locations';
+import type { LocationGroup } from '@/lib/use-derived-entities';
 
 const STATUS_DOT: Record<Character['status'], string> = {
   alive: 'bg-emerald-400',
@@ -48,7 +45,12 @@ interface Props {
   chapterTitles?: string[];
   locationImage?: string;
   locationLabel?: string;
+  currentResult?: AnalysisResult;
+  onResultEdit?: (result: AnalysisResult, propagate?: SnapshotTransform, pinUpdates?: PinUpdates) => void;
   onLocationImageChange?: (image: string | null, label: string) => void;
+  resolvedCharacters?: Character[];
+  locationAliasMap?: Map<string, string>;
+  locationGroups?: LocationGroup[];
 }
 
 /** Build a per-location timeline from snapshot history */
@@ -78,11 +80,55 @@ function buildLocationTimeline(
   return entries;
 }
 
-export default function LocationBoard({ characters, locations, bookTitle, snapshots = [], chapterTitles, locationImage, locationLabel = '', onLocationImageChange }: Props) {
+interface TreeNode {
+  group: LocationGroup;
+  children: TreeNode[];
+}
+
+function buildTree(groups: LocationGroup[], locations: LocationInfo[]): TreeNode[] {
+  const locMap = new Map(locations.map((l) => [l.name.toLowerCase().trim(), l]));
+  const groupMap = new Map(groups.map((g) => [g.location.toLowerCase().trim(), g]));
+  const childrenOf = new Map<string, TreeNode[]>();
+  const roots: TreeNode[] = [];
+  const visited = new Set<string>();
+
+  // Build nodes for all groups
+  const nodeMap = new Map<string, TreeNode>();
+  for (const g of groups) {
+    nodeMap.set(g.location.toLowerCase().trim(), { group: g, children: [] });
+  }
+
+  for (const g of groups) {
+    const key = g.location.toLowerCase().trim();
+    const loc = locMap.get(key);
+    const parentName = loc?.parentLocation;
+    const parentKey = parentName?.toLowerCase().trim();
+    const node = nodeMap.get(key)!;
+
+    if (parentKey && nodeMap.has(parentKey) && parentKey !== key && !visited.has(key)) {
+      visited.add(key);
+      nodeMap.get(parentKey)!.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  return roots;
+}
+
+/** Check if any location in the dataset has a parentLocation set */
+function hasAnyHierarchy(locations: LocationInfo[]): boolean {
+  return locations.some((l) => !!l.parentLocation);
+}
+
+export default function LocationBoard({ characters, locations, bookTitle, snapshots = [], chapterTitles, locationImage, locationLabel = '', currentResult, onResultEdit, onLocationImageChange, resolvedCharacters: resolvedCharsProp, locationAliasMap: aliasMapProp, locationGroups: groupsProp }: Props) {
   const [view, setView] = useState<'list' | 'graph'>('list');
   const [search, setSearch] = useState('');
   const [expandedLocation, setExpandedLocation] = useState<string | null>(null);
   const [selectedCharName, setSelectedCharName] = useState<string | null>(null);
+  const [selectedLocationName, setSelectedLocationName] = useState<string | null>(null);
+  const [collapsedLocations, setCollapsedLocations] = useState<Set<string>>(new Set());
+  const [showOnlyRoots, setShowOnlyRoots] = useState(false);
   const mapImage = locationImage ?? null;
   const mapLabel = locationLabel;
   const [dragging, setDragging] = useState(false);
@@ -93,29 +139,12 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
 
   const locationDescMap = new Map((locations ?? []).map((l) => [l.name.toLowerCase(), l.description]));
   const locationRelMap = new Map((locations ?? []).map((l) => [l.name.toLowerCase(), l.relationships ?? []]));
-  const locationAliasMap = new Map((locations ?? []).map((l) => [l.name.toLowerCase(), l.aliases ?? []]));
+  const locationAliasListMap = new Map((locations ?? []).map((l) => [l.name.toLowerCase(), l.aliases ?? []]));
 
-  const locAliasResolver = buildLocationAliasMap(snapshots);
+  const locAliasResolver = aliasMapProp ?? buildLocationAliasMap(snapshots, locations);
   const resolveLoc = (name: string | undefined) => resolveLocationName(name?.trim(), locAliasResolver) ?? name?.trim();
 
-  const resolvedCharacters = withResolvedLocations(characters, snapshots);
-
-  const groups: LocationGroup[] = [];
-  const seen = new Map<string, Character[]>();
-  for (const c of resolvedCharacters) {
-    const loc = resolveLoc(c.currentLocation) || 'Unknown';
-    if (!seen.has(loc)) seen.set(loc, []);
-    seen.get(loc)!.push(c);
-  }
-  for (const [loc, chars] of seen.entries()) {
-    const description = locationDescMap.get(loc.toLowerCase());
-    groups.push({ location: loc, characters: chars, description });
-  }
-  groups.sort((a, b) => {
-    if (a.location === 'Unknown') return 1;
-    if (b.location === 'Unknown') return -1;
-    return b.characters.length - a.characters.length;
-  });
+  const groups: LocationGroup[] = groupsProp ?? [];
 
   function setImage(image: string | null, label: string) {
     onLocationImageChange?.(image, label);
@@ -171,7 +200,10 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
   return (
     <div className="space-y-4">
       {selectedChar && (
-        <CharacterModal character={selectedChar} snapshots={snapshots} onClose={() => setSelectedCharName(null)} />
+        <CharacterModal character={selectedChar} snapshots={snapshots} currentResult={currentResult} onResultEdit={onResultEdit} onClose={() => setSelectedCharName(null)} />
+      )}
+      {selectedLocationName && (
+        <LocationModal locationName={selectedLocationName} snapshots={snapshots} chapterTitles={chapterTitles} currentResult={currentResult} onResultEdit={onResultEdit} onClose={() => setSelectedLocationName(null)} />
       )}
       {/* View toggle */}
       <div className="flex gap-1 bg-stone-100/50 dark:bg-zinc-800/50 rounded-lg p-0.5 w-fit border border-stone-200 dark:border-zinc-800">
@@ -193,7 +225,7 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
         </button>
       </div>
 
-      {view === 'graph' && <LocationGraph snapshots={snapshots} currentCharacters={characters} />}
+      {view === 'graph' && <LocationGraph snapshots={snapshots} currentCharacters={characters} resolvedCharacters={resolvedCharsProp} />}
 
       {view === 'list' && (
         <>
@@ -227,7 +259,7 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
               <>
                 {/* Subway map fills the card */}
                 <div className="h-64 sm:h-72">
-                  <SubwayMap snapshots={snapshots} currentCharacters={characters} />
+                  <SubwayMap snapshots={snapshots} currentCharacters={characters} locationAliasMap={aliasMapProp} />
                 </div>
 
                 {/* Upload overlay button — bottom-right */}
@@ -302,6 +334,19 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
               <p className="text-xs font-medium text-stone-400 dark:text-zinc-600 uppercase tracking-wider">
                 Locations · {groups.filter(g => g.location !== 'Unknown').length} known
               </p>
+              {hasAnyHierarchy(locations ?? []) && (
+                <button
+                  onClick={() => setShowOnlyRoots((v) => !v)}
+                  className={`px-2 py-0.5 text-[10px] font-medium rounded-md border transition-colors ${
+                    showOnlyRoots
+                      ? 'bg-amber-500/15 text-amber-500 border-amber-500/30'
+                      : 'text-stone-400 dark:text-zinc-500 border-stone-300 dark:border-zinc-700 hover:text-stone-600 dark:hover:text-zinc-300'
+                  }`}
+                  title={showOnlyRoots ? 'Show all locations' : 'Show only top-level locations'}
+                >
+                  {showOnlyRoots ? 'Top-level only' : 'Top-level only'}
+                </button>
+              )}
               <input
                 type="search"
                 placeholder="Find character…"
@@ -310,24 +355,34 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
                 className="ml-auto w-36 text-xs px-2.5 py-1 rounded-lg border bg-transparent outline-none transition-colors border-stone-300 dark:border-zinc-700 text-stone-700 dark:text-zinc-300 placeholder-stone-400 dark:placeholder-zinc-600 focus:border-stone-400 dark:focus:border-zinc-500"
               />
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-              {groups.flatMap(({ location, characters: chars, description }) => {
-                const filtered = search.trim()
-                  ? chars.filter((c) => {
-                      const q = search.toLowerCase();
-                      return c.name.toLowerCase().includes(q)
-                        || (c.aliases ?? []).some((a) => a.toLowerCase().includes(q));
-                    })
-                  : chars;
-                if (filtered.length === 0) return [];
-                return [{ location, characters: filtered, description }];
-              }).map(({ location, characters: chars, description }) => {
+            {(() => {
+              const isHierarchical = hasAnyHierarchy(locations ?? []);
+
+              // Filter groups by search, but also include parent groups that have matching children
+              function filterGroup(g: LocationGroup): LocationGroup | null {
+                if (!search.trim()) return g;
+                const q = search.toLowerCase();
+                const filtered = g.characters.filter((c) =>
+                  c.name.toLowerCase().includes(q)
+                  || (c.aliases ?? []).some((a) => a.toLowerCase().includes(q)),
+                );
+                if (filtered.length > 0) return { ...g, characters: filtered };
+                return null;
+              }
+
+              // For search: collect which groups have matches
+              const filteredGroupMap = new Map<string, LocationGroup>();
+              for (const g of groups) {
+                const fg = filterGroup(g);
+                if (fg) filteredGroupMap.set(g.location.toLowerCase().trim(), fg);
+              }
+
+              function renderLocationCard(location: string, chars: Character[], description: string | undefined, depth: number) {
                 const showTimeline = expandedLocation === location;
                 const timeline = showTimeline ? buildLocationTimeline(location, snapshots, locAliasResolver, chapterTitles) : [];
                 const hasHistory = location !== 'Unknown' && snapshots.length > 0;
                 return (
                   <div
-                    key={location}
                     className={`bg-white dark:bg-zinc-900 rounded-xl border border-stone-200 dark:border-zinc-800 overflow-hidden ${
                       location === 'Unknown' ? 'opacity-50' : ''
                     }`}
@@ -346,9 +401,14 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
                           <span className="text-xs text-stone-400 dark:text-zinc-600">{location === 'Unknown' ? '?' : '◎'}</span>
                         )}
                         <div className="flex-1 min-w-0">
-                          <h3 className="font-medium text-stone-700 dark:text-zinc-300 text-sm truncate">{location}</h3>
+                          <h3
+                            className="font-medium text-stone-700 dark:text-zinc-300 text-sm truncate cursor-pointer hover:text-amber-500 transition-colors"
+                            onClick={() => { if (location !== 'Unknown') setSelectedLocationName(location); }}
+                          >
+                            {location}
+                          </h3>
                           {(() => {
-                            const aliases = locationAliasMap.get(location.toLowerCase()) ?? [];
+                            const aliases = locationAliasListMap.get(location.toLowerCase()) ?? [];
                             return aliases.length > 0 ? (
                               <p className="text-[10px] text-stone-400 dark:text-zinc-600 truncate">aka {aliases.join(', ')}</p>
                             ) : null;
@@ -386,7 +446,7 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
                     </div>
 
                     {/* Characters view */}
-                    {!showTimeline && (
+                    {!showTimeline && chars.length > 0 && (
                       <ul className="divide-y divide-stone-200/50 dark:divide-zinc-800/50">
                         {chars.map((c) => (
                           <li
@@ -440,8 +500,199 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
                     )}
                   </div>
                 );
-              })}
-            </div>
+              }
+
+              // Check if a tree node or any descendant has search matches
+              function treeHasMatch(node: TreeNode): boolean {
+                const key = node.group.location.toLowerCase().trim();
+                if (filteredGroupMap.has(key)) return true;
+                return node.children.some(treeHasMatch);
+              }
+
+              function renderTreeNode(node: TreeNode, depth: number): React.ReactNode {
+                const key = node.group.location.toLowerCase().trim();
+                const filteredGroup = filteredGroupMap.get(key);
+                const childrenWithMatches = node.children.filter(treeHasMatch);
+                const hasChildren = childrenWithMatches.length > 0;
+                const isCollapsed = collapsedLocations.has(node.group.location);
+
+                // Skip if no match and no children with matches
+                if (!filteredGroup && !hasChildren) return null;
+
+                const chars = filteredGroup?.characters ?? [];
+                const showCard = filteredGroup || hasChildren;
+                if (!showCard) return null;
+
+                return (
+                  <div key={node.group.location}>
+                    <div className="flex items-start gap-1">
+                      {hasChildren && (
+                        <button
+                          onClick={() => {
+                            setCollapsedLocations((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(node.group.location)) next.delete(node.group.location);
+                              else next.add(node.group.location);
+                              return next;
+                            });
+                          }}
+                          className="mt-3 flex-shrink-0 w-5 h-5 flex items-center justify-center text-stone-400 dark:text-zinc-600 hover:text-stone-600 dark:hover:text-zinc-400 transition-colors"
+                          title={isCollapsed ? 'Expand' : 'Collapse'}
+                        >
+                          <svg
+                            width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                            className={`transition-transform ${isCollapsed ? '' : 'rotate-90'}`}
+                          >
+                            <polyline points="9 18 15 12 9 6" />
+                          </svg>
+                        </button>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        {renderLocationCard(node.group.location, chars, node.group.description, depth)}
+                      </div>
+                    </div>
+                    {hasChildren && !isCollapsed && (
+                      <div className="ml-6 pl-3 border-l-2 border-amber-500/30 space-y-3 mt-3">
+                        {childrenWithMatches.map((child) => renderTreeNode(child, depth + 1))}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              if (isHierarchical) {
+                // Also include groups for locations that have no characters but DO exist as locations
+                // (parent-only locations that hold children)
+                const allLocGroups = [...groups];
+                for (const loc of (locations ?? [])) {
+                  const key = loc.name.toLowerCase().trim();
+                  if (!groups.some((g) => g.location.toLowerCase().trim() === key)) {
+                    allLocGroups.push({ location: loc.name, characters: [], description: loc.description });
+                  }
+                }
+
+                // Top-level only: flat grid of root locations with child characters rolled up
+                if (showOnlyRoots) {
+                  const locByName = new Map((locations ?? []).map((l) => [l.name.toLowerCase().trim(), l]));
+
+                  // Resolve each location to its root ancestor
+                  function findRoot(name: string): string {
+                    const seen = new Set<string>();
+                    let cur = name.toLowerCase().trim();
+                    while (true) {
+                      const loc = locByName.get(cur);
+                      if (!loc?.parentLocation) return cur;
+                      const parent = loc.parentLocation.toLowerCase().trim();
+                      if (seen.has(parent) || parent === cur) return cur;
+                      seen.add(cur);
+                      cur = parent;
+                    }
+                  }
+
+                  // Collect characters per root location
+                  const rootChars = new Map<string, Character[]>();
+                  const rootDesc = new Map<string, string | undefined>();
+                  for (const g of allLocGroups) {
+                    const key = g.location.toLowerCase().trim();
+                    const root = findRoot(key);
+                    if (!rootChars.has(root)) {
+                      rootChars.set(root, []);
+                      const rootLoc = locByName.get(root);
+                      rootDesc.set(root, rootLoc?.description ?? g.description);
+                    }
+                    // Avoid duplicate characters
+                    const existing = rootChars.get(root)!;
+                    const existingNames = new Set(existing.map((c) => c.name));
+                    for (const c of g.characters) {
+                      if (!existingNames.has(c.name)) { existing.push(c); existingNames.add(c.name); }
+                    }
+                  }
+
+                  // Build root groups with canonical display names
+                  const rootGroups: LocationGroup[] = [...rootChars.entries()].map(([rootKey, chars]) => {
+                    const loc = locByName.get(rootKey);
+                    return { location: loc?.name ?? rootKey, characters: chars, description: rootDesc.get(rootKey) };
+                  });
+                  rootGroups.sort((a, b) => {
+                    if (a.location === 'Unknown') return 1;
+                    if (b.location === 'Unknown') return -1;
+                    return b.characters.length - a.characters.length;
+                  });
+
+                  return (
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                      {rootGroups.flatMap(({ location, characters: chars, description }) => {
+                        const filtered = search.trim()
+                          ? chars.filter((c) => {
+                              const q = search.toLowerCase();
+                              return c.name.toLowerCase().includes(q)
+                                || (c.aliases ?? []).some((a) => a.toLowerCase().includes(q));
+                            })
+                          : chars;
+                        if (filtered.length === 0 && search.trim()) return [];
+                        return [(
+                          <div key={location}>
+                            {renderLocationCard(location, search.trim() ? filtered : chars, description, 0)}
+                          </div>
+                        )];
+                      })}
+                    </div>
+                  );
+                }
+
+                const tree = buildTree(allLocGroups, locations ?? []);
+
+                // When searching, pull matched children out to root if their parent doesn't match
+                if (search.trim()) {
+                  const flatResults: React.ReactNode[] = [];
+                  function collectSearchResults(nodes: TreeNode[], depth: number) {
+                    for (const node of nodes) {
+                      const key = node.group.location.toLowerCase().trim();
+                      const hasMatch = filteredGroupMap.has(key);
+                      if (hasMatch || node.children.some(treeHasMatch)) {
+                        flatResults.push(renderTreeNode(node, depth));
+                      } else {
+                        // Check children independently
+                        collectSearchResults(node.children, depth);
+                      }
+                    }
+                  }
+                  collectSearchResults(tree, 0);
+                  return (
+                    <div className="grid grid-cols-1 gap-3">
+                      {flatResults}
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="grid grid-cols-1 gap-3">
+                    {tree.map((node) => renderTreeNode(node, 0))}
+                  </div>
+                );
+              }
+
+              // Flat layout (no hierarchy)
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                  {groups.flatMap(({ location, characters: chars, description }) => {
+                    const filtered = search.trim()
+                      ? chars.filter((c) => {
+                          const q = search.toLowerCase();
+                          return c.name.toLowerCase().includes(q)
+                            || (c.aliases ?? []).some((a) => a.toLowerCase().includes(q));
+                        })
+                      : chars;
+                    if (filtered.length === 0) return [];
+                    return [(
+                      <div key={location}>
+                        {renderLocationCard(location, filtered, description, 0)}
+                      </div>
+                    )];
+                  })}
+                </div>
+              );
+            })()}
           </div>
         </>
       )}

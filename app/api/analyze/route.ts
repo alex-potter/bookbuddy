@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { Agent, fetch as undiciFetch } from 'undici';
 import type { AnalysisResult } from '@/types';
+import { reconcileResult, computeNameOverlaps, updateArcReferences, type CallAndParseFn } from '@/lib/reconcile';
+import { levenshtein } from '@/lib/ai-shared';
 
 // Undici agent with no headers/body timeout — our AbortController handles cancellation
 const ollamaAgent = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
@@ -31,16 +33,22 @@ const ARCS_SYSTEM = `You are a narrative arc analyst for a literary reading comp
 
 const CHARACTERS_SYSTEM = `You are a character tracker for a literary reading companion. ${ANTI_SPOILER}
 
-CHARACTER COMPLETENESS RULES:
-- Include EVERY named character who appears in the text, no matter how briefly — protagonists, antagonists, and minor characters alike.
+CHARACTER EXTRACTION RULES:
+- Include every named character who LITERALLY APPEARS BY NAME in the text provided — protagonists, antagonists, and minor characters alike.
 - A character mentioned once by name still gets an entry.
 - Never filter, skip, or summarize away characters because they seem unimportant.
 - NEVER group characters together (e.g. do NOT create entries like "The Hobbits", "The Fellowship", "The Guards"). Every individual must have their own separate entry under their own name.
 
+ANTI-HALLUCINATION RULES (critical):
+- ONLY include characters whose name or alias literally appears as text in the provided chapter.
+- Do NOT invent or infer characters from context clues, summaries, or your knowledge of the book/series.
+- If you are unsure whether a name refers to a character, include it — but NEVER fabricate a name that does not appear in the text.
+
 DEDUPLICATION RULES (critical):
 - A character must appear EXACTLY ONCE regardless of how many names or nicknames they are called by.
 - If the same person is referred to by multiple names (e.g. "Matrim Cauthon" and "Mat"), create ONE entry using their fullest known name and list all shorter forms in "aliases".
-- Never create separate entries for a full name and its nickname or shortened form.`;
+- Never create separate entries for a full name and its nickname or shortened form.
+- Titles and epithets for the same person (e.g. "the Dragon Reborn" for "Rand al'Thor") must be listed as aliases, not separate entries.`;
 
 const LOCATIONS_SYSTEM = `You are a location and world-building tracker for a literary reading companion. ${ANTI_SPOILER}`;
 
@@ -76,7 +84,7 @@ const CHARACTER_SCHEMA = `{
   "characters": [
     {
       "name": "Full character name",
-      "aliases": ["nickname", "title", "other names"],
+      "aliases": ["any nicknames, shortened names, or titles used in the text — leave empty array [] if none"],
       "importance": "main" | "secondary" | "minor",
       "status": "alive" | "dead" | "unknown" | "uncertain",
       "lastSeen": "Chapter title where they last appeared",
@@ -94,7 +102,7 @@ const CHARACTER_DELTA_SCHEMA = `{
   "updatedCharacters": [
     {
       "name": "Full character name",
-      "aliases": ["nickname", "title", "other names"],
+      "aliases": ["any nicknames, shortened names, or titles used in the text — leave empty array [] if none"],
       "importance": "main" | "secondary" | "minor",
       "status": "alive" | "dead" | "unknown" | "uncertain",
       "lastSeen": "Chapter title where they last appeared",
@@ -113,7 +121,6 @@ const LOCATION_SCHEMA = `{
     {
       "name": "Broad canonical place name — city, castle, region, planet, ship (NOT a generic room, corridor, or sub-location). Prefer the containing location over sub-locations.",
       "aliases": ["shorter or alternate names readers use for this place — e.g. 'Ceres' for 'Ceres Station', 'the Pits' for 'Hellas Basin'"],
-      "arc": "Short narrative arc label (2–4 words max) grouping related locations into the same broad storyline thread. Use one of the arc names provided above whenever it fits. Aim for 3–5 arc labels total for the whole book.",
       "description": "1–2 sentence description of this place — what kind of place it is, its significance, atmosphere, or notable features as established in the text",
       "recentEvents": "1–2 sentences describing what happened at this location in the current chapter. Omit if nothing notable occurred here.",
       "relationships": [
@@ -129,7 +136,6 @@ const LOCATION_DELTA_SCHEMA = `{
     {
       "name": "Broad canonical place name — city, castle, region, planet, ship. Use an EXISTING LOCATION NAME if the place is the same, nearby, or contained within it.",
       "aliases": ["shorter or alternate names readers use for this place — only include if genuinely used in the text"],
-      "arc": "Use one of the arc names provided above. Only create a new label if no existing one applies — keep total distinct arcs to 5 or fewer.",
       "description": "1–2 sentence description of this place as revealed so far",
       "recentEvents": "1–2 sentences describing what happened at this location in this chapter. Omit if nothing notable occurred here.",
       "relationships": [
@@ -140,6 +146,166 @@ const LOCATION_DELTA_SCHEMA = `{
   "summary": "2–3 sentence summary of where the story stands as of the current chapter"
 }`;
 
+// ─── Local model prompt variants ──────────────────────────────────────────────
+
+const CHARACTERS_SYSTEM_LOCAL = `You are a character tracker for a literary reading companion. Your output must be valid JSON and nothing else.
+
+RULES:
+1. Base ALL information SOLELY on the text provided. Do NOT use any knowledge of the book.
+2. If you recognize this book, IGNORE that knowledge. Only report facts explicitly stated in the text.
+3. Include every named character who appears by name in the text — protagonists, antagonists, and minor characters.
+4. A character mentioned once by name still gets an entry.
+5. ONLY include characters whose name literally appears in the provided text. Do NOT invent characters.
+6. A character must appear EXACTLY ONCE. If the same person is called multiple names (e.g. "Matrim Cauthon" and "Mat"), create ONE entry using the fullest name and list shorter forms in "aliases".
+7. Never create separate entries for a full name and its nickname. Titles/epithets go in aliases.
+8. NEVER group characters together (e.g. "The Hobbits", "The Fellowship"). Every individual gets their own entry.`;
+
+const LOCATIONS_SYSTEM_LOCAL = `You are a location tracker for a literary reading companion. Your output must be valid JSON and nothing else.
+
+RULES:
+1. Base ALL information SOLELY on the text provided. Do NOT use any knowledge of the book.
+2. Extract significant named locations — cities, castles, regions, planets, ships.
+3. Prefer broad canonical place names over sub-locations (rooms, corridors, hallways).
+4. If a place is inside another listed location, use the containing location instead.
+5. Include aliases — common shorter names for the same place.
+6. Include a 2–3 sentence story summary of where the narrative stands.`;
+
+const ARCS_SYSTEM_LOCAL = `You are a narrative arc analyst for a literary reading companion. Your output must be valid JSON and nothing else.
+
+RULES:
+1. Base ALL information SOLELY on the text provided. Do NOT use any knowledge of the book.
+2. Identify 3–7 major plot threads. Fewer is better — combine closely related threads.
+3. Each arc should span multiple chapters with ongoing stakes. Do not create per-scene micro-arcs.
+4. Status values: "active" = ongoing, "resolved" = concluded, "dormant" = paused.`;
+
+const CHARACTER_SCHEMA_LOCAL = `{
+  "characters": [
+    {
+      "name": "Full character name",
+      "aliases": [],
+      "importance": "main" | "secondary" | "minor",
+      "status": "alive" | "dead" | "unknown" | "uncertain",
+      "lastSeen": "Chapter title",
+      "currentLocation": "Named place or 'Unknown'",
+      "description": "1–2 sentence description",
+      "relationships": [
+        { "character": "Name", "relationship": "How they relate" }
+      ],
+      "recentEvents": "Key events this chapter"
+    }
+  ]
+}`;
+
+const CHARACTER_DELTA_SCHEMA_LOCAL = `{
+  "updatedCharacters": [
+    {
+      "name": "Full character name",
+      "aliases": [],
+      "importance": "main" | "secondary" | "minor",
+      "status": "alive" | "dead" | "unknown" | "uncertain",
+      "lastSeen": "Chapter title",
+      "currentLocation": "Named place or 'Unknown'",
+      "description": "1–2 sentence description",
+      "relationships": [
+        { "character": "Name", "relationship": "How they relate" }
+      ],
+      "recentEvents": "Key events this chapter"
+    }
+  ]
+}`;
+
+const LOCATION_SCHEMA_LOCAL = `{
+  "locations": [
+    {
+      "name": "Canonical place name",
+      "aliases": [],
+      "description": "1–2 sentence description",
+      "recentEvents": "What happened here this chapter",
+      "relationships": [
+        { "location": "Place name", "relationship": "How they relate" }
+      ]
+    }
+  ],
+  "summary": "2–3 sentence story summary"
+}`;
+
+const LOCATION_DELTA_SCHEMA_LOCAL = `{
+  "updatedLocations": [
+    {
+      "name": "Canonical place name (reuse existing name if same place)",
+      "aliases": [],
+      "description": "1–2 sentence description",
+      "recentEvents": "What happened here this chapter",
+      "relationships": [
+        { "location": "Place name", "relationship": "How they relate" }
+      ]
+    }
+  ],
+  "summary": "2–3 sentence story summary"
+}`;
+
+// ─── Verification pass ────────────────────────────────────────────────────────
+
+const VERIFICATION_SYSTEM = `You are a data quality reviewer for a literary reading companion. You verify character extraction results against source text to catch hallucinated or duplicate entries. Your output must be valid JSON and nothing else.`;
+
+interface Verdict {
+  index: number;
+  action: 'keep' | 'drop';
+  reason?: string;
+}
+
+function buildVerificationPrompt(
+  characters: AnalysisResult['characters'],
+  chapterText: string,
+): string {
+  const charBlock = characters.map((c, i) =>
+    `#${i}: ${c.name} (aliases: ${c.aliases?.join(', ') || 'none'})`,
+  ).join('\n');
+
+  const maxTextLen = 80_000;
+  const truncatedText = chapterText.length > maxTextLen
+    ? chapterText.slice(0, maxTextLen) + '\n[...truncated...]'
+    : chapterText;
+
+  return `EXTRACTED CHARACTERS:
+${charBlock}
+
+CHAPTER TEXT:
+${truncatedText}
+
+Review each extracted character against the chapter text. For each, determine:
+Does this character's name or at least one alias actually appear in the chapter text? Mark as "drop" if not, "keep" if yes.
+
+Return ONLY a JSON object:
+{
+  "verdicts": [
+    { "index": 0, "action": "keep" },
+    { "index": 1, "action": "drop", "reason": "Name does not appear in text" }
+  ]
+}
+
+Rules:
+- Only mark "drop" if you are confident the character does not appear in the text at all.
+- When in doubt, keep the character.`;
+}
+
+function applyVerificationVerdicts(
+  chars: AnalysisResult['characters'],
+  verdicts: Verdict[],
+): AnalysisResult['characters'] {
+  const toDrop = new Set<number>();
+
+  for (const v of verdicts) {
+    if (v.index < 0 || v.index >= chars.length) continue;
+    if (v.action === 'drop') {
+      toDrop.add(v.index);
+      console.log(`[verify] Drop #${v.index} "${chars[v.index].name}": ${v.reason}`);
+    }
+  }
+
+  return chars.filter((_, i) => !toDrop.has(i));
+}
+
 // ─── Prompt builders ──────────────────────────────────────────────────────────
 
 function buildArcsFullPrompt(
@@ -147,6 +313,8 @@ function buildArcsFullPrompt(
   bookAuthor: string,
   chapterTitle: string,
   text: string,
+  characters: AnalysisResult['characters'],
+  locations: AnalysisResult['locations'],
   allChapterTitles?: string[],
 ): string {
   const tocBlock = allChapterTitles && allChapterTitles.length > 1
@@ -154,7 +322,13 @@ function buildArcsFullPrompt(
     : '';
   return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${chapterTitle}".
 ${tocBlock}
-Identify the major narrative plot threads (arcs) present in the text below.
+CHARACTERS (use these names when listing characters involved in each arc):
+${charactersSummary(characters)}
+
+LOCATIONS:
+${locationsSummary(locations)}
+
+Identify the major narrative plot threads (arcs) present in the text below. Use the character and location lists above to inform your arc identification — group characters and locations into coherent storylines.
 
 TEXT:
 ${text}
@@ -165,6 +339,7 @@ ARC RULES:
 - Do not create an arc for every scene; only for threads that have clear ongoing stakes.
 - "status": "active" = ongoing, "resolved" = concluded, "dormant" = paused/not mentioned recently.
 - The table of contents above shows the full scope of the book — create arcs broad enough to last, not micro-arcs for individual scenes.
+- You are seeing the complete story so far. Synthesize arcs that span the entire narrative. Merge closely related threads into cohesive arcs rather than creating per-chapter micro-arcs.
 
 Return ONLY a JSON object (no markdown fences, no explanation):
 ${ARC_SCHEMA}`;
@@ -175,6 +350,8 @@ function buildArcsDeltaPrompt(
   bookAuthor: string,
   chapterTitle: string,
   previousArcs: AnalysisResult['arcs'],
+  characters: AnalysisResult['characters'],
+  locations: AnalysisResult['locations'],
   text: string,
 ): string {
   const arcCount = previousArcs?.length ?? 0;
@@ -186,10 +363,16 @@ function buildArcsDeltaPrompt(
 EXISTING NARRATIVE ARCS (${arcCount} total — target is 3–6; use "retiredArcs" to drop any that have been absorbed or concluded):
 ${arcLines}
 
+CHARACTERS:
+${charactersSummary(characters)}
+
+LOCATIONS:
+${locationsSummary(locations)}
+
 NEW CHAPTER TEXT:
 ${text}
 
-Update the arcs based on this new chapter. ARC CONTINUITY RULES:
+Update the arcs based on this new chapter. Use the character and location lists above to inform arc updates. ARC CONTINUITY RULES:
 - If an arc cleanly transitions into a new phase with the same characters and storyline, use "renamedArcs" to rename it rather than retiring and creating a new one.
 - If two arcs converge into one thread, rename the broader arc and retire the narrower one.
 - Only use "retiredArcs" for arcs that are truly finished with no continuation.
@@ -209,13 +392,10 @@ function buildCharactersFullPrompt(
   bookTitle: string,
   bookAuthor: string,
   chapterTitle: string,
-  arcs: AnalysisResult['arcs'],
   text: string,
+  schema = CHARACTER_SCHEMA,
 ): string {
   return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${chapterTitle}".
-
-NARRATIVE ARCS (for context — use arc names when describing character involvement):
-${arcsSummary(arcs)}
 
 TEXT:
 ${text}
@@ -223,25 +403,25 @@ ${text}
 Extract a COMPLETE character roster — every named character who appears, from major protagonists to characters who appear in a single scene. Do not skip anyone because they seem minor.
 
 Return ONLY a JSON object (no markdown fences, no explanation):
-${CHARACTER_SCHEMA}`;
+${schema}`;
 }
 
 function buildCharactersDeltaPrompt(
   bookTitle: string,
   bookAuthor: string,
   chapterTitle: string,
-  arcs: AnalysisResult['arcs'],
   previousCharacters: AnalysisResult['characters'],
   text: string,
+  schema = CHARACTER_DELTA_SCHEMA,
 ): string {
   const prevCount = previousCharacters.length;
   const charLines = previousCharacters
-    .map((c) => `- ${c.name} (${c.status}, last: ${c.lastSeen ?? '?'}, loc: ${c.currentLocation ?? '?'})`)
+    .map((c) => {
+      const aliasStr = c.aliases?.length ? ` [aliases: ${c.aliases.join(', ')}]` : '';
+      return `- ${c.name}${aliasStr} (${c.status}, last: ${c.lastSeen ?? '?'}, loc: ${c.currentLocation ?? '?'})`;
+    })
     .join('\n');
   return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${chapterTitle}".
-
-NARRATIVE ARCS (for context):
-${arcsSummary(arcs)}
 
 EXISTING CHARACTERS (${prevCount} already tracked — DO NOT reproduce this list in your output):
 ${charLines}
@@ -254,9 +434,11 @@ INSTRUCTIONS — RETURN ONLY CHANGES, NOT THE FULL LIST:
 2. For any BRAND NEW named character introduced in this chapter: include them in "updatedCharacters" with all fields filled in. NEVER group individuals — each person gets their own entry.
 3. Do NOT include characters from the existing list who do not appear in the new chapter.
 4. Do NOT use any knowledge of this book beyond what is listed above and the new chapter text.
+5. When returning an existing character in "updatedCharacters", you MUST use their EXACT NAME from the existing list above. Do NOT use a shortened form, nickname, or alternate spelling — copy the name exactly as written.
+6. ONLY include characters whose name or alias literally appears in the new chapter text below. Do NOT hallucinate characters.
 
 Return ONLY a JSON object (no markdown fences, no explanation):
-${CHARACTER_DELTA_SCHEMA}`;
+${schema}`;
 }
 
 function charactersSummary(chars: AnalysisResult['characters']): string {
@@ -266,23 +448,25 @@ function charactersSummary(chars: AnalysisResult['characters']): string {
     .join('\n');
 }
 
+function locationsSummary(locs: AnalysisResult['locations']): string {
+  if (!locs?.length) return 'No locations yet.';
+  return locs.map((l) => `- ${l.name}: ${l.description ?? 'No description yet'}`).join('\n');
+}
+
 function buildLocationsFullPrompt(
   bookTitle: string,
   bookAuthor: string,
   chapterTitle: string,
-  arcs: AnalysisResult['arcs'],
   characters: AnalysisResult['characters'],
   text: string,
   allChapterTitles?: string[],
+  schema = LOCATION_SCHEMA,
 ): string {
   const tocBlock = allChapterTitles && allChapterTitles.length > 1
     ? `\nTABLE OF CONTENTS:\n${allChapterTitles.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n`
     : '';
   return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${chapterTitle}".
 ${tocBlock}
-NARRATIVE ARCS (use these exact names for the "arc" field):
-${arcsSummary(arcs)}
-
 CHARACTERS AND THEIR CURRENT LOCATIONS (for cross-referencing):
 ${charactersSummary(characters)}
 
@@ -295,29 +479,25 @@ LOCATION RULES:
 - Prefer broad canonical place names (city, castle, planet, ship) over sub-locations (rooms, corridors, hallways).
 - If a place is inside or part of another location already listed, use the containing location's name instead.
 - Include aliases — common shorter names readers might use for the same place.
-- Use the arc names listed above for the "arc" field.
 
 Return ONLY a JSON object (no markdown fences, no explanation):
-${LOCATION_SCHEMA}`;
+${schema}`;
 }
 
 function buildLocationsDeltaPrompt(
   bookTitle: string,
   bookAuthor: string,
   chapterTitle: string,
-  arcs: AnalysisResult['arcs'],
   characters: AnalysisResult['characters'],
   previousLocations: AnalysisResult['locations'],
   text: string,
+  schema = LOCATION_DELTA_SCHEMA,
 ): string {
   const existingLocs = (previousLocations ?? []).map((l) => l.name).filter(Boolean);
   const locLine = existingLocs.length > 0
     ? `\nEXISTING LOCATIONS (${existingLocs.length} already tracked — reuse the exact name if a new location is the same place, nearby, or contained within one of these): ${existingLocs.join(', ')}`
     : '';
   return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${chapterTitle}".
-
-NARRATIVE ARCS (use these exact names for the "arc" field):
-${arcsSummary(arcs)}
 
 CHARACTERS AND THEIR CURRENT LOCATIONS (for cross-referencing):
 ${charactersSummary(characters)}
@@ -330,11 +510,10 @@ For significant named places in this chapter: include them in "updatedLocations"
 - If the place is inside or part of an existing location (e.g. a room in a castle, a district of a city), use the existing location name instead.
 - If the place is immediately adjacent to or commonly grouped with an existing location, use the existing location name.
 - Only add a genuinely new entry if the place is distinct and would appear as a separate node on a map.
-- Use arc names from above for the "arc" field.
 Also write an updated story summary.
 
 Return ONLY a JSON object (no markdown fences, no explanation):
-${LOCATION_DELTA_SCHEMA}`;
+${schema}`;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -350,7 +529,7 @@ function normLoc(name: string): string {
 function deduplicateLocations(locs: AnalysisResult['locations']): AnalysisResult['locations'] {
   if (!locs?.length) return locs;
   type LocRel = { location: string; relationship: string };
-  type Entry = { canonical: string; aliases: string[]; description: string; arc?: string; recentEvents?: string; relationships: LocRel[] };
+  type Entry = { canonical: string; aliases: string[]; description: string; arc?: string; recentEvents?: string; relationships: LocRel[]; parentLocation?: string };
   function mergeRels(a: LocRel[], b: LocRel[]): LocRel[] {
     const seen = new Map(a.map((r) => [r.location.toLowerCase(), r]));
     for (const r of b) if (!seen.has(r.location.toLowerCase())) seen.set(r.location.toLowerCase(), r);
@@ -392,10 +571,11 @@ function deduplicateLocations(locs: AnalysisResult['locations']): AnalysisResult
       if (!existing.arc && loc.arc) existing.arc = loc.arc;
       if (loc.recentEvents && (!existing.recentEvents || loc.recentEvents.length > existing.recentEvents.length)) existing.recentEvents = loc.recentEvents;
       if (loc.relationships?.length) existing.relationships = mergeRels(existing.relationships, loc.relationships);
+      if (!existing.parentLocation && loc.parentLocation) existing.parentLocation = loc.parentLocation;
       registerAliases(existingKey, loc.name, locAliases);
     } else {
       const key = normLoc(loc.name);
-      const entry: Entry = { canonical: loc.name, aliases: locAliases, description: loc.description, arc: loc.arc, recentEvents: loc.recentEvents, relationships: loc.relationships ?? [] };
+      const entry: Entry = { canonical: loc.name, aliases: locAliases, description: loc.description, arc: loc.arc, recentEvents: loc.recentEvents, relationships: loc.relationships ?? [], parentLocation: loc.parentLocation };
       groups.set(key, entry);
       registerAliases(key, loc.name, locAliases);
     }
@@ -416,6 +596,7 @@ function deduplicateLocations(locs: AnalysisResult['locations']): AnalysisResult
         if (!gl.arc && gs.arc) gl.arc = gs.arc;
         if (gs.recentEvents && (!gl.recentEvents || gs.recentEvents.length > gl.recentEvents.length)) gl.recentEvents = gs.recentEvents;
         gl.relationships = mergeRels(gl.relationships, gs.relationships);
+        if (!gl.parentLocation && gs.parentLocation) gl.parentLocation = gs.parentLocation;
         groups.delete(shorter);
         break;
       }
@@ -430,6 +611,7 @@ function deduplicateLocations(locs: AnalysisResult['locations']): AnalysisResult
     if (!target.arc && source.arc) target.arc = source.arc;
     if (source.recentEvents && (!target.recentEvents || source.recentEvents.length > target.recentEvents.length)) target.recentEvents = source.recentEvents;
     target.relationships = mergeRels(target.relationships, source.relationships);
+    if (!target.parentLocation && source.parentLocation) target.parentLocation = source.parentLocation;
   }
   let again = true;
   while (again) {
@@ -454,63 +636,542 @@ function deduplicateLocations(locs: AnalysisResult['locations']): AnalysisResult
     }
   }
 
-  return [...groups.values()].map(({ canonical, aliases, description, arc, recentEvents, relationships }) => ({
+  // Fuzzy pass: Levenshtein ≤1 on normalized location names ≥5 chars
+  let fuzzyAgain = true;
+  while (fuzzyAgain) {
+    fuzzyAgain = false;
+    const fKeys = [...groups.keys()];
+    fuzzyOuter: for (let i = 0; i < fKeys.length; i++) {
+      const keyA = fKeys[i];
+      if (!groups.has(keyA)) continue;
+      for (let j = i + 1; j < fKeys.length; j++) {
+        const keyB = fKeys[j];
+        if (!groups.has(keyB)) continue;
+        if (keyA.length >= 5 && keyB.length >= 5 && keyA[0] === keyB[0] && levenshtein(keyA, keyB) <= 1) {
+          const ga = groups.get(keyA)!;
+          const gb = groups.get(keyB)!;
+          const [keepKey, keep, drop, dropKey] =
+            ga.canonical.length >= gb.canonical.length
+              ? [keyA, ga, gb, keyB]
+              : [keyB, gb, ga, keyA];
+          mergeInto(keep, drop);
+          registerAliases(keepKey, keep.canonical, keep.aliases);
+          groups.delete(dropKey);
+          fuzzyAgain = true;
+          break fuzzyOuter;
+        }
+      }
+    }
+  }
+
+  return [...groups.values()].map(({ canonical, aliases, description, arc, recentEvents, relationships, parentLocation }) => ({
     name: canonical,
     ...(aliases.length > 0 ? { aliases } : {}),
     ...(arc ? { arc } : {}),
     description,
     ...(recentEvents ? { recentEvents } : {}),
     ...(relationships.length > 0 ? { relationships } : {}),
+    ...(parentLocation ? { parentLocation } : {}),
   }));
 }
 
-/** Merge characters that share a name/alias so nicknames don't create duplicate entries. */
-function deduplicateCharacters(chars: AnalysisResult['characters']): AnalysisResult['characters'] {
-  const norm = (s: string) => s.toLowerCase().trim();
-  const result: AnalysisResult['characters'] = [];
-  const nameIndex = new Map<string, number>();
+/** Infer parentLocation from AI-extracted relationships like "part of", "contains", etc. */
+function inferParentLocations(locs: NonNullable<AnalysisResult['locations']>): NonNullable<AnalysisResult['locations']> {
+  if (!locs?.length) return locs;
 
-  for (const char of chars) {
-    const allNames = [char.name, ...(char.aliases ?? [])].map(norm).filter(Boolean);
-    const existingIdx = allNames.reduce<number | undefined>(
-      (found, n) => found ?? nameIndex.get(n),
-      undefined,
-    );
+  const CHILD_RELS = new Set(['part of', 'within', 'on', 'inside', 'contained by', 'located in', 'located on']);
+  const PARENT_RELS = new Set(['contains', 'encompasses', 'includes']);
 
-    if (existingIdx !== undefined) {
-      const existing = result[existingIdx];
-      const canonical = existing.name.length >= char.name.length ? existing.name : char.name;
-      const aliasSet = new Set([
-        ...(existing.aliases ?? []),
-        ...(char.aliases ?? []),
-        existing.name !== canonical ? existing.name : '',
-        char.name !== canonical ? char.name : '',
-      ].map(s => s.trim()).filter(Boolean));
-      result[existingIdx] = { ...existing, ...char, name: canonical, aliases: [...aliasSet] };
-      allNames.forEach(n => nameIndex.set(n, existingIdx));
-    } else {
-      const idx = result.length;
-      result.push(char);
-      allNames.forEach(n => nameIndex.set(n, idx));
+  // Build name→canonical lookup (case-insensitive, includes aliases)
+  const nameToCanonical = new Map<string, string>();
+  for (const loc of locs) {
+    nameToCanonical.set(loc.name.toLowerCase().trim(), loc.name);
+    for (const a of loc.aliases ?? []) nameToCanonical.set(a.toLowerCase().trim(), loc.name);
+  }
+
+  // Collect inferred parents: childName → parentCanonicalName
+  const inferred = new Map<string, string>();
+
+  for (const loc of locs) {
+    for (const rel of loc.relationships ?? []) {
+      const relType = rel.relationship.toLowerCase().trim();
+      const targetCanonical = nameToCanonical.get(rel.location.toLowerCase().trim());
+      if (!targetCanonical) continue;
+
+      if (CHILD_RELS.has(relType) && targetCanonical !== loc.name && !inferred.has(loc.name)) {
+        inferred.set(loc.name, targetCanonical);
+      } else if (PARENT_RELS.has(relType) && targetCanonical !== loc.name && !inferred.has(targetCanonical)) {
+        inferred.set(targetCanonical, loc.name);
+      }
     }
   }
-  return result;
+
+  // Apply — don't overwrite existing parentLocation
+  return locs.map((loc) => {
+    if (loc.parentLocation || !inferred.has(loc.name)) return loc;
+    return { ...loc, parentLocation: inferred.get(loc.name) };
+  });
+}
+
+/**
+ * Strip junk aliases: too-short, cross-contaminated with other characters'
+ * primary names, duplicates of own name, and generic titles shared by 3+ chars.
+ */
+function sanitizeCharacterAliases(chars: AnalysisResult['characters']): AnalysisResult['characters'] {
+  const norm = (s: string) => s.toLowerCase().trim();
+  const primaryNames = new Set(chars.map((c) => norm(c.name)));
+
+  // Count how many characters use each alias to detect generic titles
+  const aliasCounts = new Map<string, number>();
+  for (const c of chars) {
+    for (const a of c.aliases ?? []) {
+      const key = norm(a);
+      aliasCounts.set(key, (aliasCounts.get(key) ?? 0) + 1);
+    }
+  }
+
+  return chars.map((c) => {
+    const ownName = norm(c.name);
+    const cleaned = (c.aliases ?? []).filter((a) => {
+      const an = norm(a);
+      if (an.length < 2) return false;           // too short
+      if (an === ownName) return false;           // same as own primary name
+      if (primaryNames.has(an) && an !== ownName) return false; // another character's primary name
+      if ((aliasCounts.get(an) ?? 0) >= 3) return false;       // generic title shared by 3+
+      return true;
+    });
+    return { ...c, aliases: cleaned };
+  });
+}
+
+
+/**
+ * Multi-strategy character dedup. Returns deduplicated characters + a nameMap
+ * mapping every absorbed name/alias (lowercased) → canonical name, so callers
+ * can fix relationship targets and arc character lists.
+ *
+ * Matching passes (iterative — restart on any merge):
+ *   1. Exact primary name (case-insensitive)
+ *   2. Alias cross-match: A's alias = B's primary name
+ *   3. Word-boundary substring (≥4 chars)
+ *   4. Levenshtein ≤1 on primary names ≥5 chars, first char must match
+ */
+function deduplicateCharacters(
+  chars: AnalysisResult['characters'],
+): { characters: AnalysisResult['characters']; nameMap: Map<string, string> } {
+  const norm = (s: string) => s.toLowerCase().trim();
+
+  type CharEntry = AnalysisResult['characters'][0];
+
+  // Clone so we can mutate
+  let entries: CharEntry[] = chars.map((c) => ({ ...c }));
+  const nameMap = new Map<string, string>();
+
+  function mergeTwo(keep: CharEntry, drop: CharEntry): CharEntry {
+    // Name: longer/fuller canonical; prefer uppercase-starting if tied
+    let canonical: string;
+    if (keep.name.length !== drop.name.length) {
+      canonical = keep.name.length >= drop.name.length ? keep.name : drop.name;
+    } else {
+      canonical = /^[A-Z]/.test(keep.name) ? keep.name : drop.name;
+    }
+
+    // Aliases: union all names from both entries, excluding canonical
+    const allNames = new Set(
+      [keep.name, drop.name, ...(keep.aliases ?? []), ...(drop.aliases ?? [])]
+        .map((s) => s.trim())
+        .filter((s) => s && norm(s) !== norm(canonical)),
+    );
+
+    // Importance: higher wins
+    const impOrder: Record<string, number> = { main: 3, secondary: 2, minor: 1 };
+    const importance =
+      (impOrder[drop.importance] ?? 0) > (impOrder[keep.importance] ?? 0)
+        ? drop.importance
+        : keep.importance;
+
+    // Description: longer wins
+    const description =
+      (drop.description?.length ?? 0) > (keep.description?.length ?? 0)
+        ? drop.description
+        : keep.description;
+
+    // Relationships: merge by character name, longer description wins
+    const relationships = mergeCharRelationships(
+      keep.relationships ?? [],
+      drop.relationships ?? [],
+    );
+
+    // Status/lastSeen/currentLocation/recentEvents: prefer entry with more content
+    const status =
+      drop.status && drop.status !== 'unknown' && (!keep.status || keep.status === 'unknown')
+        ? drop.status
+        : keep.status;
+    const lastSeen =
+      (drop.lastSeen?.length ?? 0) > (keep.lastSeen?.length ?? 0)
+        ? drop.lastSeen
+        : keep.lastSeen;
+    const currentLocation =
+      drop.currentLocation &&
+      drop.currentLocation !== 'Unknown' &&
+      (!keep.currentLocation || keep.currentLocation === 'Unknown')
+        ? drop.currentLocation
+        : keep.currentLocation;
+    const recentEvents =
+      (drop.recentEvents?.length ?? 0) > (keep.recentEvents?.length ?? 0)
+        ? drop.recentEvents
+        : keep.recentEvents;
+
+    return {
+      ...keep,
+      ...drop,
+      name: canonical,
+      aliases: [...allNames],
+      importance,
+      description,
+      relationships,
+      status,
+      lastSeen,
+      currentLocation,
+      recentEvents,
+    };
+  }
+
+  // Iterative matching — restart on any merge
+  let merged = true;
+  while (merged) {
+    merged = false;
+
+    // Pass 1: Exact primary name (case-insensitive)
+    for (let i = 0; i < entries.length && !merged; i++) {
+      for (let j = i + 1; j < entries.length && !merged; j++) {
+        if (norm(entries[i].name) === norm(entries[j].name)) {
+          const result = mergeTwo(entries[i], entries[j]);
+          // Record absorbed names
+          for (const n of [entries[j].name, ...(entries[j].aliases ?? [])]) {
+            nameMap.set(norm(n), result.name);
+          }
+          for (const n of [entries[i].name, ...(entries[i].aliases ?? [])]) {
+            nameMap.set(norm(n), result.name);
+          }
+          entries[i] = result;
+          entries.splice(j, 1);
+          merged = true;
+        }
+      }
+    }
+    if (merged) continue;
+
+    // Pass 2: Alias cross-match — A's alias = B's primary name
+    for (let i = 0; i < entries.length && !merged; i++) {
+      const iAliases = new Set((entries[i].aliases ?? []).map(norm));
+      for (let j = i + 1; j < entries.length && !merged; j++) {
+        const jAliases = new Set((entries[j].aliases ?? []).map(norm));
+        if (iAliases.has(norm(entries[j].name)) || jAliases.has(norm(entries[i].name))) {
+          const result = mergeTwo(entries[i], entries[j]);
+          for (const n of [entries[j].name, ...(entries[j].aliases ?? [])]) {
+            nameMap.set(norm(n), result.name);
+          }
+          for (const n of [entries[i].name, ...(entries[i].aliases ?? [])]) {
+            nameMap.set(norm(n), result.name);
+          }
+          entries[i] = result;
+          entries.splice(j, 1);
+          merged = true;
+        }
+      }
+    }
+    if (merged) continue;
+
+    // Pass 3: Word-boundary substring (≥4 chars)
+    for (let i = 0; i < entries.length && !merged; i++) {
+      for (let j = i + 1; j < entries.length && !merged; j++) {
+        const nameI = entries[i].name;
+        const nameJ = entries[j].name;
+        const shorter = nameI.length <= nameJ.length ? nameI : nameJ;
+        const longer = nameI.length <= nameJ.length ? nameJ : nameI;
+        if (shorter.length >= 4) {
+          const pattern = new RegExp(`\\b${escapeRegex(shorter)}\\b`, 'i');
+          if (pattern.test(longer)) {
+            // Keep the longer/fuller name entry as the base
+            const [keepIdx, dropIdx] =
+              nameI.length >= nameJ.length ? [i, j] : [j, i];
+            const result = mergeTwo(entries[keepIdx], entries[dropIdx]);
+            for (const n of [entries[dropIdx].name, ...(entries[dropIdx].aliases ?? [])]) {
+              nameMap.set(norm(n), result.name);
+            }
+            for (const n of [entries[keepIdx].name, ...(entries[keepIdx].aliases ?? [])]) {
+              nameMap.set(norm(n), result.name);
+            }
+            entries[keepIdx] = result;
+            entries.splice(dropIdx, 1);
+            merged = true;
+          }
+        }
+      }
+    }
+    if (merged) continue;
+
+    // Pass 4: Levenshtein ≤1 on primary names ≥5 chars, first char must match
+    for (let i = 0; i < entries.length && !merged; i++) {
+      for (let j = i + 1; j < entries.length && !merged; j++) {
+        const ni = norm(entries[i].name);
+        const nj = norm(entries[j].name);
+        if (ni.length >= 5 && nj.length >= 5 && ni[0] === nj[0]) {
+          if (levenshtein(ni, nj) <= 1) {
+            const result = mergeTwo(entries[i], entries[j]);
+            for (const n of [entries[j].name, ...(entries[j].aliases ?? [])]) {
+              nameMap.set(norm(n), result.name);
+            }
+            for (const n of [entries[i].name, ...(entries[i].aliases ?? [])]) {
+              nameMap.set(norm(n), result.name);
+            }
+            entries[i] = result;
+            entries.splice(j, 1);
+            merged = true;
+          }
+        }
+      }
+    }
+  }
+
+  // Apply nameMap to all relationship targets
+  entries = entries.map((c) => ({
+    ...c,
+    relationships: (c.relationships ?? []).map((r) => ({
+      ...r,
+      character: nameMap.get(norm(r.character)) ?? r.character,
+    })),
+  }));
+
+  if (nameMap.size > 0) {
+    console.log(`[analyze] deduplicateCharacters: merged ${chars.length} → ${entries.length} characters`);
+  }
+
+  return { characters: entries, nameMap };
+}
+
+/**
+ * Deduplicate arcs by name similarity.
+ *
+ * Matching passes (iterative):
+ *   1. Exact name (case-insensitive)
+ *   2. Word-boundary containment: entire shorter name appears at word boundaries in longer
+ */
+function deduplicateArcs(arcs: AnalysisResult['arcs']): AnalysisResult['arcs'] {
+  if (!arcs?.length) return arcs;
+  const norm = (s: string) => s.toLowerCase().trim();
+
+  type ArcEntry = NonNullable<AnalysisResult['arcs']>[0];
+  let entries: ArcEntry[] = arcs.map((a) => ({ ...a }));
+
+  const statusOrder: Record<string, number> = { active: 3, dormant: 2, resolved: 1 };
+
+  function mergeTwo(a: ArcEntry, b: ArcEntry): ArcEntry {
+    // Name: shorter/broader name (the one that the other contains)
+    const name = a.name.length <= b.name.length ? a.name : b.name;
+    // Status: prefer active > dormant > resolved
+    const status =
+      (statusOrder[b.status] ?? 0) > (statusOrder[a.status] ?? 0) ? b.status : a.status;
+    // Characters: union (deduplicated)
+    const characters = [...new Set([...a.characters, ...b.characters])];
+    // Summary: longer
+    const summary =
+      (b.summary?.length ?? 0) > (a.summary?.length ?? 0) ? b.summary : a.summary;
+    return { name, status, characters, summary };
+  }
+
+  let merged = true;
+  while (merged) {
+    merged = false;
+
+    // Pass 1: Exact name (case-insensitive)
+    for (let i = 0; i < entries.length && !merged; i++) {
+      for (let j = i + 1; j < entries.length && !merged; j++) {
+        if (norm(entries[i].name) === norm(entries[j].name)) {
+          entries[i] = mergeTwo(entries[i], entries[j]);
+          entries.splice(j, 1);
+          merged = true;
+        }
+      }
+    }
+    if (merged) continue;
+
+    // Pass 2: Word-boundary containment — entire shorter name at word boundaries in longer
+    for (let i = 0; i < entries.length && !merged; i++) {
+      for (let j = i + 1; j < entries.length && !merged; j++) {
+        const shorter = entries[i].name.length <= entries[j].name.length ? entries[i].name : entries[j].name;
+        const longerIdx = entries[i].name.length <= entries[j].name.length ? j : i;
+        const longer = entries[longerIdx].name;
+        if (shorter.length >= 4) {
+          const pattern = new RegExp(`\\b${escapeRegex(shorter)}\\b`, 'i');
+          if (pattern.test(longer)) {
+            entries[i] = mergeTwo(entries[i], entries[j]);
+            entries.splice(j, 1);
+            merged = true;
+          }
+        }
+      }
+    }
+  }
+
+  if (entries.length < arcs.length) {
+    console.log(`[analyze] deduplicateArcs: merged ${arcs.length} → ${entries.length} arcs`);
+  }
+
+  return entries;
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Validate that each character's name (or at least one alias) actually appears in the chapter text.
+ * Characters whose names don't appear are likely hallucinations and get dropped.
+ */
+function validateCharactersAgainstText(
+  chars: AnalysisResult['characters'],
+  chapterText: string,
+): { validated: AnalysisResult['characters']; dropped: string[] } {
+  const textLower = chapterText.toLowerCase();
+  const validated: AnalysisResult['characters'] = [];
+  const dropped: string[] = [];
+
+  for (const char of chars) {
+    const allNames = [char.name, ...(char.aliases ?? [])];
+
+    let isGrounded = allNames.some((name) => {
+      const nameLower = name.toLowerCase().trim();
+      if (nameLower.length < 2) return false;
+      // Short names (<=3 chars): require word boundaries to avoid "Art" matching "heart"
+      if (nameLower.length <= 3) {
+        const pattern = new RegExp(`\\b${escapeRegex(nameLower)}\\b`, 'i');
+        return pattern.test(chapterText);
+      }
+      // Longer names: substring containment is sufficient
+      return textLower.includes(nameLower);
+    });
+
+    // Fallback for multi-word names: check individual significant words.
+    // Require the LAST word (most likely a surname/distinctive identifier) to appear,
+    // not just any word — otherwise generic titles like "Lord", "Sir", "Captain"
+    // let hallucinated names through.
+    if (!isGrounded && char.name.split(/\s+/).length > 1) {
+      const words = char.name.split(/\s+/).filter((w) => w.length >= 3);
+      if (words.length > 0) {
+        const surname = words[words.length - 1];
+        const pattern = new RegExp(`\\b${escapeRegex(surname.toLowerCase())}\\b`, 'i');
+        isGrounded = pattern.test(chapterText);
+      }
+    }
+
+    if (isGrounded) {
+      validated.push(char);
+    } else {
+      dropped.push(char.name);
+    }
+  }
+
+  return { validated, dropped };
+}
+
+/** After arcs are identified, assign arc labels to locations based on character-arc overlap. */
+function assignArcsToLocations(
+  locations: AnalysisResult['locations'],
+  arcs: AnalysisResult['arcs'],
+  characters: AnalysisResult['characters'],
+): AnalysisResult['locations'] {
+  if (!locations?.length || !arcs?.length) return locations;
+  const norm = (s: string) => s.toLowerCase().trim();
+  return locations.map((loc) => {
+    const locNames = new Set([loc.name, ...(loc.aliases ?? [])].map(norm));
+    // Find characters whose currentLocation matches this location
+    const charsHere = characters.filter((c) =>
+      c.currentLocation && locNames.has(norm(c.currentLocation)),
+    );
+    // Find the arc with the most character overlap at this location
+    let bestArc: string | undefined;
+    let bestCount = 0;
+    for (const arc of arcs) {
+      const arcCharSet = new Set((arc.characters ?? []).map(norm));
+      const count = charsHere.filter((c) =>
+        arcCharSet.has(norm(c.name)) || c.aliases?.some((a) => arcCharSet.has(norm(a))),
+      ).length;
+      if (count > bestCount) { bestCount = count; bestArc = arc.name; }
+    }
+    // Fallback: check if arc summary mentions the location name
+    if (!bestArc) {
+      for (const arc of arcs) {
+        if (locNames.has(norm(arc.name)) || norm(arc.summary).includes(norm(loc.name))) {
+          bestArc = arc.name;
+          break;
+        }
+      }
+    }
+    return bestArc ? { ...loc, arc: bestArc } : loc;
+  });
 }
 
 const MAX_ARCS = 8;
+
+const IMPORTANCE_ORDER: Record<string, number> = { main: 3, secondary: 2, minor: 1 };
+
+function mergeCharRelationships(
+  existing: { character: string; relationship: string }[],
+  incoming: { character: string; relationship: string }[],
+): { character: string; relationship: string }[] {
+  const seen = new Map(existing.map((r) => [r.character.toLowerCase(), r]));
+  for (const r of incoming) {
+    const key = r.character.toLowerCase();
+    const prev = seen.get(key);
+    if (!prev || r.relationship.length > prev.relationship.length) {
+      seen.set(key, r);
+    }
+  }
+  return [...seen.values()];
+}
+
+function mergeLocRelationships(
+  existing: { location: string; relationship: string }[],
+  incoming: { location: string; relationship: string }[],
+): { location: string; relationship: string }[] {
+  const seen = new Map(existing.map((r) => [r.location.toLowerCase(), r]));
+  for (const r of incoming) {
+    const key = r.location.toLowerCase();
+    const prev = seen.get(key);
+    if (!prev || r.relationship.length > prev.relationship.length) {
+      seen.set(key, r);
+    }
+  }
+  return [...seen.values()];
+}
 
 function mergeDelta(
   previous: AnalysisResult,
   delta: { updatedCharacters?: AnalysisResult['characters']; updatedLocations?: AnalysisResult['locations']; updatedArcs?: AnalysisResult['arcs']; renamedArcs?: { from: string; to: string }[]; retiredArcs?: string[]; summary?: string },
 ): AnalysisResult {
   const merged = previous.characters.map((c) => ({ ...c }));
-  const norm = (s: string) => s.toLowerCase().trim();
   for (const updated of delta.updatedCharacters ?? []) {
     if (!updated.name) continue;
-    const updatedNames = new Set([updated.name, ...(updated.aliases ?? [])].map(norm));
-    const idx = merged.findIndex((c) =>
-      [c.name, ...(c.aliases ?? [])].some((n) => updatedNames.has(norm(n))),
-    );
+    // Match by primary name first (strongest signal), then by name/alias with ambiguity check.
+    // If a name matches multiple existing characters (e.g. shared title "Lord Commander"),
+    // skip the merge to avoid combining distinct characters.
+    let idx = merged.findIndex((c) => c.name.toLowerCase().trim() === updated.name.toLowerCase().trim());
+    if (idx < 0) {
+      const updatedNames = new Set([updated.name, ...(updated.aliases ?? [])].map((n) => n.toLowerCase().trim()));
+      const candidates: number[] = [];
+      for (let i = 0; i < merged.length; i++) {
+        if ([merged[i].name, ...(merged[i].aliases ?? [])].some((n) => updatedNames.has(n.toLowerCase().trim()))) {
+          candidates.push(i);
+        }
+      }
+      if (candidates.length === 1) {
+        idx = candidates[0];
+      } else if (candidates.length > 1) {
+        console.log(`[analyze] Ambiguous match for "${updated.name}" — matches ${candidates.map(i => `"${merged[i].name}"`).join(', ')}. Adding as new entry.`);
+      }
+    }
     if (idx >= 0) {
       const existing = merged[idx];
       const canonicalName = updated.name.length >= existing.name.length ? updated.name : existing.name;
@@ -520,7 +1181,19 @@ function mergeDelta(
         updated.name !== canonicalName ? updated.name : '',
         existing.name !== canonicalName ? existing.name : '',
       ].map((s) => s.trim()).filter((s) => s && s.toLowerCase() !== canonicalName.toLowerCase()))];
-      merged[idx] = { ...existing, ...updated, name: canonicalName, aliases: allAliases };
+      // Intelligent field merging instead of shallow spread
+      const mergedRels = mergeCharRelationships(existing.relationships ?? [], updated.relationships ?? []);
+      const mergedDesc = (updated.description?.length ?? 0) > (existing.description?.length ?? 0)
+        ? updated.description : existing.description;
+      const mergedImportance = (IMPORTANCE_ORDER[updated.importance] ?? 0) > (IMPORTANCE_ORDER[existing.importance] ?? 0)
+        ? updated.importance : existing.importance;
+      const mergedRecent = updated.recentEvents || existing.recentEvents;
+      merged[idx] = {
+        ...existing, ...updated,
+        name: canonicalName, aliases: allAliases,
+        relationships: mergedRels, description: mergedDesc,
+        importance: mergedImportance, recentEvents: mergedRecent,
+      };
     } else {
       merged.push(updated);
     }
@@ -530,9 +1203,9 @@ function mergeDelta(
   const mergedLocations = [...prevLocations];
   for (const updated of delta.updatedLocations ?? []) {
     if (!updated.name) continue;
-    const updatedNames = new Set([updated.name, ...(updated.aliases ?? [])].map((s) => s.toLowerCase()));
+    const updatedLocNorms = new Set([updated.name, ...(updated.aliases ?? [])].map(normLoc));
     const idx = mergedLocations.findIndex((l) =>
-      [l.name, ...(l.aliases ?? [])].some((n) => updatedNames.has(n.toLowerCase())),
+      [l.name, ...(l.aliases ?? [])].some((n) => updatedLocNorms.has(normLoc(n))),
     );
     if (idx >= 0) {
       const existing = mergedLocations[idx];
@@ -543,7 +1216,15 @@ function mergeDelta(
         updated.name !== canonicalName ? updated.name : '',
         existing.name !== canonicalName ? existing.name : '',
       ].map((s) => s.trim()).filter((s) => s && s.toLowerCase() !== canonicalName.toLowerCase()))];
-      mergedLocations[idx] = { ...existing, ...updated, name: canonicalName, aliases: allAliases.length > 0 ? allAliases : undefined };
+      const mergedLocRels = mergeLocRelationships(existing.relationships ?? [], updated.relationships ?? []);
+      const mergedLocDesc = (updated.description?.length ?? 0) > (existing.description?.length ?? 0)
+        ? updated.description : existing.description;
+      mergedLocations[idx] = {
+        ...existing, ...updated,
+        name: canonicalName, aliases: allAliases.length > 0 ? allAliases : undefined,
+        relationships: mergedLocRels.length > 0 ? mergedLocRels : undefined,
+        description: mergedLocDesc,
+      };
     } else {
       mergedLocations.push(updated);
     }
@@ -584,18 +1265,40 @@ function mergeDelta(
 
 async function callAnthropic(system: string, userPrompt: string, opts: { apiKey?: string; model?: string } = {}): Promise<string> {
   const client = opts.apiKey ? new Anthropic({ apiKey: opts.apiKey }) : anthropic;
-  const response = await client.messages.create({
-    model: opts.model ?? 'claude-haiku-4-5-20251001',
-    max_tokens: 8192,
-    system,
-    messages: [{ role: 'user', content: userPrompt }],
-  });
-  const block = response.content.find((b) => b.type === 'text');
-  if (!block || block.type !== 'text') throw new Error('No text response from Anthropic.');
-  return block.text;
+  const model = opts.model ?? 'claude-haiku-4-5-20251001';
+  let fullText = '';
+
+  // Continuation loop: if the response hits max_tokens, prefill the assistant
+  // turn with what we have so far and let the model continue where it left off.
+  for (let pass = 0; pass < 5; pass++) {
+    const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
+      { role: 'user', content: userPrompt },
+    ];
+    if (fullText) {
+      messages.push({ role: 'assistant', content: fullText });
+    }
+
+    const response = await client.messages.create({
+      model,
+      max_tokens: 16384,
+      temperature: 0,
+      system,
+      messages,
+    });
+
+    const block = response.content.find((b) => b.type === 'text');
+    if (!block || block.type !== 'text') break;
+    fullText += block.text;
+
+    if (response.stop_reason !== 'max_tokens') break;
+    console.log(`[analyze] Response hit max_tokens, continuing (pass ${pass + 1})…`);
+  }
+
+  if (!fullText) throw new Error('No text response from Anthropic.');
+  return fullText;
 }
 
-async function callLocal(system: string, userPrompt: string, opts: { baseUrl?: string; model?: string } = {}): Promise<string> {
+async function callLocal(system: string, userPrompt: string, opts: { baseUrl?: string; model?: string } = {}, maxTokens = 16384): Promise<string> {
   const baseUrl = opts.baseUrl ?? process.env.LOCAL_MODEL_URL ?? 'http://localhost:11434/v1';
   const model = opts.model ?? process.env.LOCAL_MODEL_NAME ?? 'llama3.1:8b';
 
@@ -605,7 +1308,9 @@ async function callLocal(system: string, userPrompt: string, opts: { baseUrl?: s
     dispatcher: ollamaAgent,
     body: JSON.stringify({
       model,
-      max_tokens: 32768,
+      temperature: 0,
+      max_tokens: maxTokens,
+      response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: system },
         { role: 'user', content: userPrompt },
@@ -626,10 +1331,60 @@ async function callLocal(system: string, userPrompt: string, opts: { baseUrl?: s
 
 type CallOpts = { baseUrl?: string; model?: string } | { apiKey?: string; model?: string };
 
-async function callLLM(system: string, userPrompt: string, useLocal: boolean, callOpts: CallOpts): Promise<string> {
+async function callLLM(system: string, userPrompt: string, useLocal: boolean, callOpts: CallOpts, maxTokens?: number): Promise<string> {
   return useLocal
-    ? callLocal(system, userPrompt, callOpts as { baseUrl?: string; model?: string })
+    ? callLocal(system, userPrompt, callOpts as { baseUrl?: string; model?: string }, maxTokens)
     : callAnthropic(system, userPrompt, callOpts as { apiKey?: string; model?: string });
+}
+
+/** Extract individual JSON objects from an array field in potentially truncated JSON. */
+function extractJsonArray(raw: string, fieldName: string): unknown[] {
+  const key = `"${fieldName}"`;
+  const keyPos = raw.indexOf(key);
+  if (keyPos === -1) return [];
+  const bracketStart = raw.indexOf('[', keyPos);
+  if (bracketStart === -1) return [];
+
+  const items: unknown[] = [];
+  let i = bracketStart + 1;
+  while (i < raw.length) {
+    while (i < raw.length && /[\s,]/.test(raw[i])) i++;
+    if (i >= raw.length || raw[i] !== '{') break;
+    let depth = 0, j = i, inString = false, escape = false;
+    while (j < raw.length) {
+      const ch = raw[j];
+      if (escape) { escape = false; j++; continue; }
+      if (ch === '\\' && inString) { escape = true; j++; continue; }
+      if (ch === '"') { inString = !inString; j++; continue; }
+      if (!inString) {
+        if (ch === '{') depth++;
+        else if (ch === '}') { depth--; if (depth === 0) { j++; break; } }
+      }
+      j++;
+    }
+    if (depth !== 0) break; // truncated mid-object — stop here
+    try { items.push(JSON.parse(raw.slice(i, j))); } catch { /* skip malformed */ }
+    i = j;
+  }
+  return items;
+}
+
+/** Try to recover a response from truncated JSON by extracting known array fields individually. */
+function recoverPartialResponse(raw: string): Record<string, unknown> | null {
+  const result: Record<string, unknown> = {};
+  const arrayFields = [
+    'characters', 'updatedCharacters',
+    'locations', 'updatedLocations',
+    'arcs', 'updatedArcs',
+    'verdicts', 'mergeGroups', 'splits',
+  ];
+  for (const field of arrayFields) {
+    const items = extractJsonArray(raw, field);
+    if (items.length > 0) result[field] = items;
+  }
+  const summaryMatch = raw.match(/"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (summaryMatch) result.summary = summaryMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+  return Object.keys(result).length > 0 ? result : null;
 }
 
 async function callAndParseJSON<T>(
@@ -638,9 +1393,10 @@ async function callAndParseJSON<T>(
   useLocal: boolean,
   callOpts: CallOpts,
   label: string,
+  maxTokens?: number,
 ): Promise<T | null> {
-  async function attempt(): Promise<T | null> {
-    const raw = await callLLM(system, userPrompt, useLocal, callOpts);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const raw = await callLLM(system, userPrompt, useLocal, callOpts, maxTokens);
     let cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
     const firstBrace = cleaned.indexOf('{');
     const lastBrace = cleaned.lastIndexOf('}');
@@ -648,17 +1404,20 @@ async function callAndParseJSON<T>(
     try {
       return JSON.parse(cleaned) as T;
     } catch {
-      console.warn(`[analyze] ${label} JSON parse failed. Preview:`, cleaned.slice(-200));
-      return null;
+      // Try partial JSON recovery (handles truncated responses)
+      const recovered = recoverPartialResponse(cleaned);
+      if (recovered && Object.keys(recovered).length > 0) {
+        console.log(`[analyze] ${label}: recovered partial JSON (keys: ${Object.keys(recovered).join(', ')})`);
+        return recovered as T;
+      }
+      if (attempt === 0) {
+        console.warn(`[analyze] ${label}: parse failed, retrying…`);
+      } else {
+        console.warn(`[analyze] ${label}: all attempts failed. Preview:`, cleaned.slice(-200));
+      }
     }
   }
-
-  let result = await attempt();
-  if (!result) {
-    console.warn(`[analyze] ${label}: retrying after parse failure…`);
-    result = await attempt();
-  }
-  return result;
+  return null;
 }
 
 // ─── Multi-pass analysis ──────────────────────────────────────────────────────
@@ -692,38 +1451,99 @@ async function runMultiPassFull(
   useLocal: boolean,
   callOpts: CallOpts,
 ): Promise<AnalysisResult> {
-  // Pass 1: Arcs
-  console.log('[analyze] Pass 1: arcs');
-  const arcsResult = await callAndParseJSON<{ arcs?: AnalysisResult['arcs'] }>(
-    ARCS_SYSTEM,
-    buildArcsFullPrompt(bookTitle, bookAuthor, chapterTitle, text, allChapterTitles),
-    useLocal, callOpts, 'arcs-full',
-  );
-  const arcs = arcsResult?.arcs ?? [];
-  console.log(`[analyze] Pass 1 done: ${arcs.length} arcs`);
-
-  // Pass 2: Characters
-  console.log('[analyze] Pass 2: characters');
+  // Pass 1: Characters
+  console.log('[analyze] Pass 1: characters');
+  const charSystem = useLocal ? CHARACTERS_SYSTEM_LOCAL : CHARACTERS_SYSTEM;
+  const charSchema = useLocal ? CHARACTER_SCHEMA_LOCAL : CHARACTER_SCHEMA;
   const charsResult = await callAndParseJSON<{ characters?: AnalysisResult['characters'] }>(
-    CHARACTERS_SYSTEM,
-    buildCharactersFullPrompt(bookTitle, bookAuthor, chapterTitle, arcs, text),
-    useLocal, callOpts, 'characters-full',
+    charSystem,
+    buildCharactersFullPrompt(bookTitle, bookAuthor, chapterTitle, text, charSchema),
+    useLocal, callOpts, 'characters-full', useLocal ? 16384 : undefined,
   );
-  const characters = charsResult?.characters ?? [];
-  console.log(`[analyze] Pass 2 done: ${characters.length} characters`);
+  let characters = charsResult?.characters ?? [];
+  characters = sanitizeCharacterAliases(characters);
+  const charDedup = deduplicateCharacters(characters);
+  characters = charDedup.characters;
+  let charNameMap = charDedup.nameMap;
+  console.log(`[analyze] Pass 1 done: ${characters.length} characters`);
 
-  // Pass 3: Locations + summary
-  console.log('[analyze] Pass 3: locations');
+  // Text grounding: drop characters whose names don't appear in the text
+  const { validated: groundedChars, dropped: droppedFull } = validateCharactersAgainstText(characters, text);
+  if (droppedFull.length) console.log(`[analyze] Dropped ${droppedFull.length} ungrounded characters: ${droppedFull.join(', ')}`);
+  characters = groundedChars;
+
+  // LLM verification pass: review extracted characters against source text (cloud models only)
+  if (!useLocal && characters.length > 0) {
+    console.log('[analyze] Verification pass: reviewing characters against text');
+    const verifyResult = await callAndParseJSON<{ verdicts: Verdict[] }>(
+      VERIFICATION_SYSTEM,
+      buildVerificationPrompt(characters, text),
+      useLocal, callOpts, 'char-verify',
+    );
+    if (verifyResult?.verdicts?.length) {
+      const beforeCount = characters.length;
+      characters = applyVerificationVerdicts([...characters], verifyResult.verdicts);
+      if (characters.length < beforeCount) {
+        console.log(`[analyze] Verification: ${beforeCount} → ${characters.length} characters`);
+      }
+    }
+  }
+
+  // Pass 2: Locations + summary
+  console.log('[analyze] Pass 2: locations');
+  const locSystem = useLocal ? LOCATIONS_SYSTEM_LOCAL : LOCATIONS_SYSTEM;
+  const locSchema = useLocal ? LOCATION_SCHEMA_LOCAL : LOCATION_SCHEMA;
   const locsResult = await callAndParseJSON<LocResult>(
-    LOCATIONS_SYSTEM,
-    buildLocationsFullPrompt(bookTitle, bookAuthor, chapterTitle, arcs, characters, text, allChapterTitles),
-    useLocal, callOpts, 'locations-full',
+    locSystem,
+    buildLocationsFullPrompt(bookTitle, bookAuthor, chapterTitle, characters, text, allChapterTitles, locSchema),
+    useLocal, callOpts, 'locations-full', useLocal ? 8192 : undefined,
   );
   const locations = locsResult?.locations ?? [];
   const summary = locsResult?.summary ?? '';
-  console.log(`[analyze] Pass 3 done: ${locations.length} locations`);
+  console.log(`[analyze] Pass 2 done: ${locations.length} locations`);
 
-  return { characters, locations: locations.length > 0 ? locations : undefined, arcs: arcs.length > 0 ? arcs : undefined, summary };
+  // Pass 3: Arcs (with full character + location context)
+  console.log('[analyze] Pass 3: arcs');
+  const arcSystem = useLocal ? ARCS_SYSTEM_LOCAL : ARCS_SYSTEM;
+  const arcsResult = await callAndParseJSON<{ arcs?: AnalysisResult['arcs'] }>(
+    arcSystem,
+    buildArcsFullPrompt(bookTitle, bookAuthor, chapterTitle, text, characters, locations, allChapterTitles),
+    useLocal, callOpts, 'arcs-full', useLocal ? 4096 : undefined,
+  );
+  let arcs = arcsResult?.arcs ?? [];
+  // Apply character nameMap to arc character lists, then dedup arcs
+  if (charNameMap.size > 0) arcs = updateArcReferences(arcs, charNameMap) ?? arcs;
+  arcs = deduplicateArcs(arcs) ?? [];
+  console.log(`[analyze] Pass 3 done: ${arcs.length} arcs`);
+
+  // Post-process: assign arc labels to locations, then infer hierarchy from relationships
+  const labeledLocations = assignArcsToLocations(locations, arcs, characters) ?? [];
+  const hierarchicalLocations = inferParentLocations(labeledLocations);
+
+  // Reconciliation pass
+  const assembled: AnalysisResult = { characters, locations: hierarchicalLocations.length > 0 ? hierarchicalLocations : undefined, arcs: arcs.length > 0 ? arcs : undefined, summary };
+
+  // Auto-reconciliation: skip for local models when no name overlaps detected
+  const charOverlaps = computeNameOverlaps(assembled.characters);
+  const locOverlaps = computeNameOverlaps(assembled.locations ?? []);
+  const skipReconcile = useLocal && charOverlaps.length === 0 && locOverlaps.length === 0;
+
+  let reconciled: AnalysisResult;
+  if (skipReconcile) {
+    console.log('[analyze] Skipping reconciliation: no name overlaps detected (local model)');
+    reconciled = assembled;
+  } else {
+    console.log('[analyze] Auto-reconciliation pass');
+    const callAndParse: CallAndParseFn = <T>(system: string, userPrompt: string, label: string) =>
+      callAndParseJSON<T>(system, userPrompt, useLocal, callOpts, label, useLocal ? 4096 : undefined);
+    reconciled = await reconcileResult(assembled, bookTitle, bookAuthor, text.slice(0, 15_000), callAndParse);
+    console.log(`[analyze] Reconciliation complete: ${reconciled.characters.length} chars, ${reconciled.locations?.length ?? 0} locs`);
+  }
+
+  // Final location dedup (catches any remaining duplicates after reconciliation)
+  reconciled = { ...reconciled, locations: deduplicateLocations(reconciled.locations) };
+
+  return reconciled;
 }
 
 async function runMultiPassDelta(
@@ -735,50 +1555,94 @@ async function runMultiPassDelta(
   useLocal: boolean,
   callOpts: CallOpts,
 ): Promise<AnalysisResult> {
-  // Pass 1: Arcs
-  console.log('[analyze] Pass 1: arcs (delta)');
-  const arcsResult = await callAndParseJSON<ArcDeltaResult>(
-    ARCS_SYSTEM,
-    buildArcsDeltaPrompt(bookTitle, bookAuthor, chapterTitle, previousResult.arcs, text),
-    useLocal, callOpts, 'arcs-delta',
+  // Pass 1: Characters
+  console.log('[analyze] Pass 1: characters (delta)');
+  const charSystem = useLocal ? CHARACTERS_SYSTEM_LOCAL : CHARACTERS_SYSTEM;
+  const charDeltaSchema = useLocal ? CHARACTER_DELTA_SCHEMA_LOCAL : CHARACTER_DELTA_SCHEMA;
+  const charsResult = await callAndParseJSON<CharDeltaResult>(
+    charSystem,
+    buildCharactersDeltaPrompt(bookTitle, bookAuthor, chapterTitle, previousResult.characters, text, charDeltaSchema),
+    useLocal, callOpts, 'characters-delta', useLocal ? 8192 : undefined,
   );
-  // Apply arc renames/retires to get current arc state for use as context in passes 2+3
+  // Text grounding: drop delta characters whose names don't appear in the new chapter text
+  let deltaChars = charsResult?.updatedCharacters ?? [];
+  deltaChars = sanitizeCharacterAliases(deltaChars);
+  const deltaDedup = deduplicateCharacters(deltaChars);
+  deltaChars = deltaDedup.characters;
+  if (deltaChars.length) {
+    const { validated, dropped } = validateCharactersAgainstText(deltaChars, text);
+    if (dropped.length) console.log(`[analyze] Dropped ${dropped.length} ungrounded delta characters: ${dropped.join(', ')}`);
+    deltaChars = validated;
+  }
+  // LLM verification pass for delta characters (cloud models only)
+  if (!useLocal && deltaChars.length > 0) {
+    console.log('[analyze] Verification pass: reviewing delta characters against text');
+    const verifyResult = await callAndParseJSON<{ verdicts: Verdict[] }>(
+      VERIFICATION_SYSTEM,
+      buildVerificationPrompt(deltaChars, text),
+      useLocal, callOpts, 'char-verify-delta',
+    );
+    if (verifyResult?.verdicts?.length) {
+      const beforeCount = deltaChars.length;
+      deltaChars = applyVerificationVerdicts([...deltaChars], verifyResult.verdicts);
+      if (deltaChars.length < beforeCount) {
+        console.log(`[analyze] Verification: ${beforeCount} → ${deltaChars.length} delta characters`);
+      }
+    }
+  }
+  const charDelta = { updatedCharacters: deltaChars };
+  const afterChars = mergeDelta(previousResult, charDelta);
+
+  // Post-merge character dedup: catches cross-chapter duplicates that mergeDelta missed
+  const postMergeDedup = deduplicateCharacters(afterChars.characters);
+  let currentCharacters = sanitizeCharacterAliases(postMergeDedup.characters);
+  const charNameMap = postMergeDedup.nameMap;
+  console.log(`[analyze] Pass 1 done: ${deltaChars.length} char changes → ${currentCharacters.length} chars`);
+
+  // Pass 2: Locations + summary
+  console.log('[analyze] Pass 2: locations (delta)');
+  const locSystem = useLocal ? LOCATIONS_SYSTEM_LOCAL : LOCATIONS_SYSTEM;
+  const locDeltaSchema = useLocal ? LOCATION_DELTA_SCHEMA_LOCAL : LOCATION_DELTA_SCHEMA;
+  const locsResult = await callAndParseJSON<LocDeltaResult>(
+    locSystem,
+    buildLocationsDeltaPrompt(bookTitle, bookAuthor, chapterTitle, currentCharacters, previousResult.locations, text, locDeltaSchema),
+    useLocal, callOpts, 'locations-delta', useLocal ? 8192 : undefined,
+  );
+  const locDelta = { updatedLocations: locsResult?.updatedLocations, summary: locsResult?.summary };
+  const afterLocs = mergeDelta({ ...afterChars, characters: currentCharacters }, locDelta);
+  const currentLocations = afterLocs.locations;
+  console.log(`[analyze] Pass 2 done: ${locDelta.updatedLocations?.length ?? 0} location changes`);
+
+  // Pass 3: Arcs (with full character + location context)
+  console.log('[analyze] Pass 3: arcs (delta)');
+  const arcSystem = useLocal ? ARCS_SYSTEM_LOCAL : ARCS_SYSTEM;
+  const arcsResult = await callAndParseJSON<ArcDeltaResult>(
+    arcSystem,
+    buildArcsDeltaPrompt(bookTitle, bookAuthor, chapterTitle, previousResult.arcs, currentCharacters, currentLocations, text),
+    useLocal, callOpts, 'arcs-delta', useLocal ? 4096 : undefined,
+  );
   const arcDelta = {
     updatedArcs: arcsResult?.updatedArcs,
     renamedArcs: arcsResult?.renamedArcs,
     retiredArcs: arcsResult?.retiredArcs,
   };
-  const afterArcs = mergeDelta(previousResult, arcDelta);
-  const currentArcs = afterArcs.arcs ?? [];
-  console.log(`[analyze] Pass 1 done: ${arcDelta.updatedArcs?.length ?? 0} arc changes → ${currentArcs.length} arcs`);
+  console.log(`[analyze] Pass 3 done: ${arcDelta.updatedArcs?.length ?? 0} arc changes`);
 
-  // Pass 2: Characters
-  console.log('[analyze] Pass 2: characters (delta)');
-  const charsResult = await callAndParseJSON<CharDeltaResult>(
-    CHARACTERS_SYSTEM,
-    buildCharactersDeltaPrompt(bookTitle, bookAuthor, chapterTitle, currentArcs, previousResult.characters, text),
-    useLocal, callOpts, 'characters-delta',
-  );
-  const charDelta = { updatedCharacters: charsResult?.updatedCharacters };
-  // Merge char delta into afterArcs state to get current character list for pass 3 context
-  const afterChars = mergeDelta(afterArcs, charDelta);
-  const currentCharacters = afterChars.characters;
-  console.log(`[analyze] Pass 2 done: ${charDelta.updatedCharacters?.length ?? 0} char changes → ${currentCharacters.length} chars`);
+  // Final merge: combine arc deltas into the result that already has chars + locs
+  const finalResult = mergeDelta({ ...afterLocs, characters: currentCharacters }, arcDelta);
 
-  // Pass 3: Locations + summary
-  console.log('[analyze] Pass 3: locations (delta)');
-  const locsResult = await callAndParseJSON<LocDeltaResult>(
-    LOCATIONS_SYSTEM,
-    buildLocationsDeltaPrompt(bookTitle, bookAuthor, chapterTitle, currentArcs, currentCharacters, previousResult.locations, text),
-    useLocal, callOpts, 'locations-delta',
-  );
-  const locDelta = { updatedLocations: locsResult?.updatedLocations, summary: locsResult?.summary };
-  console.log(`[analyze] Pass 3 done: ${locDelta.updatedLocations?.length ?? 0} location changes`);
+  // Apply character nameMap to arcs and dedup arcs
+  if (charNameMap.size > 0) finalResult.arcs = updateArcReferences(finalResult.arcs, charNameMap);
+  finalResult.arcs = deduplicateArcs(finalResult.arcs);
 
-  // Final merge: combine all deltas
-  const finalResult = mergeDelta(afterChars, locDelta);
+  if (finalResult.locations) finalResult.locations = deduplicateLocations(finalResult.locations);
+
+  // Post-process: assign arc labels to locations, then infer hierarchy from relationships
+  const labeledLocations = assignArcsToLocations(finalResult.locations, finalResult.arcs, finalResult.characters) ?? finalResult.locations;
+  const hierarchicalLocations = labeledLocations ? inferParentLocations(labeledLocations) : labeledLocations;
+
   console.log(`[analyze] Delta complete: ${finalResult.characters.length} chars, ${finalResult.arcs?.length ?? 0} arcs, ${finalResult.locations?.length ?? 0} locs`);
-  return finalResult;
+  return { ...finalResult, locations: hierarchicalLocations };
 }
 
 // ─── Route handlers ───────────────────────────────────────────────────────────
@@ -857,7 +1721,6 @@ export async function POST(req: NextRequest) {
       result = await runMultiPassFull(bookTitle, bookAuthor, currentChapterTitle, truncated, allChapterTitles, useLocal, callOpts);
     }
 
-    result = { ...result, characters: deduplicateCharacters(result.characters), locations: deduplicateLocations(result.locations) };
     return NextResponse.json({ ...result, _model: modelName });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';

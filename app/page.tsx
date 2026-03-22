@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { parseEpub } from '@/lib/epub-parser';
-import type { AnalysisResult, Character, MapState, ParsedEbook, QueueJob, Snapshot } from '@/types';
+import type { AnalysisResult, Character, MapState, ParsedEbook, PinUpdates, QueueJob, Snapshot } from '@/types';
 import CalibreLibrary from '@/components/CalibreLibrary';
 import CharacterCard from '@/components/CharacterCard';
 import ChapterSelector from '@/components/ChapterSelector';
@@ -17,10 +17,14 @@ import { saveChapters, loadChapters, deleteChapters } from '@/lib/chapter-storag
 import ProcessingQueue from '@/components/ProcessingQueue';
 import ChatPanel from '@/components/ChatPanel';
 import ArcsPanel from '@/components/ArcsPanel';
+import EntityManager from '@/components/EntityManager';
 import { buildShareMarkdown, shareReadingContext } from '@/lib/share-context';
+import type { SnapshotTransform } from '@/lib/propagate-edit';
+import StoryTimeline from '@/components/StoryTimeline';
+import { useDerivedEntities } from '@/lib/use-derived-entities';
 
 type SortKey = 'importance' | 'name' | 'status';
-type MainTab = 'characters' | 'locations' | 'map' | 'arcs';
+type MainTab = 'characters' | 'locations' | 'map' | 'arcs' | 'manage';
 
 const IMPORTANCE_ORDER: Record<Character['importance'], number> = {
   main: 0,
@@ -219,6 +223,36 @@ async function analyzeChapter(
   return { result: result as AnalysisResult, model: _model ?? 'unknown' };
 }
 
+async function reconcileResult(
+  bookTitle: string,
+  bookAuthor: string,
+  result: AnalysisResult,
+  recentChapterText?: string,
+): Promise<AnalysisResult> {
+  let aiSettings: Record<string, string> = {};
+  try {
+    const { loadAiSettings } = await import('@/lib/ai-client');
+    const s = loadAiSettings();
+    if (s.provider) aiSettings._provider = s.provider;
+    if (s.anthropicKey) aiSettings._apiKey = s.anthropicKey;
+    if (s.ollamaUrl) aiSettings._ollamaUrl = s.ollamaUrl;
+    if (s.model) aiSettings._model = s.model;
+  } catch { /* ignore */ }
+
+  const res = await fetch('/api/reconcile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      result, bookTitle, bookAuthor,
+      chapterExcerpts: recentChapterText?.slice(0, 30_000),
+      ...aiSettings,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? 'Reconciliation failed.');
+  return data as AnalysisResult;
+}
+
 export default function Home() {
   const [isDark, setIsDark] = useState(true);
 
@@ -256,6 +290,7 @@ export default function Home() {
   const [myBooksRev, setMyBooksRev] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [shareLabel, setShareLabel] = useState<'Share' | 'Copied!' | 'Shared!'>('Share');
 
@@ -396,6 +431,50 @@ export default function Home() {
 
   const storedRef = useRef<StoredBookState | null>(null);
   const seriesBaseRef = useRef<AnalysisResult | null>(null);
+  const mapStateRef = useRef<MapState | null>(null);
+  useEffect(() => { mapStateRef.current = mapState; }, [mapState]);
+
+  const applyResultEdit = useCallback((
+    updatedResult: AnalysisResult,
+    propagate?: SnapshotTransform,
+    pinUpdates?: PinUpdates,
+  ) => {
+    if (!book) return;
+    // When propagating, shallow-copy to guarantee a new reference so React re-renders
+    // even if the transform was a no-op on the current result (e.g. historical-only entity)
+    const newResult = propagate ? { ...updatedResult } : updatedResult;
+    setResult(newResult);
+    const cur = storedRef.current;
+    if (cur) {
+      const snapshots = propagate
+        ? cur.snapshots.map((snap) => ({ ...snap, result: propagate(snap.result) }))
+        : cur.snapshots;
+      const updated: StoredBookState = { ...cur, result: newResult, snapshots };
+      storedRef.current = updated;
+      saveStored(book.title, book.author, updated);
+    }
+
+    if (pinUpdates) {
+      const ms = mapStateRef.current;
+      if (ms) {
+        const pins = { ...ms.pins };
+        if (pinUpdates.renames) {
+          for (const [oldName, newName] of Object.entries(pinUpdates.renames)) {
+            if (oldName in pins) {
+              if (!(newName in pins)) pins[newName] = pins[oldName];
+              delete pins[oldName];
+            }
+          }
+        }
+        if (pinUpdates.deletes) {
+          for (const name of pinUpdates.deletes) delete pins[name];
+        }
+        const next = { ...ms, pins };
+        setMapState(next);
+        saveMapState(book.title, book.author, next);
+      }
+    }
+  }, [book]);
 
   // Keep bookRef in sync so the queue processor can read the active book without stale closures
   useEffect(() => { bookRef.current = book; }, [book]);
@@ -435,6 +514,8 @@ export default function Home() {
         const excludedBookSet = new Set(stored.excludedBooks ?? []);
         const excludedChapterSet = new Set(stored.excludedChapters ?? []);
         let latestStored: StoredBookState = { ...stored };
+        let recentText = '';
+        const MAX_RECENT_TEXT = 30_000;
 
         for (let i = startIndex; i <= toIndex; i++) {
           if (queueCancelRef.current) {
@@ -461,6 +542,8 @@ export default function Home() {
 
           const { result: chResult, model: chModel } = await analyzeChapter(title, author, { title: ch.title, text: ch.text }, accumulated, chapters.map((c) => c.title));
           accumulated = chResult;
+          recentText += `\n=== ${ch.title} ===\n${ch.text}`;
+          if (recentText.length > MAX_RECENT_TEXT) recentText = recentText.slice(-MAX_RECENT_TEXT);
           snapshots = upsertSnapshot(snapshots, i, accumulated, chModel, APP_VERSION);
           latestStored = { ...latestStored, lastAnalyzedIndex: i, result: accumulated, snapshots };
           saveStored(title, author, latestStored);
@@ -470,6 +553,45 @@ export default function Home() {
             storedRef.current = latestStored;
             setResult(accumulated);
             setViewingSnapshotIndex(null);
+          }
+
+          // Periodic reconciliation every 10 chapters
+          const chaptersProcessed = i - startIndex + 1;
+          if (accumulated && chaptersProcessed > 0 && chaptersProcessed % 10 === 0) {
+            setQueue((q) => q.map((j) => j.id === id
+              ? { ...j, progress: { current: chaptersProcessed, total, chapterTitle: 'Reconciling…' } }
+              : j));
+            try {
+              accumulated = await reconcileResult(title, author, accumulated, recentText);
+              snapshots = upsertSnapshot(snapshots, i, accumulated, undefined, APP_VERSION);
+              latestStored = { ...latestStored, result: accumulated, snapshots };
+              saveStored(title, author, latestStored);
+              if (bookRef.current?.title === title && bookRef.current?.author === author) {
+                storedRef.current = latestStored;
+                setResult(accumulated);
+              }
+            } catch (reconcileErr) {
+              console.warn('[queue] Periodic reconciliation failed, continuing:', reconcileErr);
+            }
+          }
+        }
+
+        // Final reconciliation after all chapters processed
+        if (accumulated) {
+          setQueue((q) => q.map((j) => j.id === id
+            ? { ...j, progress: { current: total, total, chapterTitle: 'Reconciling…' } }
+            : j));
+          try {
+            accumulated = await reconcileResult(title, author, accumulated, recentText);
+            snapshots = upsertSnapshot(snapshots, toIndex, accumulated, undefined, APP_VERSION);
+            latestStored = { ...latestStored, result: accumulated, snapshots };
+            saveStored(title, author, latestStored);
+            if (bookRef.current?.title === title && bookRef.current?.author === author) {
+              storedRef.current = latestStored;
+              setResult(accumulated);
+            }
+          } catch (reconcileErr) {
+            console.warn('[queue] Final reconciliation failed, keeping unreconciled result:', reconcileErr);
           }
         }
 
@@ -782,6 +904,7 @@ export default function Home() {
   }, [book, currentIndex]);
 
   const characters = result?.characters ?? [];
+  const derived = useDerivedEntities(storedRef.current?.snapshots ?? [], result ?? null);
   const displayed = characters
     .filter((c) => {
       if (filter !== 'all' && c.importance !== filter) return false;
@@ -802,7 +925,7 @@ export default function Home() {
 
   if (pendingBook) {
     return (
-      <main className="min-h-screen">
+      <main className="min-h-dvh">
         <SeriesPicker
           newBookTitle={pendingBook.title}
           newBookAuthor={pendingBook.author}
@@ -818,7 +941,7 @@ export default function Home() {
     void myBooksRev; // used to trigger re-render after deletion
     const savedBooks = listSavedBooks();
     return (
-      <main className="min-h-screen flex flex-col">
+      <main className="min-h-dvh flex flex-col">
         {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
         <div className="flex items-end border-b border-stone-200 dark:border-zinc-800 px-2 sm:px-6 pt-4 sm:pt-6 overflow-x-auto scrollbar-none">
           {([
@@ -1029,6 +1152,17 @@ export default function Home() {
   return (
     <main className="h-screen flex flex-col overflow-hidden">
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {showTimeline && book && (
+        <StoryTimeline
+          snapshots={stored?.snapshots ?? []}
+          chapterTitles={book.chapters.map((ch) => ch.title)}
+          currentIndex={viewingSnapshotIndex ?? stored?.lastAnalyzedIndex ?? 0}
+          currentResult={result ?? undefined}
+          onResultEdit={applyResultEdit}
+          onClose={() => setShowTimeline(false)}
+          onJumpToChapter={(i) => { handleChapterChange(i); setShowTimeline(false); }}
+        />
+      )}
       <header className="bg-white dark:bg-zinc-900 border-b border-stone-200 dark:border-zinc-800 px-4 py-3 flex items-center justify-between gap-2 flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           {/* Hamburger — mobile only */}
@@ -1184,11 +1318,14 @@ export default function Home() {
               { key: 'locations', label: 'Locations' },
               { key: 'map', label: 'Map' },
               { key: 'arcs', label: 'Arcs' },
-            ] as const).map(({ key, label }) => (
+              { key: 'manage', label: 'Manage', separated: true },
+            ] as { key: MainTab; label: string; separated?: boolean }[]).map(({ key, label, separated }) => (
               <button
                 key={key}
                 onClick={() => setTab(key)}
                 className={`flex-1 sm:flex-none px-4 sm:px-5 py-2.5 sm:py-2 text-sm font-medium transition-colors ${
+                  separated ? 'border-l border-stone-200 dark:border-zinc-700' : ''
+                } ${
                   tab === key ? 'bg-stone-200 dark:bg-zinc-700 text-stone-900 dark:text-zinc-100' : 'bg-transparent text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300'
                 }`}
               >
@@ -1273,18 +1410,32 @@ export default function Home() {
 
           {/* Map tab — always accessible, fills remaining height */}
           {tab === 'map' && (
-            <div className="flex-1 min-h-0">
-              <MapBoard
-                characters={characters}
-                arcs={result?.arcs}
-                bookTitle={book.title}
-                mapState={mapState}
-                snapshots={stored?.snapshots ?? []}
-                onMapStateChange={(state) => {
-                  setMapState(state);
-                  saveMapState(book.title, book.author, state);
-                }}
-              />
+            <div className="flex-1 min-h-0 flex flex-col">
+              {result?.summary && (
+                <div className="mx-0 mb-3 p-4 bg-stone-50 dark:bg-zinc-900 rounded-xl border border-stone-200 dark:border-zinc-800 flex-shrink-0 cursor-pointer hover:border-stone-300 dark:hover:border-zinc-700 transition-colors" onClick={() => setShowTimeline(true)}>
+                  <p className="text-xs font-medium text-stone-400 dark:text-zinc-600 uppercase tracking-wider mb-2">Story so far</p>
+                  <p className="text-sm text-stone-500 dark:text-zinc-400 leading-relaxed">{result.summary}</p>
+                </div>
+              )}
+              <div className="flex-1 min-h-0">
+                <MapBoard
+                  characters={characters}
+                  arcs={result?.arcs}
+                  locationInfos={result?.locations}
+                  bookTitle={book.title}
+                  mapState={mapState}
+                  snapshots={stored?.snapshots ?? []}
+                  currentResult={result ?? undefined}
+                  onResultEdit={applyResultEdit}
+                  resolvedCharacters={derived.resolvedCharacters}
+                  locationAliasMap={derived.locationAliasMap}
+                  locationGroups={derived.locationGroups}
+                  onMapStateChange={(state) => {
+                    setMapState(state);
+                    saveMapState(book.title, book.author, state);
+                  }}
+                />
+              </div>
             </div>
           )}
 
@@ -1342,8 +1493,8 @@ export default function Home() {
 
               {result && (
                 <div>
-                  {result.summary && tab !== 'arcs' && (
-                    <div className="mb-5 p-4 bg-stone-50 dark:bg-zinc-900 rounded-xl border border-stone-200 dark:border-zinc-800">
+                  {result.summary && (
+                    <div className="mb-5 p-4 bg-stone-50 dark:bg-zinc-900 rounded-xl border border-stone-200 dark:border-zinc-800 cursor-pointer hover:border-stone-300 dark:hover:border-zinc-700 transition-colors" onClick={() => setShowTimeline(true)}>
                       <p className="text-xs font-medium text-stone-400 dark:text-zinc-600 uppercase tracking-wider mb-2">Story so far</p>
                       <p className="text-sm text-stone-500 dark:text-zinc-400 leading-relaxed">{result.summary}</p>
                     </div>
@@ -1405,6 +1556,8 @@ export default function Home() {
                               character={character}
                               snapshots={stored?.snapshots ?? []}
                               chapterTitles={book.chapters.map((ch) => ch.title)}
+                              currentResult={result}
+                              onResultEdit={applyResultEdit}
                             />
                           ))}
                         </div>
@@ -1421,6 +1574,11 @@ export default function Home() {
                       chapterTitles={book.chapters.map((ch) => ch.title)}
                       locationImage={mapState?.locationImage}
                       locationLabel={mapState?.locationLabel}
+                      currentResult={result}
+                      onResultEdit={applyResultEdit}
+                      resolvedCharacters={derived.resolvedCharacters}
+                      locationAliasMap={derived.locationAliasMap}
+                      locationGroups={derived.locationGroups}
                       onLocationImageChange={(image, label) => {
                         const next: MapState = {
                           imageDataUrl: mapState?.imageDataUrl ?? '',
@@ -1438,6 +1596,21 @@ export default function Home() {
                       arcs={result.arcs ?? []}
                       snapshots={stored?.snapshots ?? []}
                       chapterTitles={book.chapters.map((ch) => ch.title)}
+                      currentResult={result}
+                      onResultEdit={applyResultEdit}
+                      arcChapterMap={derived.arcChapterMap}
+                    />
+                  )}
+
+                  {tab === 'manage' && stored && result && (
+                    <EntityManager
+                      snapshots={stored.snapshots}
+                      currentResult={stored.result}
+                      chapterTitles={book.chapters.map((ch) => ch.title)}
+                      onResultEdit={applyResultEdit}
+                      aggregated={derived.aggregated}
+                      bookTitle={book.title}
+                      bookAuthor={book.author}
                     />
                   )}
                 </div>

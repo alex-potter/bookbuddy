@@ -1,12 +1,18 @@
-import type { Character, Snapshot } from '@/types';
+import type { Character, LocationInfo, Snapshot } from '@/types';
 
 /**
  * Build a map from any known location name / alias (lowercased) → canonical name.
  * The canonical name is the longest form seen across all snapshot location entries.
  * Use this to normalise location strings read from older snapshots where the AI
  * may have used a short alias before the full name was established.
+ *
+ * If `currentLocations` is provided, their names override the longest-name heuristic
+ * so that user renames/merges are respected even when the chosen name is shorter.
  */
-export function buildLocationAliasMap(snapshots: Snapshot[]): Map<string, string> {
+export function buildLocationAliasMap(
+  snapshots: Snapshot[],
+  currentLocations?: LocationInfo[],
+): Map<string, string> {
   // group key (lowercased) → canonical name (longest form)
   const canonicalByKey = new Map<string, string>();
 
@@ -39,6 +45,20 @@ export function buildLocationAliasMap(snapshots: Snapshot[]): Map<string, string
     for (const loc of snap.result.locations ?? []) {
       if (!loc.name) continue;
       register([loc.name, ...(loc.aliases ?? [])]);
+    }
+  }
+
+  // Override canonical names with the current result's names (user intent)
+  if (currentLocations) {
+    for (const loc of currentLocations) {
+      const key = loc.name.toLowerCase().trim();
+      const current = canonicalByKey.get(key);
+      if (current && current !== loc.name) {
+        // Replace all references to the old canonical with the user's chosen name
+        for (const [k, v] of canonicalByKey) {
+          if (v === current) canonicalByKey.set(k, loc.name);
+        }
+      }
     }
   }
 

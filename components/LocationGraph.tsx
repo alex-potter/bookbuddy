@@ -213,9 +213,10 @@ function pickAngle(nodeId: string, nodes: { id: string; x: number; y: number }[]
 interface Props {
   snapshots: Snapshot[];
   currentCharacters?: Character[];
+  resolvedCharacters?: Character[];
 }
 
-export default function LocationGraph({ snapshots, currentCharacters = [] }: Props) {
+export default function LocationGraph({ snapshots, currentCharacters = [], resolvedCharacters: resolvedCharsProp }: Props) {
   const [graph, setGraph] = useState<GraphData>(() => buildGraph(snapshots));
   const [running, setRunning] = useState(true);
   const [dragging, setDragging] = useState<string | null>(null);
@@ -296,7 +297,7 @@ export default function LocationGraph({ snapshots, currentCharacters = [] }: Pro
 
   // Build live character→location map from currentCharacters.
   // Characters with unknown locations fall back to their last confirmed location.
-  const resolvedCharacters = withResolvedLocations(currentCharacters, snapshots);
+  const resolvedCharacters = resolvedCharsProp ?? withResolvedLocations(currentCharacters, snapshots);
   const liveByLoc = new Map<string, CharAvatar[]>();
   for (const c of resolvedCharacters) {
     const loc = c.currentLocation?.trim();

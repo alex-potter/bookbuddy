@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import type { Character, Snapshot } from '@/types';
+import type { AnalysisResult, Character, Snapshot } from '@/types';
+import type { SnapshotTransform } from '@/lib/propagate-edit';
 import CharacterModal from './CharacterModal';
 
 const STATUS_CONFIG = {
@@ -41,9 +42,11 @@ interface Props {
   character: Character;
   snapshots?: Snapshot[];
   chapterTitles?: string[];
+  currentResult?: AnalysisResult;
+  onResultEdit?: (result: AnalysisResult, propagate?: SnapshotTransform) => void;
 }
 
-export default function CharacterCard({ character, snapshots, chapterTitles }: Props) {
+export default function CharacterCard({ character, snapshots, chapterTitles, currentResult, onResultEdit }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const status = STATUS_CONFIG[character.status] ?? STATUS_CONFIG.unknown;
@@ -51,7 +54,7 @@ export default function CharacterCard({ character, snapshots, chapterTitles }: P
 
   return (
     <>
-      {modalOpen && <CharacterModal character={character} snapshots={snapshots} chapterTitles={chapterTitles} onClose={() => setModalOpen(false)} />}
+      {modalOpen && <CharacterModal character={character} snapshots={snapshots} chapterTitles={chapterTitles} currentResult={currentResult} onResultEdit={onResultEdit} onClose={() => setModalOpen(false)} />}
     <div
       onClick={() => setModalOpen(true)}
       className={`

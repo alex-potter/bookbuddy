@@ -1,13 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import type { NarrativeArc, Snapshot } from '@/types';
+import type { AnalysisResult, NarrativeArc, Snapshot } from '@/types';
+import type { SnapshotTransform } from '@/lib/propagate-edit';
 import NarrativeArcModal from '@/components/NarrativeArcModal';
 
 interface Props {
   arcs: NarrativeArc[];
   snapshots: Snapshot[];
   chapterTitles: string[];
+  currentResult?: AnalysisResult;
+  onResultEdit?: (result: AnalysisResult, propagate?: SnapshotTransform) => void;
+  arcChapterMap?: Map<string, number[]>;
 }
 
 const STATUS_CONFIG = {
@@ -16,7 +20,7 @@ const STATUS_CONFIG = {
   resolved: { label: 'Resolved', dot: 'bg-emerald-500', badge: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
 };
 
-export default function ArcsPanel({ arcs, snapshots, chapterTitles }: Props) {
+export default function ArcsPanel({ arcs, snapshots, chapterTitles, currentResult, onResultEdit, arcChapterMap: arcChapterMapProp }: Props) {
   const [selectedArc, setSelectedArc] = useState<string | null>(null);
   if (arcs.length === 0) {
     return (
@@ -34,22 +38,20 @@ export default function ArcsPanel({ arcs, snapshots, chapterTitles }: Props) {
   const order = { active: 0, dormant: 1, resolved: 2 };
   const sorted = [...arcs].sort((a, b) => order[a.status] - order[b.status]);
 
-  // Build a map: arc name → snapshot indices where characters from that arc appear
-  // (approximate — based on character overlap per snapshot)
-  const arcChapterMap = new Map<string, number[]>();
-  for (const arc of arcs) {
-    const arcCharSet = new Set(arc.characters.map((c) => c.toLowerCase()));
-    const indices: number[] = [];
-    for (const snap of [...snapshots].sort((a, b) => a.index - b.index)) {
-      const snapChars = new Set(snap.result.characters.map((c) => c.name.toLowerCase()));
-      const hasOverlap = arc.characters.some((c) => snapChars.has(c.toLowerCase()));
-      // Also check if the arc exists in this snapshot's arcs list
-      const inSnapArcs = (snap.result.arcs ?? []).some((a) => a.name.toLowerCase() === arc.name.toLowerCase());
-      if (hasOverlap || inSnapArcs) indices.push(snap.index);
-      void arcCharSet; // suppress lint
+  const arcChapterMap = arcChapterMapProp ?? (() => {
+    const map = new Map<string, number[]>();
+    for (const arc of arcs) {
+      const indices: number[] = [];
+      for (const snap of [...snapshots].sort((a, b) => a.index - b.index)) {
+        const snapChars = new Set(snap.result.characters.map((c) => c.name.toLowerCase()));
+        const hasOverlap = arc.characters.some((c) => snapChars.has(c.toLowerCase()));
+        const inSnapArcs = (snap.result.arcs ?? []).some((a) => a.name.toLowerCase() === arc.name.toLowerCase());
+        if (hasOverlap || inSnapArcs) indices.push(snap.index);
+      }
+      map.set(arc.name, indices);
     }
-    arcChapterMap.set(arc.name, indices);
-  }
+    return map;
+  })();
 
   const totalChapters = Math.max(...snapshots.map((s) => s.index), 0) + 1;
 
@@ -60,6 +62,8 @@ export default function ArcsPanel({ arcs, snapshots, chapterTitles }: Props) {
         arcName={selectedArc}
         snapshots={snapshots}
         chapterTitles={chapterTitles}
+        currentResult={currentResult}
+        onResultEdit={onResultEdit}
         onClose={() => setSelectedArc(null)}
       />
     )}

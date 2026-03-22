@@ -50,6 +50,7 @@ export interface LocationInfo {
   name: string;
   aliases?: string[];                    // alternative names (e.g. "Ceres" for "Ceres Station")
   arc?: string;                          // narrative arc / storyline this location belongs to
+  parentLocation?: string;               // name of the containing/parent location
   description: string;                   // 1–2 sentence description of the place
   recentEvents?: string;                 // what happened at this location in the most recent chapter
   relationships?: LocationRelationship[]; // how this place relates to other known places
@@ -95,4 +96,9 @@ export interface MapState {
   pins: Record<string, LocationPin>;  // location name → coordinates
   locationImage?: string;             // Locations-tab display-only map image
   locationLabel?: string;
+}
+
+export interface PinUpdates {
+  renames?: Record<string, string>;  // oldName → newName
+  deletes?: string[];
 }

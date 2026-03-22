@@ -8,7 +8,9 @@
     "start": "next start",
     "build:mobile": "node scripts/mobile-build.js",
     "cap:sync": "npm run build:mobile && npx cap sync",
-    "cap:android": "npm run build:mobile && npx cap sync && npx cap open android"
+    "cap:android": "npm run build:mobile && npx cap sync && npx cap open android",
+    "build:pwa": "cross-env NEXT_PUBLIC_BASE_PATH=/bookbuddy npm run build:mobile",
+    "deploy:gh-pages": "npm run build:pwa && npx gh-pages -d out"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.40.0",

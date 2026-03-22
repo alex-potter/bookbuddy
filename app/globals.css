@@ -5,6 +5,11 @@
 html {
   background-color: #fafaf9;
   height: 100%;
+  height: -webkit-fill-available;
+}
+
+@supports (height: 100dvh) {
+  html { height: 100dvh; }
 }
 
 html.dark {
@@ -15,11 +20,25 @@ body {
   background-color: #fafaf9;
   color: #1c1917;
   height: 100%;
+  height: -webkit-fill-available;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+@supports (height: 100dvh) {
+  body { height: 100dvh; }
 }
 
 html.dark body {
   background-color: #09090b;
   color: #f4f4f5;
+}
+
+/* Prevent pull-to-refresh in iOS standalone */
+@media (display-mode: standalone) {
+  html { overscroll-behavior-y: none; }
 }
 
 /* Remove 300ms tap delay on mobile */

@@ -1,20 +1,27 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import type { Character, LocationPin, MapState, NarrativeArc, Snapshot } from '@/types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { AnalysisResult, Character, LocationInfo, LocationPin, MapState, NarrativeArc, PinUpdates, Snapshot } from '@/types';
+import type { SnapshotTransform } from '@/lib/propagate-edit';
 import SubwayMap from './SubwayMap';
 import CharacterModal from './CharacterModal';
 import LocationModal from './LocationModal';
 import NarrativeArcModal from './NarrativeArcModal';
-import { withResolvedLocations } from '@/lib/resolve-locations';
+import type { LocationGroup } from '@/lib/use-derived-entities';
 
 interface Props {
   characters: Character[];
   arcs?: NarrativeArc[];
+  locationInfos?: LocationInfo[];
   bookTitle?: string;
   mapState: MapState | null;
   onMapStateChange: (state: MapState) => void;
   snapshots?: Snapshot[];
+  currentResult?: AnalysisResult;
+  onResultEdit?: (result: AnalysisResult, propagate?: SnapshotTransform, pinUpdates?: PinUpdates) => void;
+  resolvedCharacters?: Character[];
+  locationAliasMap?: Map<string, string>;
+  locationGroups?: LocationGroup[];
 }
 
 const ARC_STATUS_DOT: Record<NarrativeArc['status'], string> = {
@@ -52,62 +59,14 @@ function initials(name: string): string {
   return name.split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? '').join('');
 }
 
-/** Normalise a location name for deduplication comparison. */
-function normalizeLocation(loc: string): string {
-  return loc.toLowerCase()
-    .replace(/^(the|a|an)\s+/, '')
-    .split(',')[0]
-    .trim()
-    .split(/\s+/)
-    .sort()
-    .join(' ');
-}
-
-function buildLocationMap(characters: Character[]): Map<string, Character[]> {
-  // Collect characters per raw location string
-  const raw = new Map<string, Character[]>();
-  for (const ch of characters) {
-    const loc = ch.currentLocation?.trim();
-    if (!loc || loc === 'Unknown') continue;
-    if (!raw.has(loc)) raw.set(loc, []);
-    raw.get(loc)!.push(ch);
-  }
-
-  // Group by normalised key; use the shortest variant as the canonical display name
-  const groups = new Map<string, { canonical: string; chars: Character[] }>();
-  for (const [loc, chars] of raw.entries()) {
-    const key = normalizeLocation(loc);
-    const existing = groups.get(key);
-    if (existing) {
-      existing.chars.push(...chars);
-      if (loc.length < existing.canonical.length) existing.canonical = loc;
-    } else {
-      groups.set(key, { canonical: loc, chars: [...chars] });
-    }
-  }
-
-  // Merge prefix-word subsets: "Eros" (key:"eros") merges into "Eros Station" (key:"eros station")
-  // Keep the more specific (longer) canonical name.
-  const keys = [...groups.keys()];
-  for (const shorter of keys) {
-    if (!groups.has(shorter)) continue;
-    for (const longer of keys) {
-      if (shorter === longer || !groups.has(longer)) continue;
-      if (longer.startsWith(shorter + ' ')) {
-        // shorter is a prefix-word subset of longer — merge shorter into longer
-        const gs = groups.get(shorter)!;
-        const gl = groups.get(longer)!;
-        gl.chars.push(...gs.chars);
-        // canonical: prefer the longer (more specific) raw name
-        if (gs.canonical.length > gl.canonical.length) gl.canonical = gs.canonical;
-        groups.delete(shorter);
-        break;
-      }
-    }
-  }
-
+/** Build a location→characters map from LocationGroups. */
+function locationGroupsToMap(groups: LocationGroup[]): Map<string, Character[]> {
   const result = new Map<string, Character[]>();
-  for (const { canonical, chars } of groups.values()) result.set(canonical, chars);
+  for (const g of groups) {
+    if (g.location !== 'Unknown' && g.characters.length > 0) {
+      result.set(g.location, g.characters);
+    }
+  }
   return new Map([...result.entries()].sort((a, b) => b[1].length - a[1].length));
 }
 
@@ -151,7 +110,7 @@ function charImportanceColor(importance: Character['importance']): string {
   return importance === 'main' ? '#f59e0b' : importance === 'secondary' ? '#3b82f6' : '#71717a';
 }
 
-export default function MapBoard({ characters, arcs = [], bookTitle, mapState, onMapStateChange, snapshots = [] }: Props) {
+export default function MapBoard({ characters, arcs = [], locationInfos = [], bookTitle, mapState, onMapStateChange, snapshots = [], currentResult, onResultEdit, resolvedCharacters: resolvedCharsProp, locationAliasMap: aliasMapProp, locationGroups: groupsProp }: Props) {
   const [placingLocation, setPlacingLocation] = useState<string | null>(null);
   const [activePin, setActivePin] = useState<string | null>(null);
   const [activeCharPin, setActiveCharPin] = useState<string | null>(null);
@@ -180,18 +139,83 @@ export default function MapBoard({ characters, arcs = [], bookTitle, mapState, o
   const mapRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Resolve last-known locations for characters currently marked 'Unknown'
-  const resolvedChars = withResolvedLocations(characters, snapshots);
+  const resolvedChars = resolvedCharsProp ?? characters;
 
-  const locationMap = buildLocationMap(resolvedChars);
-  const locations = [...locationMap.entries()];
+  const locationMap = groupsProp ? locationGroupsToMap(groupsProp) : new Map<string, Character[]>();
+  const [showOnlyRoots, setShowOnlyRoots] = useState(false);
+  const hasHierarchy = locationInfos.some((l) => !!l.parentLocation);
+
+  // Build child→root merge map for top-level-only mode
+  const locationMergeMap = useMemo(() => {
+    if (!hasHierarchy) return undefined;
+    const locByName = new Map(locationInfos.map((l) => [l.name.toLowerCase().trim(), l]));
+    function findRootName(name: string): string {
+      const seen = new Set<string>();
+      let cur = name.toLowerCase().trim();
+      while (true) {
+        const loc = locByName.get(cur);
+        if (!loc?.parentLocation) return loc?.name ?? cur;
+        const parent = loc.parentLocation.toLowerCase().trim();
+        if (seen.has(parent) || parent === cur) return loc?.name ?? cur;
+        seen.add(cur);
+        cur = parent;
+      }
+    }
+    const map = new Map<string, string>();
+    for (const loc of locationInfos) {
+      if (loc.parentLocation) {
+        map.set(loc.name, findRootName(loc.name));
+      }
+    }
+    return map.size > 0 ? map : undefined;
+  }, [locationInfos, hasHierarchy]);
+
+  // When top-level only, roll child characters into root ancestors
+  const locations: [string, Character[]][] = (() => {
+    const base = [...locationMap.entries()];
+    if (!showOnlyRoots || !locationMergeMap) return base;
+
+    const rootChars = new Map<string, Character[]>();
+    for (const [name, chars] of base) {
+      const root = locationMergeMap.get(name) ?? name;
+      if (!rootChars.has(root)) rootChars.set(root, []);
+      const existing = rootChars.get(root)!;
+      const existingNames = new Set(existing.map((c) => c.name));
+      for (const c of chars) {
+        if (!existingNames.has(c.name)) { existing.push(c); existingNames.add(c.name); }
+      }
+    }
+    return [...rootChars.entries()] as [string, Character[]][];
+  })();
+
   const pinnedCount = mapState ? Object.keys(mapState.pins).length : 0;
 
   // Character filter helpers
   const displayedChars = trackedCharNames === null
     ? resolvedChars
     : resolvedChars.filter((c) => trackedCharNames.has(c.name));
-  const displayedLocationMap = buildLocationMap(displayedChars);
+  const displayedLocationMap = (() => {
+    // Build map from filtered characters by grouping on their resolved location
+    const base = new Map<string, Character[]>();
+    for (const c of displayedChars) {
+      const loc = c.currentLocation?.trim();
+      if (!loc || loc === 'Unknown') continue;
+      if (!base.has(loc)) base.set(loc, []);
+      base.get(loc)!.push(c);
+    }
+    if (!showOnlyRoots || !locationMergeMap) return base;
+    const merged = new Map<string, Character[]>();
+    for (const [name, chars] of base) {
+      const root = locationMergeMap.get(name) ?? name;
+      if (!merged.has(root)) merged.set(root, []);
+      const existing = merged.get(root)!;
+      const existingNames = new Set(existing.map((c) => c.name));
+      for (const c of chars) {
+        if (!existingNames.has(c.name)) { existing.push(c); existingNames.add(c.name); }
+      }
+    }
+    return merged;
+  })();
 
   function toggleChar(name: string) {
     setTrackedCharNames((prev) => {
@@ -424,13 +448,13 @@ export default function MapBoard({ characters, arcs = [], bookTitle, mapState, o
     return (
       <>
       {selectedChar && (
-        <CharacterModal character={selectedChar} snapshots={snapshots} onClose={() => setSelectedCharName(null)} />
+        <CharacterModal character={selectedChar} snapshots={snapshots} currentResult={currentResult} onResultEdit={onResultEdit} onClose={() => setSelectedCharName(null)} />
       )}
       {selectedLocationName && (
-        <LocationModal locationName={selectedLocationName} snapshots={snapshots} onClose={() => setSelectedLocationName(null)} />
+        <LocationModal locationName={selectedLocationName} snapshots={snapshots} currentResult={currentResult} onResultEdit={onResultEdit} onClose={() => setSelectedLocationName(null)} />
       )}
       {selectedArcName && (
-        <NarrativeArcModal arcName={selectedArcName} snapshots={snapshots} onClose={() => setSelectedArcName(null)} />
+        <NarrativeArcModal arcName={selectedArcName} snapshots={snapshots} currentResult={currentResult} onResultEdit={onResultEdit} onClose={() => setSelectedArcName(null)} />
       )}
       <div
         className={`relative h-full min-h-0 rounded-xl border overflow-hidden ${isDragging ? 'border-amber-500/40' : 'border-stone-200 dark:border-zinc-800'}`}
@@ -440,8 +464,25 @@ export default function MapBoard({ characters, arcs = [], bookTitle, mapState, o
       >
         {/* Subway map fills full height */}
         <div className="h-full bg-white dark:bg-zinc-900">
-          <SubwayMap snapshots={snapshots} currentCharacters={displayedChars} onCharacterClick={setSelectedCharName} onLocationClick={setSelectedLocationName} onArcClick={setSelectedArcName} />
+          <SubwayMap snapshots={snapshots} currentCharacters={displayedChars} currentLocations={currentResult?.locations} locationMergeMap={showOnlyRoots ? locationMergeMap : undefined} locationAliasMap={aliasMapProp} onCharacterClick={setSelectedCharName} onLocationClick={setSelectedLocationName} onArcClick={setSelectedArcName} />
         </div>
+
+        {/* Top-level only toggle — top-right overlay */}
+        {hasHierarchy && (
+          <div className="absolute top-3 right-3 z-10">
+            <button
+              onClick={() => setShowOnlyRoots((v) => !v)}
+              className={`px-2 py-1 text-[10px] font-medium rounded-md border transition-colors backdrop-blur-sm shadow-sm ${
+                showOnlyRoots
+                  ? 'bg-amber-500/15 text-amber-500 border-amber-500/30'
+                  : 'bg-white/80 dark:bg-zinc-800/80 text-stone-400 dark:text-zinc-500 border-stone-300 dark:border-zinc-700 hover:text-stone-600 dark:hover:text-zinc-300'
+              }`}
+              title={showOnlyRoots ? 'Show all locations' : 'Show only top-level locations'}
+            >
+              Top-level only
+            </button>
+          </div>
+        )}
 
         {/* Filter panel — bottom-left overlay */}
         {characters.length > 0 && (
@@ -584,9 +625,9 @@ export default function MapBoard({ characters, arcs = [], bookTitle, mapState, o
   return (
     <>
     {selectedLocationName && (
-      <LocationModal locationName={selectedLocationName} snapshots={snapshots} onClose={() => setSelectedLocationName(null)} />
+      <LocationModal locationName={selectedLocationName} snapshots={snapshots} currentResult={currentResult} onResultEdit={onResultEdit} onClose={() => setSelectedLocationName(null)} />
     )}
-    {selectedCharName && (() => { const c = characters.find((ch) => ch.name === selectedCharName); return c ? <CharacterModal character={c} snapshots={snapshots} onClose={() => setSelectedCharName(null)} /> : null; })()}
+    {selectedCharName && (() => { const c = characters.find((ch) => ch.name === selectedCharName); return c ? <CharacterModal character={c} snapshots={snapshots} currentResult={currentResult} onResultEdit={onResultEdit} onClose={() => setSelectedCharName(null)} /> : null; })()}
     <div className="flex gap-4 h-full min-h-0">
       {/* Map area */}
       <div className="flex-1 min-w-0 flex flex-col gap-2 min-h-0">
@@ -849,7 +890,7 @@ export default function MapBoard({ characters, arcs = [], bookTitle, mapState, o
           {/* Accepted pins */}
           {!charMode && Object.entries(pins).map(([location, pinPos]) => {
             const { x, y } = dragState?.name === location ? dragState : pinPos;
-            const chars = locationMap.get(location) ?? [];
+            const chars = displayedLocationMap.get(location) ?? [];
             const color = pinColor(location);
             const isActive = activePin === location;
             const isDraggingThis = dragState?.name === location;
@@ -974,9 +1015,24 @@ export default function MapBoard({ characters, arcs = [], bookTitle, mapState, o
           </div>
         )}
 
-        <p className="text-xs font-medium text-stone-400 dark:text-zinc-600 uppercase tracking-wider mb-2 flex-shrink-0">
-          {unplacedLocations.length > 0 ? `Unplaced (${unplacedLocations.length})` : 'Locations'}
-        </p>
+        <div className="flex items-center gap-2 mb-2 flex-shrink-0">
+          <p className="text-xs font-medium text-stone-400 dark:text-zinc-600 uppercase tracking-wider">
+            {unplacedLocations.length > 0 ? `Unplaced (${unplacedLocations.length})` : 'Locations'}
+          </p>
+          {hasHierarchy && (
+            <button
+              onClick={() => setShowOnlyRoots((v) => !v)}
+              className={`ml-auto px-2 py-0.5 text-[10px] font-medium rounded-md border transition-colors ${
+                showOnlyRoots
+                  ? 'bg-amber-500/15 text-amber-500 border-amber-500/30'
+                  : 'text-stone-400 dark:text-zinc-500 border-stone-300 dark:border-zinc-700 hover:text-stone-600 dark:hover:text-zinc-300'
+              }`}
+              title={showOnlyRoots ? 'Show all locations' : 'Show only top-level locations'}
+            >
+              Top-level only
+            </button>
+          )}
+        </div>
 
         {locations.length === 0 ? (
           <p className="text-xs text-stone-300 dark:text-zinc-700">No locations found — analyze a chapter first.</p>
