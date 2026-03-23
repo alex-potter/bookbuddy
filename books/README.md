@@ -10,9 +10,15 @@ Import any `.etbook` file directly into the app — no EPUB or AI model required
 
 ## How to contribute
 
-1. Analyze a book fully in Chapter Companion
-2. Export it: open the **My Books** tab → click the **↓** button next to the book
-3. Fork this repo, add your `.etbook` file to the appropriate genre folder, and open a PR
+### From the app (easiest)
+1. Analyze a book fully in BookBuddy
+2. Open the **My Books** tab
+3. Click the **↑** button next to the book
+4. Follow the prompts to submit
+
+### Manual (developers)
+1. Export the book (↓ button)
+2. Fork this repo, add the file to `books/AuthorName/`, and open a PR
 
 Please only share books that are in the public domain or that you own.
 

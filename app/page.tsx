@@ -21,6 +21,8 @@ import EntityManager from '@/components/EntityManager';
 import { buildShareMarkdown, shareReadingContext } from '@/lib/share-context';
 import type { SnapshotTransform } from '@/lib/propagate-edit';
 import StoryTimeline from '@/components/StoryTimeline';
+import WelcomeBanner from '@/components/WelcomeBanner';
+import LibrarySubmitModal from '@/components/LibrarySubmitModal';
 import { useDerivedEntities } from '@/lib/use-derived-entities';
 
 type SortKey = 'importance' | 'name' | 'status';
@@ -295,6 +297,7 @@ export default function Home() {
   const [myBooksRev, setMyBooksRev] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [submitBook, setSubmitBook] = useState<{ title: string; author: string } | null>(null);
   const [showTimeline, setShowTimeline] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [shareLabel, setShareLabel] = useState<'Share' | 'Copied!' | 'Shared!'>('Share');
@@ -948,6 +951,7 @@ export default function Home() {
     return (
       <main className="min-h-dvh flex flex-col">
         {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+        {submitBook && <LibrarySubmitModal title={submitBook.title} author={submitBook.author} onClose={() => setSubmitBook(null)} />}
         <div className="flex items-end border-b border-stone-200 dark:border-zinc-800 px-2 sm:px-6 pt-4 sm:pt-6 overflow-x-auto scrollbar-none">
           {([
             { key: 'file', label: 'Upload EPUB' },
@@ -987,6 +991,7 @@ export default function Home() {
         <div className="flex-1 p-4 sm:p-6">
           {uploadTab === 'file' ? (
             <>
+              <WelcomeBanner />
               <UploadZone onFile={handleFile} parsing={parsing} />
               {parseError && <p className="mt-4 text-center text-red-500 text-sm">{parseError}</p>}
             </>
@@ -1096,13 +1101,22 @@ export default function Home() {
                             </button>
                           )}
                           {analyzed && (
-                            <button
-                              onClick={() => exportBook(entry.title, entry.author)}
-                              title="Export .bookbuddy"
-                              className="flex-shrink-0 p-2 text-stone-400 dark:text-zinc-600 hover:text-stone-700 dark:hover:text-zinc-300 transition-colors"
-                            >
-                              ↓
-                            </button>
+                            <>
+                              <button
+                                onClick={() => setSubmitBook({ title: entry.title, author: entry.author })}
+                                title="Share to Library"
+                                className="flex-shrink-0 p-2 text-stone-400 dark:text-zinc-600 hover:text-amber-400 transition-colors"
+                              >
+                                ↑
+                              </button>
+                              <button
+                                onClick={() => exportBook(entry.title, entry.author)}
+                                title="Export .bookbuddy"
+                                className="flex-shrink-0 p-2 text-stone-400 dark:text-zinc-600 hover:text-stone-700 dark:hover:text-zinc-300 transition-colors"
+                              >
+                                ↓
+                              </button>
+                            </>
                           )}
                           {pendingDelete === `${entry.title}::${entry.author}` ? (
                             <div className="flex items-center gap-1 flex-shrink-0">

@@ -97,6 +97,11 @@ export default function GithubLibrary({ onFile }: Props) {
           </ul>
         </div>
       ))}
+      <div className="mt-6 pt-4 border-t border-stone-200 dark:border-zinc-800 text-center">
+        <p className="text-xs text-stone-400 dark:text-zinc-500">
+          Analyzed a book? Share it from your <span className="text-amber-400 font-medium">My Books</span> tab.
+        </p>
+      </div>
     </div>
   );
 }
