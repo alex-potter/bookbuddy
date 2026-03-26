@@ -476,7 +476,7 @@ export default function MapBoard({ characters, arcs = [], locationInfos = [], bo
       >
         {/* Subway map fills full height */}
         <div className="h-full bg-white dark:bg-zinc-900">
-          <SubwayMap snapshots={snapshots} currentCharacters={displayedChars} currentLocations={currentResult?.locations} locationMergeMap={showOnlyRoots ? locationMergeMap : undefined} locationAliasMap={aliasMapProp} onCharacterClick={setSelectedCharName} onLocationClick={setSelectedLocationName} onArcClick={setSelectedArcName} />
+          <SubwayMap snapshots={currentChapterIndex != null ? (snapshots ?? []).filter((s) => s.index <= currentChapterIndex) : snapshots} currentCharacters={displayedChars} currentLocations={currentResult?.locations} locationMergeMap={showOnlyRoots ? locationMergeMap : undefined} locationAliasMap={aliasMapProp} onCharacterClick={setSelectedCharName} onLocationClick={setSelectedLocationName} onArcClick={setSelectedArcName} />
         </div>
 
         {/* Top-level only toggle — top-right overlay */}
