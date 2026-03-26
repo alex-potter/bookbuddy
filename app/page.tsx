@@ -672,15 +672,18 @@ export default function Home() {
         const snap = bestSnapshot(initialStored.snapshots, bookmark);
         setResult(snap?.result ?? initialStored.result);
         setViewingSnapshotIndex(snap?.index ?? null);
+        setSpoilerDismissedIndex(null);
         setCurrentIndex(bookmark);
       } else {
         setResult(initialStored.result);
         setViewingSnapshotIndex(null);
+        setSpoilerDismissedIndex(null);
         const nextIdx = Math.min(initialStored.lastAnalyzedIndex + 1, parsed.chapters.length - 1);
         setCurrentIndex(nextIdx);
       }
     } else {
       setViewingSnapshotIndex(null);
+      setSpoilerDismissedIndex(null);
       setCurrentIndex(0);
     }
 
@@ -1216,10 +1219,10 @@ export default function Home() {
   const snapshotIndices = new Set((stored?.snapshots ?? []).map((s) => s.index));
   // Whether the displayed result is from a historical snapshot rather than the latest
   const isViewingHistory = viewingSnapshotIndex !== null;
-  const effectiveBookmark = Math.min(
+  const effectiveBookmark = Math.max(0, Math.min(
     stored?.readingBookmark ?? stored?.lastAnalyzedIndex ?? 0,
     stored?.lastAnalyzedIndex ?? 0,
-  ); // clamp bookmark to analyzed range
+  )); // clamp bookmark to analyzed range
   // viewingSnapshotIndex is deliberately excluded: the bookmark is the spoiler ceiling.
   // When viewing a snapshot below the bookmark, panels still show data up to the bookmark.
   // When viewing beyond the bookmark (spoiler dismissed), spoilerDismissedIndex takes over.
