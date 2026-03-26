@@ -13,7 +13,7 @@ After the last chapter's analysis completes, automatically fire an AI call that 
 Add `ParentArc` type to `types/index.ts`:
 
 ```typescript
-interface ParentArc {
+export interface ParentArc {
   name: string;
   children: string[];  // child arc names, ordered
   summary: string;     // AI-generated summary of the grouped theme
@@ -35,13 +35,49 @@ interface StoredBookState {
 
 ### Trigger
 
-The parent arc grouping call fires automatically at the end of `handleAnalyze` in `page.tsx`, after the analysis loop completes, when the final analyzed chapter is the last chapter in the book (or the last chapter in the configured range).
+The parent arc grouping call fires automatically after any analysis flow completes the full book. There are three analysis flows in `page.tsx` that can trigger it:
 
-Condition: the analysis loop completed without cancellation, and `lastAnalyzedIndex` equals the range end index.
+1. **`handleAnalyze`** — the primary "Analyze" button flow
+2. **`handleRebuild`** — the "Rebuild" flow that re-analyzes from scratch
+3. **Queue processor `useEffect`** — background queue processing for batched books
+
+**Condition:** The analysis loop completed without cancellation, and all analyzable chapters in the configured range have been analyzed (i.e., `lastAnalyzedIndex >= rangeEnd`).
+
+To avoid duplication, extract a shared helper:
+
+```typescript
+async function maybeGenerateParentArcs(stored: StoredBookState, bookTitle: string, bookAuthor: string) {
+  const rangeEnd = stored.chapterRange?.end ?? /* total chapters - 1 */;
+  if (stored.lastAnalyzedIndex < rangeEnd) return;
+  if (!stored.result.arcs?.length) return;
+  // fire the API call, save parentArcs
+}
+```
+
+Called at the end of each analysis flow's success path.
 
 ### API Endpoint
 
-Add a new function in `app/api/analyze/route.ts` that handles parent arc grouping. This reuses the existing API route and model selection infrastructure.
+Create a new API route at `app/api/group-arcs/route.ts`. This has a completely different input/output shape from the chapter analysis route and deserves its own endpoint. It reuses the same model selection infrastructure (reads the user's preferred model from the request).
+
+Request body:
+
+```typescript
+{
+  bookTitle: string;
+  bookAuthor: string;
+  arcs: NarrativeArc[];
+  model?: string;
+}
+```
+
+Response body:
+
+```typescript
+{
+  parentArcs: ParentArc[];
+}
+```
 
 ### Prompt
 
@@ -76,10 +112,15 @@ Return ONLY a JSON object (no markdown fences, no explanation):
 
 ### Response Handling
 
-- Parse the JSON response, validate that all child names match existing arc names.
+- Parse the JSON response, validate that all child names match existing arc names (case-insensitive match, using the closest match from the actual arc list).
 - Any arcs not assigned by the AI get placed in a catch-all "Other" parent.
 - Any child names that don't match existing arcs are silently dropped.
 - Save `parentArcs` to `StoredBookState` via `saveStored()`.
+
+### Loading and Error States
+
+- While the parent arc call is in progress, show a subtle "Grouping arcs..." indicator in the ArcsPanel (inline, not blocking). The panel remains usable with the flat list during this time.
+- If the call fails (network error, malformed response), fail silently — `parentArcs` stays `undefined` and the flat list remains. No retry button; the user can trigger re-analysis to try again, or future re-analysis will attempt grouping again.
 
 ## ArcsPanel Changes
 
@@ -120,11 +161,11 @@ All changes persist immediately via `onUpdateParentArcs` callback, which calls `
 
 ### With parentArcs
 
-- Build a lookup map: child arc name → parent arc name.
-- In `buildGraph()`, when assigning locations to arc lanes, use the parent arc name instead of the individual arc name.
+- Build a case-insensitive lookup map: child arc name → parent arc name. This maps `NarrativeArc.name` values to their parent.
+- In `buildGraph()`, when assigning locations to arc lanes: the location's `LocationInfo.arc` string (a free-text field set by the AI) may not exactly match a `NarrativeArc.name`. Use case-insensitive matching to find the `NarrativeArc.name`, then look up that name in the parent arc map.
 - This consolidates lanes from many individual arcs down to ≤5 parent arc lanes.
 - Lane labels show the parent arc name.
-- The "Other" lane catches locations whose arc is not in any parent group.
+- The "Other" lane catches locations whose arc cannot be resolved to any parent group.
 
 ### Without parentArcs
 
@@ -145,31 +186,31 @@ Passed from MapBoard, which receives it from page.tsx.
 | File | Change |
 |------|--------|
 | `types/index.ts` | Add `ParentArc` interface |
-| `app/page.tsx` | Add `parentArcs` to `StoredBookState`, trigger AI call after full analysis, add `handleUpdateParentArcs` handler, pass `parentArcs` to ArcsPanel and MapBoard |
-| `app/api/analyze/route.ts` | Add parent arc grouping prompt builder and action handler |
+| `app/page.tsx` | Add `parentArcs` to `StoredBookState`, add `maybeGenerateParentArcs` helper called from all three analysis flows, add `handleUpdateParentArcs` handler, pass `parentArcs` to ArcsPanel and MapBoard, wire invalidation into `applyResultEdit` |
+| `app/api/group-arcs/route.ts` | New route: parent arc grouping prompt builder and handler |
 | `components/ArcsPanel.tsx` | Accept `parentArcs` and `onUpdateParentArcs` props, render collapsible grouped view with inline edit controls |
-| `components/MapBoard.tsx` | Pass `parentArcs` through to SubwayMap |
+| `components/MapBoard.tsx` | Accept and pass `parentArcs` through to SubwayMap |
 | `components/SubwayMap.tsx` | Accept `parentArcs` prop, use parent arc names for lane assignment when available |
 
 ## Invalidation
 
-When a user edits arcs through NarrativeArcModal (merge, split, delete, rename), the parent arc groupings may become stale:
+When a user edits arcs through NarrativeArcModal (merge, split, delete, rename), the `parentArcs` must be updated to stay consistent. This logic lives in `page.tsx`, wired into `applyResultEdit` (which already handles `SnapshotTransform` propagation for arc edits):
 
-- **Arc renamed:** Update the child name reference in `parentArcs` (handled in page.tsx alongside the existing rename propagation).
-- **Arc deleted:** Remove the deleted arc name from its parent's `children` array. If the parent becomes empty, remove it.
-- **Arc merged:** The absorbed arc is removed from its parent's children; the primary arc remains.
-- **Arc split:** The original arc name stays in its parent; the new arc is added to the same parent's children.
+- **Arc renamed:** Update the child name reference in `parentArcs` — find the old name in all `children` arrays and replace with the new name.
+- **Arc deleted:** Remove the deleted arc name from its parent's `children` array. If the parent becomes empty, remove the parent.
+- **Arc merged:** The absorbed arc is removed from its parent's children; the primary arc remains in its parent.
+- **Arc split:** The original arc name stays in its parent; the new arc is added to the same parent's `children` array.
 
 This keeps parent arcs consistent without requiring regeneration on every edit.
 
 ## Edge Cases
 
 - **Fewer than 3 arcs:** Still group (may produce 1-2 parent arcs). The AI handles this naturally.
-- **Re-analysis after grouping:** If the user re-analyzes chapters or analyzes additional chapters, and the book is again fully analyzed at the end, the parent arc call fires again, overwriting previous groupings.
+- **Re-analysis after grouping:** If the user re-analyzes and the book is again fully analyzed, the parent arc call fires again, overwriting previous groupings (including any manual edits).
 - **Cancelled analysis:** Parent arc call does not fire if analysis was cancelled before reaching the final chapter.
 - **Series continuation:** `parentArcs` resets to `undefined` when carrying state forward to a new book (same as `readingBookmark`).
-- **Background queue processing:** The queue processor (`handleProcessBook`) should also trigger parent arc grouping when it completes a full book analysis.
 - **No arcs in result:** If `result.arcs` is empty or undefined, skip the parent arc call entirely.
+- **Export/import compatibility:** `parentArcs` is an optional field on `StoredBookState`. Importing data without it shows the flat list. Importing data with it into an older app version has no effect (unknown fields are ignored by the spread).
 
 ## Scope Exclusions
 
