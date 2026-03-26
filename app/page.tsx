@@ -403,6 +403,30 @@ export default function Home() {
     }
   }
 
+  function handleSetBookmark(index: number | null) {
+    if (!book || !storedRef.current) return;
+    const stored = storedRef.current;
+    const updated: StoredBookState = { ...stored, readingBookmark: index ?? undefined };
+    // Clean up: if readingBookmark is undefined, delete the key entirely
+    if (index == null) delete (updated as any).readingBookmark;
+    storedRef.current = updated;
+    saveStored(book.title, book.author, updated);
+
+    // Load the appropriate snapshot for the new bookmark position
+    const bookmark = index ?? stored.lastAnalyzedIndex;
+    setSpoilerDismissedIndex(null);
+    if (bookmark >= stored.lastAnalyzedIndex) {
+      setResult(stored.result);
+      setViewingSnapshotIndex(null);
+    } else {
+      const snap = bestSnapshot(stored.snapshots, bookmark);
+      if (snap) {
+        setResult(snap.result);
+        setViewingSnapshotIndex(snap.index);
+      }
+    }
+  }
+
   function completeSetup(range: { start: number; end: number }) {
     setChapterRange(range);
     setNeedsSetup(false);
