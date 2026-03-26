@@ -1,10 +1,8 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import type { AnalysisResult, Character, LocationInfo, PinUpdates, Snapshot } from '@/types';
 import type { SnapshotTransform } from '@/lib/propagate-edit';
-import LocationGraph from './LocationGraph';
-import SubwayMap from './SubwayMap';
 import CharacterModal from './CharacterModal';
 import LocationModal from './LocationModal';
 import { buildLocationAliasMap, resolveLocationName } from '@/lib/resolve-locations';
@@ -43,11 +41,8 @@ interface Props {
   bookTitle?: string;
   snapshots?: Snapshot[];
   chapterTitles?: string[];
-  locationImage?: string;
-  locationLabel?: string;
   currentResult?: AnalysisResult;
   onResultEdit?: (result: AnalysisResult, propagate?: SnapshotTransform, pinUpdates?: PinUpdates) => void;
-  onLocationImageChange?: (image: string | null, label: string) => void;
   resolvedCharacters?: Character[];
   locationAliasMap?: Map<string, string>;
   locationGroups?: LocationGroup[];
@@ -122,8 +117,7 @@ function hasAnyHierarchy(locations: LocationInfo[]): boolean {
   return locations.some((l) => !!l.parentLocation);
 }
 
-export default function LocationBoard({ characters, locations, bookTitle, snapshots = [], chapterTitles, locationImage, locationLabel = '', currentResult, onResultEdit, onLocationImageChange, resolvedCharacters: resolvedCharsProp, locationAliasMap: aliasMapProp, locationGroups: groupsProp, currentChapterIndex }: Props) {
-  const [view, setView] = useState<'list' | 'graph'>('list');
+export default function LocationBoard({ characters, locations, snapshots = [], chapterTitles, currentResult, onResultEdit, locationAliasMap: aliasMapProp, locationGroups: groupsProp, currentChapterIndex }: Props) {
   const [search, setSearch] = useState('');
   const [expandedLocation, setExpandedLocation] = useState<string | null>(null);
   const [selectedCharName, setSelectedCharName] = useState<string | null>(null);
@@ -135,13 +129,6 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
   };
   const [collapsedLocations, setCollapsedLocations] = useState<Set<string>>(new Set());
   const [showOnlyRoots, setShowOnlyRoots] = useState(false);
-  const mapImage = locationImage ?? null;
-  const mapLabel = locationLabel;
-  const [dragging, setDragging] = useState(false);
-  const [urlInput, setUrlInput] = useState('');
-  const [showUrlInput, setShowUrlInput] = useState(false);
-  const [showUploadPanel, setShowUploadPanel] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
 
   const locationDescMap = new Map((locations ?? []).map((l) => [l.name.toLowerCase(), l.description]));
   const locationRelMap = new Map((locations ?? []).map((l) => [l.name.toLowerCase(), l.relationships ?? []]));
@@ -151,55 +138,6 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
   const resolveLoc = (name: string | undefined) => resolveLocationName(name?.trim(), locAliasResolver) ?? name?.trim();
 
   const groups: LocationGroup[] = groupsProp ?? [];
-
-  function setImage(image: string | null, label: string) {
-    onLocationImageChange?.(image, label);
-  }
-
-  function loadFile(file: File) {
-    const label = file.name.replace(/\.[^.]+$/, '');
-    const reader = new FileReader();
-    reader.onload = (ev) => { setImage(ev.target?.result as string, label); setShowUploadPanel(false); };
-    reader.readAsDataURL(file);
-  }
-
-  function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) loadFile(file);
-  }
-
-  function handleDrop(e: React.DragEvent) {
-    e.preventDefault();
-    setDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file?.type.startsWith('image/')) {
-      loadFile(file);
-    } else {
-      const url = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
-      if (url?.match(/^https?:\/\/.+\.(jpg|jpeg|png|webp|gif)/i)) {
-        setImage(url, 'Map');
-        setShowUploadPanel(false);
-      }
-    }
-  }
-
-  function handlePaste(e: React.ClipboardEvent) {
-    const imageFile = Array.from(e.clipboardData.items)
-      .find((item) => item.type.startsWith('image/'))
-      ?.getAsFile();
-    if (imageFile) { loadFile(imageFile); return; }
-    const text = e.clipboardData.getData('text');
-    if (text?.startsWith('http')) { setImage(text, 'Map'); setShowUploadPanel(false); }
-  }
-
-  function handleUrlSubmit() {
-    if (urlInput.trim()) {
-      setImage(urlInput.trim(), 'Map');
-      setUrlInput('');
-      setShowUrlInput(false);
-      setShowUploadPanel(false);
-    }
-  }
 
   const selectedChar = selectedCharName ? characters.find((c) => c.name === selectedCharName) : undefined;
 
@@ -211,130 +149,7 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
       {selectedLocationName && (
         <LocationModal locationName={selectedLocationName} snapshots={snapshots} chapterTitles={chapterTitles} currentResult={currentResult} onResultEdit={onResultEdit} currentChapterIndex={currentChapterIndex} onClose={() => setSelectedLocationName(null)} onEntityClick={handleEntityClick} />
       )}
-      {/* View toggle */}
-      <div className="flex gap-1 bg-stone-100/50 dark:bg-zinc-800/50 rounded-lg p-0.5 w-fit border border-stone-200 dark:border-zinc-800">
-        <button
-          onClick={() => setView('list')}
-          className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-            view === 'list' ? 'bg-stone-200 dark:bg-zinc-700 text-stone-800 dark:text-zinc-200' : 'text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300'
-          }`}
-        >
-          List
-        </button>
-        <button
-          onClick={() => setView('graph')}
-          className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-            view === 'graph' ? 'bg-stone-200 dark:bg-zinc-700 text-stone-800 dark:text-zinc-200' : 'text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300'
-          }`}
-        >
-          Graph
-        </button>
-      </div>
-
-      {view === 'graph' && <LocationGraph snapshots={snapshots} currentCharacters={characters} resolvedCharacters={resolvedCharsProp} />}
-
-      {view === 'list' && (
-        <>
-          {/* Map section */}
-          <div
-            className={`bg-white dark:bg-zinc-900 rounded-xl border overflow-hidden relative ${
-              dragging ? 'border-amber-500/40' : 'border-stone-200 dark:border-zinc-800'
-            }`}
-            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={handleDrop}
-            onPaste={handlePaste}
-            tabIndex={0}
-            style={{ outline: 'none' }}
-          >
-            {mapImage ? (
-              <>
-                <img src={mapImage} alt={mapLabel || 'Book map'} className="w-full max-h-80 object-contain bg-stone-50 dark:bg-zinc-950" />
-                {mapLabel && (
-                  <p className="text-xs text-center text-stone-400 dark:text-zinc-600 py-2 border-t border-stone-200 dark:border-zinc-800">{mapLabel}</p>
-                )}
-                <button
-                  onClick={() => setImage(null, '')}
-                  className="absolute top-2 right-2 bg-white/80 dark:bg-zinc-900/80 hover:bg-white dark:hover:bg-zinc-900 text-stone-500 dark:text-zinc-400 hover:text-red-400 rounded-lg w-7 h-7 flex items-center justify-center text-sm transition-colors border border-stone-300 dark:border-zinc-700"
-                  title="Remove map"
-                >
-                  ✕
-                </button>
-              </>
-            ) : (
-              <>
-                {/* Subway map fills the card */}
-                <div className="h-64 sm:h-72">
-                  <SubwayMap snapshots={snapshots} currentCharacters={characters} locationAliasMap={aliasMapProp} />
-                </div>
-
-                {/* Upload overlay button — bottom-right */}
-                <div className="absolute bottom-2 right-2">
-                  {showUploadPanel ? (
-                    <div className="bg-white dark:bg-zinc-900 border border-stone-300 dark:border-zinc-700 rounded-xl shadow-xl p-3 flex flex-col gap-2 min-w-44">
-                      <div className="flex items-center justify-between mb-0.5">
-                        <span className="text-xs font-medium text-stone-500 dark:text-zinc-400">Add book map</span>
-                        <button onClick={() => setShowUploadPanel(false)} className="text-stone-400 dark:text-zinc-600 hover:text-stone-500 dark:hover:text-zinc-400 text-xs">✕</button>
-                      </div>
-                      <label
-                        htmlFor="map-upload"
-                        className="px-3 py-1.5 bg-stone-100 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 text-xs font-medium rounded-lg cursor-pointer hover:bg-stone-200 dark:hover:bg-zinc-700 transition-colors border border-stone-300 dark:border-zinc-700 text-center"
-                      >
-                        Upload file
-                      </label>
-                      {bookTitle && (
-                        <a
-                          href={`https://www.google.com/search?q=${encodeURIComponent(bookTitle + ' map')}&tbm=isch`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="px-3 py-1.5 bg-stone-100 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 text-xs font-medium rounded-lg hover:bg-stone-200 dark:hover:bg-zinc-700 transition-colors border border-stone-300 dark:border-zinc-700 text-center"
-                        >
-                          Search Google Images
-                        </a>
-                      )}
-                      <button
-                        onClick={() => setShowUrlInput((v) => !v)}
-                        className="px-3 py-1.5 bg-stone-100 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 text-xs font-medium rounded-lg hover:bg-stone-200 dark:hover:bg-zinc-700 transition-colors border border-stone-300 dark:border-zinc-700"
-                      >
-                        Paste URL
-                      </button>
-                      {showUrlInput && (
-                        <div className="flex gap-1.5">
-                          <input
-                            type="url"
-                            value={urlInput}
-                            onChange={(e) => setUrlInput(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && handleUrlSubmit()}
-                            placeholder="https://…"
-                            autoFocus
-                            className="flex-1 min-w-0 bg-stone-100 dark:bg-zinc-800 border border-stone-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-stone-800 dark:text-zinc-200 focus:outline-none focus:border-stone-400 dark:focus:border-zinc-500"
-                          />
-                          <button
-                            onClick={handleUrlSubmit}
-                            className="px-2 py-1.5 bg-amber-500 text-zinc-900 text-xs font-semibold rounded-lg hover:bg-amber-400 flex-shrink-0"
-                          >
-                            Load
-                          </button>
-                        </div>
-                      )}
-                      <p className="text-[10px] text-stone-300 dark:text-zinc-700 text-center">or drag &amp; drop / Ctrl+V</p>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setShowUploadPanel(true)}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 bg-stone-100/90 dark:bg-zinc-800/90 hover:bg-stone-200 dark:hover:bg-zinc-700 text-stone-500 dark:text-zinc-400 hover:text-stone-800 dark:hover:text-zinc-200 text-xs font-medium rounded-lg border border-stone-300 dark:border-zinc-700 transition-colors backdrop-blur-sm"
-                      title="Add a real book map image"
-                    >
-                      <span className="text-[10px]">🗺️</span> Add map image
-                    </button>
-                  )}
-                </div>
-              </>
-            )}
-            <input id="map-upload" ref={fileRef} type="file" accept="image/*" className="sr-only" onChange={handleFileInput} />
-          </div>
-
-          {/* Location groups */}
+      {/* Location groups */}
           <div>
             <div className="flex items-center gap-3 mb-3">
               <p className="text-xs font-medium text-stone-400 dark:text-zinc-600 uppercase tracking-wider">
@@ -700,8 +515,6 @@ export default function LocationBoard({ characters, locations, bookTitle, snapsh
               );
             })()}
           </div>
-        </>
-      )}
     </div>
   );
 }
