@@ -168,3 +168,83 @@ export async function getContextWindow(config: ContextConfig): Promise<number> {
       return OLLAMA_DEFAULT_CTX;
   }
 }
+
+// ─── Text budget calculation ─────────────────────────────────────────────────
+
+/**
+ * Compute the available character budget for chapter text in an LLM call.
+ *
+ * @param contextWindow  Total context window in tokens
+ * @param outputReserve  Tokens reserved for the model's response
+ * @param promptOverhead The non-text portion of the prompt (system + schema + entity lists + instructions) as a string
+ * @returns Available characters for chapter text (minimum 500 to avoid degenerate splits)
+ */
+export function computeTextBudget(
+  contextWindow: number,
+  outputReserve: number,
+  promptOverhead: string,
+): number {
+  const overheadTokens = estimateTokens(promptOverhead);
+  const availableTokens = contextWindow - outputReserve - overheadTokens;
+  const availableChars = tokensToChars(Math.max(availableTokens, 0));
+  // Floor at 500 chars to avoid degenerate empty chunks
+  return Math.max(availableChars, 500);
+}
+
+// ─── Chapter text splitting ──────────────────────────────────────────────────
+
+/**
+ * Split chapter text into sub-chunks that each fit within `availableChars`.
+ * Splits at paragraph boundaries (\n\n), then line boundaries (\n), then
+ * sentence boundaries (". "). Includes ~500 char overlap between chunks.
+ *
+ * Returns a single-element array if the text already fits.
+ */
+export function splitChapterText(text: string, availableChars: number): ChapterChunk[] {
+  if (text.length <= availableChars) {
+    return [{ text, index: 0, total: 1 }];
+  }
+
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > 0) {
+    if (remaining.length <= availableChars) {
+      chunks.push(remaining);
+      break;
+    }
+
+    // Find the best split point before the limit
+    let splitAt = -1;
+    const searchRegion = remaining.slice(0, availableChars);
+
+    // Priority 1: paragraph boundary
+    splitAt = searchRegion.lastIndexOf('\n\n');
+
+    // Priority 2: line boundary
+    if (splitAt < availableChars * 0.3) {
+      const lineSplit = searchRegion.lastIndexOf('\n');
+      if (lineSplit > splitAt) splitAt = lineSplit;
+    }
+
+    // Priority 3: sentence boundary
+    if (splitAt < availableChars * 0.3) {
+      const sentenceSplit = searchRegion.lastIndexOf('. ');
+      if (sentenceSplit > splitAt) splitAt = sentenceSplit + 1; // include the period
+    }
+
+    // Fallback: hard split at the limit
+    if (splitAt < availableChars * 0.1) {
+      splitAt = availableChars;
+    }
+
+    chunks.push(remaining.slice(0, splitAt));
+    // Advance with overlap: go back OVERLAP_CHARS from the split point
+    const advance = Math.max(1, splitAt - OVERLAP_CHARS);
+    remaining = remaining.slice(advance);
+  }
+
+  // Filter out whitespace-only chunks
+  const filtered = chunks.filter((c) => c.trim().length > 0);
+  return filtered.map((c, i) => ({ text: c, index: i, total: filtered.length }));
+}
