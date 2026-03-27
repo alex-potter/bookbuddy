@@ -709,6 +709,7 @@ export async function reconcileResult(
   bookAuthor: string,
   chapterExcerpts: string | undefined,
   callAndParse: CallAndParseFn,
+  maxExcerptChars?: number,
 ): Promise<AnalysisResult> {
   let characters = result.characters;
   let locations = result.locations;
@@ -718,7 +719,7 @@ export async function reconcileResult(
   console.log(`[reconcile] Pass 1: characters (${characters.length} entries)`);
   const charResponse = await callAndParse<ReconcileResult<CharSplitEntry>>(
     CHAR_RECONCILE_SYSTEM,
-    buildCharReconcilePrompt(bookTitle, bookAuthor, characters, chapterExcerpts),
+    buildCharReconcilePrompt(bookTitle, bookAuthor, characters, chapterExcerpts, maxExcerptChars),
     'char-reconcile',
   );
 
@@ -738,7 +739,7 @@ export async function reconcileResult(
     console.log(`[reconcile] Pass 2: locations (${locations.length} entries)`);
     const locResponse = await callAndParse<ReconcileResult<LocSplitEntry>>(
       LOC_RECONCILE_SYSTEM,
-      buildLocReconcilePrompt(bookTitle, bookAuthor, locations, characters, chapterExcerpts),
+      buildLocReconcilePrompt(bookTitle, bookAuthor, locations, characters, chapterExcerpts, maxExcerptChars),
       'loc-reconcile',
     );
 

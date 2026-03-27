@@ -1522,8 +1522,8 @@ async function runMultiPassFull(
     // Compute text budget for reconciliation excerpts
     const reconcileExcerptBudget = contextWindow
       ? computeTextBudget(contextWindow, 4096, buildCharReconcilePrompt(bookTitle, bookAuthor, assembled.characters))
-      : 15_000;
-    reconciled = await reconcileResult(assembled, bookTitle, bookAuthor, text.slice(0, reconcileExcerptBudget), callAndParse);
+      : undefined;
+    reconciled = await reconcileResult(assembled, bookTitle, bookAuthor, text, callAndParse, reconcileExcerptBudget);
     console.log(`[analyze] Reconciliation complete: ${reconciled.characters.length} chars, ${reconciled.locations?.length ?? 0} locs`);
   }
 
