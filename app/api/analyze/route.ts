@@ -1258,27 +1258,126 @@ function recoverPartialResponse(raw: string): Record<string, unknown> | null {
   return Object.keys(result).length > 0 ? result : null;
 }
 
+/** When an LLM response is truncated, ask the model to continue extracting entities it missed. */
+async function attemptOutputContinuation<T>(
+  system: string,
+  originalPrompt: string,
+  config: AnalyzeConfig,
+  label: string,
+  partialResult: Record<string, unknown>,
+  maxTokens: number,
+): Promise<{ result: T | null; rateLimitWaitMs: number }> {
+  let totalRateLimitMs = 0;
+  let accumulated = { ...partialResult };
+
+  for (let contPass = 0; contPass < 3; contPass++) {
+    // Build a list of already-found entity names to exclude
+    const foundNames: string[] = [];
+    for (const key of ['characters', 'updatedCharacters', 'locations', 'updatedLocations', 'arcs', 'updatedArcs']) {
+      const arr = accumulated[key];
+      if (Array.isArray(arr)) {
+        for (const item of arr) {
+          if (item && typeof item === 'object' && 'name' in item) foundNames.push((item as { name: string }).name);
+        }
+      }
+    }
+
+    if (foundNames.length === 0) break;
+
+    const continuationPrompt = `Your previous response was truncated. You already found these ${foundNames.length} entities: ${foundNames.join(', ')}.
+
+Continue extracting from the SAME text provided earlier. Return ONLY entities you have NOT already listed above. Use the exact same JSON schema. If there are no additional entities, return an empty result.
+
+Original instructions (for reference — do NOT repeat entities listed above):
+${originalPrompt.slice(0, 2000)}`;
+
+    console.log(`[analyze] ${label}: output truncated, continuation pass ${contPass + 1} (already found ${foundNames.length} entities)`);
+
+    const { text: contRaw, truncated: contTruncated, rateLimitWaitMs } = await callLLM({
+      ...config, system, userPrompt: continuationPrompt, maxTokens, jsonMode: true,
+    });
+    if (rateLimitWaitMs) totalRateLimitMs += rateLimitWaitMs;
+
+    let contCleaned = contRaw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+    const fb = contCleaned.indexOf('{');
+    const lb = contCleaned.lastIndexOf('}');
+    if (fb >= 0 && lb > fb) contCleaned = contCleaned.slice(fb, lb + 1);
+
+    let contParsed: Record<string, unknown> | null = null;
+    try {
+      contParsed = JSON.parse(contCleaned);
+    } catch {
+      contParsed = recoverPartialResponse(contCleaned);
+    }
+
+    if (!contParsed) break;
+
+    // Merge continuation arrays into accumulated result
+    let addedAny = false;
+    for (const key of ['characters', 'updatedCharacters', 'locations', 'updatedLocations', 'arcs', 'updatedArcs', 'verdicts', 'mergeGroups', 'splits']) {
+      const contArr = contParsed[key];
+      if (Array.isArray(contArr) && contArr.length > 0) {
+        const existing = accumulated[key];
+        accumulated[key] = Array.isArray(existing) ? [...existing, ...contArr] : contArr;
+        addedAny = true;
+      }
+    }
+    if (contParsed.summary && !accumulated.summary) accumulated.summary = contParsed.summary;
+
+    if (!addedAny || !contTruncated) break;
+  }
+
+  return { result: accumulated as T, rateLimitWaitMs: totalRateLimitMs };
+}
+
 async function callAndParseJSON<T>(
   system: string,
   userPrompt: string,
   config: AnalyzeConfig,
   label: string,
   maxTokens?: number,
+  contextWindow?: number,
 ): Promise<{ result: T | null; rateLimitWaitMs: number }> {
   let totalRateLimitMs = 0;
+
+  // Dynamic output token scaling: scale based on input size, capped by context window
+  const inputChars = userPrompt.length + (system?.length ?? 0);
+  const scaledTokens = Math.max(maxTokens ?? 16384, Math.ceil(inputChars / 20));
+  const effectiveMaxTokens = contextWindow
+    ? Math.min(scaledTokens, Math.floor(contextWindow * 0.4))
+    : scaledTokens;
+
   for (let attempt = 0; attempt < 2; attempt++) {
-    const { text: raw, rateLimitWaitMs } = await callLLM({ ...config, system, userPrompt, maxTokens: maxTokens ?? 16384, jsonMode: true });
+    const { text: raw, truncated, rateLimitWaitMs } = await callLLM({
+      ...config, system, userPrompt,
+      maxTokens: effectiveMaxTokens,
+      jsonMode: true,
+    });
     if (rateLimitWaitMs) totalRateLimitMs += rateLimitWaitMs;
+
     let cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
     const firstBrace = cleaned.indexOf('{');
     const lastBrace = cleaned.lastIndexOf('}');
     if (firstBrace >= 0 && lastBrace > firstBrace) cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+
     try {
       return { result: JSON.parse(cleaned) as T, rateLimitWaitMs: totalRateLimitMs };
     } catch {
       const recovered = recoverPartialResponse(cleaned);
       if (recovered && Object.keys(recovered).length > 0) {
         console.log(`[analyze] ${label}: recovered partial JSON (keys: ${Object.keys(recovered).join(', ')})`);
+
+        // If truncated, try continuation: ask the model to find additional entities
+        if (truncated) {
+          const continuationResult = await attemptOutputContinuation<T>(
+            system, userPrompt, config, label, recovered, effectiveMaxTokens,
+          );
+          if (continuationResult.rateLimitWaitMs) totalRateLimitMs += continuationResult.rateLimitWaitMs;
+          if (continuationResult.result) {
+            return { result: continuationResult.result, rateLimitWaitMs: totalRateLimitMs };
+          }
+        }
+
         return { result: recovered as T, rateLimitWaitMs: totalRateLimitMs };
       }
       if (attempt === 0) {
