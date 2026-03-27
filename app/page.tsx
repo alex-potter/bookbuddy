@@ -475,6 +475,13 @@ export default function Home() {
     }
   }
 
+  function handleUpdateParentArcs(parentArcs: ParentArc[]) {
+    if (!book || !storedRef.current) return;
+    const updated = { ...storedRef.current, parentArcs: parentArcs.length > 0 ? parentArcs : undefined };
+    storedRef.current = updated;
+    saveStored(book.title, book.author, updated);
+  }
+
   function completeSetup(range: { start: number; end: number }) {
     setChapterRange(range);
     setNeedsSetup(false);
@@ -1925,6 +1932,8 @@ export default function Home() {
                       onResultEdit={applyResultEdit}
                       arcChapterMap={derived.arcChapterMap}
                       currentChapterIndex={currentChapterIndex}
+                      parentArcs={stored?.parentArcs}
+                      onUpdateParentArcs={handleUpdateParentArcs}
                     />
                   )}
 
