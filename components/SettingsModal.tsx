@@ -63,8 +63,6 @@ export default function SettingsModal({ onClose }: Props) {
     }
   }
 
-  const isOllama = settings.provider === 'ollama';
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70" onClick={onClose}>
       <div
@@ -79,24 +77,30 @@ export default function SettingsModal({ onClose }: Props) {
         {/* Provider toggle */}
         <div>
           <label className="block text-xs font-medium text-stone-400 dark:text-zinc-500 mb-2">Provider</label>
-          <div className="flex rounded-lg overflow-hidden border border-stone-300 dark:border-zinc-700">
-            <button
-              onClick={() => set('provider', 'ollama')}
-              className={`flex-1 py-2 text-sm font-medium transition-colors ${isOllama ? 'bg-stone-200 dark:bg-zinc-700 text-stone-900 dark:text-zinc-100' : 'bg-transparent text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300'}`}
-            >
-              Ollama (local)
-            </button>
-            <button
-              onClick={() => set('provider', 'anthropic')}
-              className={`flex-1 py-2 text-sm font-medium transition-colors ${!isOllama ? 'bg-stone-200 dark:bg-zinc-700 text-stone-900 dark:text-zinc-100' : 'bg-transparent text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300'}`}
-            >
-              Anthropic API
-            </button>
+          <div className="grid grid-cols-2 gap-1 rounded-lg border border-stone-300 dark:border-zinc-700 p-1">
+            {([
+              { value: 'ollama' as const, label: 'Ollama (local)' },
+              { value: 'anthropic' as const, label: 'Anthropic' },
+              { value: 'gemini' as const, label: 'Gemini (free)' },
+              { value: 'openai-compatible' as const, label: settings.openaiCompatibleName || 'OpenAI-compat' },
+            ] as const).map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => set('provider', opt.value)}
+                className={`py-1.5 text-xs font-medium rounded-md transition-colors ${
+                  settings.provider === opt.value
+                    ? 'bg-stone-200 dark:bg-zinc-700 text-stone-900 dark:text-zinc-100'
+                    : 'text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
           </div>
         </div>
 
         {/* Ollama config */}
-        {isOllama && (
+        {settings.provider === 'ollama' && (
           <div className="space-y-3">
             <div>
               <label className="block text-xs font-medium text-stone-400 dark:text-zinc-500 mb-1.5">Ollama Base URL</label>
@@ -182,7 +186,7 @@ export default function SettingsModal({ onClose }: Props) {
         )}
 
         {/* Anthropic config */}
-        {!isOllama && (
+        {settings.provider === 'anthropic' && (
           <div className="space-y-3">
             <div>
               <div className="flex items-center justify-between mb-1.5">
@@ -220,6 +224,113 @@ export default function SettingsModal({ onClose }: Props) {
                   </button>
                 ))}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Gemini config */}
+        {settings.provider === 'gemini' && (
+          <div className="space-y-3">
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-medium text-stone-400 dark:text-zinc-500">API Key</label>
+                <a
+                  href="https://aistudio.google.com/apikey"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[10px] text-amber-600 dark:text-amber-400 hover:underline"
+                >
+                  Get a free key
+                </a>
+              </div>
+              <input
+                type="password"
+                value={settings.geminiKey}
+                onChange={(e) => set('geminiKey', e.target.value)}
+                placeholder="AIza..."
+                className="w-full bg-stone-100 dark:bg-zinc-800 border border-stone-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-stone-800 dark:text-zinc-200 focus:outline-none focus:border-amber-500/50"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-stone-400 dark:text-zinc-500 mb-1.5">Model</label>
+              <select
+                value={settings.model}
+                onChange={(e) => set('model', e.target.value)}
+                className="w-full bg-stone-100 dark:bg-zinc-800 border border-stone-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-stone-800 dark:text-zinc-200 focus:outline-none focus:border-amber-500/50"
+              >
+                <option value="gemini-2.0-flash">Gemini 2.0 Flash (fast, recommended)</option>
+                <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash Lite (fastest)</option>
+                <option value="gemini-1.5-pro">Gemini 1.5 Pro (smartest)</option>
+              </select>
+            </div>
+            <p className="text-[10px] text-stone-400 dark:text-zinc-600">
+              Free tier — no credit card required. Your key is stored on this device only.
+            </p>
+          </div>
+        )}
+
+        {/* OpenAI-compatible config */}
+        {settings.provider === 'openai-compatible' && (
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-stone-400 dark:text-zinc-500 mb-1.5">Provider Name</label>
+              <input
+                type="text"
+                value={settings.openaiCompatibleName}
+                onChange={(e) => set('openaiCompatibleName', e.target.value)}
+                placeholder="e.g. Groq, OpenRouter"
+                className="w-full bg-stone-100 dark:bg-zinc-800 border border-stone-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-stone-800 dark:text-zinc-200 focus:outline-none focus:border-amber-500/50"
+              />
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <span className="text-[10px] text-stone-400 dark:text-zinc-600 self-center">Quick setup:</span>
+              {[
+                { name: 'Groq', url: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
+                { name: 'OpenRouter', url: 'https://openrouter.ai/api/v1', model: 'meta-llama/llama-3.3-70b-instruct:free' },
+                { name: 'Cerebras', url: 'https://api.cerebras.ai/v1', model: 'llama-3.3-70b' },
+              ].map((preset) => (
+                <button
+                  key={preset.name}
+                  onClick={() => {
+                    set('openaiCompatibleName', preset.name);
+                    set('openaiCompatibleUrl', preset.url);
+                    set('model', preset.model);
+                  }}
+                  className="px-2 py-0.5 text-[10px] rounded-full border border-stone-300 dark:border-zinc-700 text-stone-500 dark:text-zinc-400 hover:bg-stone-100 dark:hover:bg-zinc-800 transition-colors"
+                >
+                  {preset.name}
+                </button>
+              ))}
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-stone-400 dark:text-zinc-500 mb-1.5">Base URL</label>
+              <input
+                type="url"
+                value={settings.openaiCompatibleUrl}
+                onChange={(e) => set('openaiCompatibleUrl', e.target.value)}
+                placeholder="https://api.groq.com/openai/v1"
+                className="w-full bg-stone-100 dark:bg-zinc-800 border border-stone-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-stone-800 dark:text-zinc-200 focus:outline-none focus:border-amber-500/50"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-stone-400 dark:text-zinc-500 mb-1.5">API Key</label>
+              <input
+                type="password"
+                value={settings.openaiCompatibleKey}
+                onChange={(e) => set('openaiCompatibleKey', e.target.value)}
+                placeholder="sk-... or gsk-..."
+                className="w-full bg-stone-100 dark:bg-zinc-800 border border-stone-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-stone-800 dark:text-zinc-200 focus:outline-none focus:border-amber-500/50"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-stone-400 dark:text-zinc-500 mb-1.5">Model</label>
+              <input
+                type="text"
+                value={settings.model}
+                onChange={(e) => set('model', e.target.value)}
+                placeholder="llama-3.3-70b-versatile"
+                className="w-full bg-stone-100 dark:bg-zinc-800 border border-stone-300 dark:border-zinc-700 rounded-lg px-3 py-2 text-sm text-stone-800 dark:text-zinc-200 focus:outline-none focus:border-amber-500/50"
+              />
             </div>
           </div>
         )}
