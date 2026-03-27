@@ -567,6 +567,49 @@ export default function Home() {
       const updated: StoredBookState = { ...cur, result: newResult, snapshots };
       storedRef.current = updated;
       saveStored(book.title, book.author, updated);
+
+      // Sync parentArcs with arc edits (rename, delete, merge, split)
+      if (updated.parentArcs?.length) {
+        const oldArcNames = new Set((cur.result.arcs ?? []).map((a) => a.name));
+        const newArcNames = new Set((newResult.arcs ?? []).map((a) => a.name));
+        const removed = [...oldArcNames].filter((n) => !newArcNames.has(n));
+        const added = [...newArcNames].filter((n) => !oldArcNames.has(n));
+
+        let parentArcs: ParentArc[];
+
+        if (removed.length === 1 && added.length === 1) {
+          // Rename: replace old child name with new name in-place
+          parentArcs = updated.parentArcs.map((pa) => ({
+            ...pa,
+            children: pa.children.map((c) => c === removed[0] ? added[0] : c),
+          }));
+        } else {
+          // Delete/merge: remove old names from children
+          parentArcs = updated.parentArcs.map((pa) => ({
+            ...pa,
+            children: pa.children.filter((c) => !removed.includes(c)),
+          }));
+          // Split: original stays, new arc added to same parent
+          if (added.length > 0 && removed.length === 0) {
+            const newArcs = (newResult.arcs ?? []).filter((a) => added.includes(a.name));
+            for (const na of newArcs) {
+              const placed = parentArcs.find((pa) =>
+                pa.children.some((c) => {
+                  const existing = (newResult.arcs ?? []).find((a) => a.name === c);
+                  return existing?.characters.some((ch) => na.characters.includes(ch));
+                })
+              );
+              if (placed) placed.children.push(na.name);
+              else parentArcs[parentArcs.length - 1]?.children.push(na.name);
+            }
+          }
+        }
+        // Remove empty parents
+        parentArcs = parentArcs.filter((pa) => pa.children.length > 0);
+        const synced = { ...updated, parentArcs: parentArcs.length > 0 ? parentArcs : undefined };
+        storedRef.current = synced;
+        saveStored(book.title, book.author, synced);
+      }
     }
 
     if (pinUpdates) {
