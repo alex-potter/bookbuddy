@@ -1,6 +1,6 @@
 /**
  * Client-side AI caller — used in mobile/APK builds (no Next.js server required).
- * Calls Anthropic or an Ollama-compatible endpoint directly from the browser.
+ * Calls Anthropic, Gemini, OpenAI-compatible, or an Ollama endpoint directly from the browser.
  */
 
 import type { AnalysisResult } from '@/types';
@@ -15,16 +15,22 @@ import {
   recoverPartialJson,
 } from './ai-shared';
 import { validateCharactersAgainstText, validateLocationsAgainstText } from './validate-entities';
+import { waitIfNeeded, recordSuccess, recordRateLimit } from './rate-limiter';
+import type { ProviderType } from './rate-limiter';
 
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
 
 export interface AiSettings {
-  provider: 'anthropic' | 'ollama';
+  provider: 'anthropic' | 'ollama' | 'gemini' | 'openai-compatible';
   anthropicKey: string;
   ollamaUrl: string;   // e.g. http://192.168.1.x:11434/v1
   model: string;
+  geminiKey: string;
+  openaiCompatibleUrl: string;
+  openaiCompatibleKey: string;
+  openaiCompatibleName: string;
 }
 
 const SETTINGS_KEY = 'cc-ai-settings';
@@ -32,13 +38,29 @@ const SETTINGS_KEY = 'cc-ai-settings';
 export function loadAiSettings(): AiSettings {
   try {
     const raw = typeof window !== 'undefined' ? localStorage.getItem(SETTINGS_KEY) : null;
-    if (raw) return JSON.parse(raw) as AiSettings;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        provider: parsed.provider ?? 'ollama',
+        anthropicKey: parsed.anthropicKey ?? '',
+        ollamaUrl: parsed.ollamaUrl ?? 'http://localhost:11434/v1',
+        model: parsed.model ?? 'qwen2.5:14b',
+        geminiKey: parsed.geminiKey ?? '',
+        openaiCompatibleUrl: parsed.openaiCompatibleUrl ?? '',
+        openaiCompatibleKey: parsed.openaiCompatibleKey ?? '',
+        openaiCompatibleName: parsed.openaiCompatibleName ?? '',
+      };
+    }
   } catch { /* ignore */ }
   return {
     provider: 'ollama',
     anthropicKey: '',
     ollamaUrl: 'http://localhost:11434/v1',
     model: 'qwen2.5:14b',
+    geminiKey: '',
+    openaiCompatibleUrl: '',
+    openaiCompatibleKey: '',
+    openaiCompatibleName: '',
   };
 }
 
@@ -144,13 +166,81 @@ async function callOllama(baseUrl: string, model: string, system: string, userPr
   return text;
 }
 
-async function callAi(settings: AiSettings, userPrompt: string): Promise<string> {
-  if (settings.provider === 'anthropic') {
-    if (!settings.anthropicKey) throw new Error('Anthropic API key not set. Open Settings to configure.');
-    return callAnthropic(settings.anthropicKey, settings.model || 'claude-haiku-4-5-20251001', SYSTEM_PROMPT, userPrompt);
-  } else {
-    if (!settings.ollamaUrl) throw new Error('Ollama URL not set. Open Settings to configure.');
-    return callOllama(settings.ollamaUrl, settings.model || 'qwen2.5:14b', SYSTEM_PROMPT, userPrompt);
+async function callGeminiClient(apiKey: string, model: string, system: string, userPrompt: string): Promise<string> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const body: Record<string, unknown> = {
+    contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+    generationConfig: { maxOutputTokens: 8192, temperature: 0 },
+  };
+  if (system) body.systemInstruction = { parts: [{ text: system }] };
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Gemini error (${res.status}): ${err}`);
+  }
+  const data = await res.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error('No text in Gemini response.');
+  return text;
+}
+
+async function callOpenAICompatibleClient(baseUrl: string, apiKey: string, model: string, system: string, userPrompt: string): Promise<string> {
+  const url = baseUrl.replace(/\/$/, '') + '/chat/completions';
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+  const messages: Array<{ role: string; content: string }> = [];
+  if (system) messages.push({ role: 'system', content: system });
+  messages.push({ role: 'user', content: userPrompt });
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ model, max_tokens: 8192, temperature: 0, messages }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`OpenAI-compatible error (${res.status}): ${err}`);
+  }
+  const data = await res.json();
+  const text = data.choices?.[0]?.message?.content;
+  if (!text) throw new Error('No content in response.');
+  return text;
+}
+
+async function callAi(settings: AiSettings, userPrompt: string, systemOverride?: string): Promise<string> {
+  const system = systemOverride ?? SYSTEM_PROMPT;
+  const provider = settings.provider as ProviderType;
+  await waitIfNeeded(provider);
+  try {
+    let result: string;
+    switch (settings.provider) {
+      case 'anthropic':
+        if (!settings.anthropicKey) throw new Error('Anthropic API key not set. Open Settings to configure.');
+        result = await callAnthropic(settings.anthropicKey, settings.model || 'claude-haiku-4-5-20251001', system, userPrompt);
+        break;
+      case 'gemini':
+        if (!settings.geminiKey) throw new Error('Gemini API key not set. Open Settings to configure.');
+        result = await callGeminiClient(settings.geminiKey, settings.model || 'gemini-2.0-flash', system, userPrompt);
+        break;
+      case 'openai-compatible':
+        if (!settings.openaiCompatibleUrl) throw new Error('OpenAI-compatible URL not set. Open Settings to configure.');
+        result = await callOpenAICompatibleClient(settings.openaiCompatibleUrl, settings.openaiCompatibleKey, settings.model, system, userPrompt);
+        break;
+      default: // ollama
+        if (!settings.ollamaUrl) throw new Error('Ollama URL not set. Open Settings to configure.');
+        result = await callOllama(settings.ollamaUrl, settings.model || 'qwen2.5:14b', system, userPrompt);
+        break;
+    }
+    recordSuccess(provider);
+    return result;
+  } catch (err) {
+    if (err instanceof Error && (err.message.includes('429') || err.message.toLowerCase().includes('rate limit'))) {
+      recordRateLimit(provider);
+    }
+    throw err;
   }
 }
 
@@ -168,43 +258,82 @@ export async function chatWithBook(
   messages: ChatMessage[],
   settings: AiSettings,
 ): Promise<string> {
-  if (settings.provider === 'anthropic') {
-    if (!settings.anthropicKey) throw new Error('No API key. Open ⚙ Settings to configure.');
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': settings.anthropicKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: settings.model || 'claude-haiku-4-5-20251001',
-        max_tokens: 1024,
-        system: systemPrompt,
-        messages,
-      }),
-    });
-    if (!res.ok) throw new Error(`Anthropic error (${res.status}): ${await res.text()}`);
-    const data = await res.json();
-    const text = data.content?.find((b: { type: string }) => b.type === 'text')?.text;
-    if (!text) throw new Error('No text in response.');
-    return text;
-  } else {
-    if (!settings.ollamaUrl) throw new Error('No Ollama URL. Open ⚙ Settings to configure.');
-    const url = settings.ollamaUrl.replace(/\/$/, '') + '/chat/completions';
-    const res = await wrapOllamaFetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: settings.model || 'qwen2.5:14b',
-        messages: [{ role: 'system', content: systemPrompt }, ...messages],
-      }),
-    });
-    if (!res.ok) throw new Error(`Ollama error (${res.status}): ${await res.text()}`);
-    const data = await res.json();
-    const text = data.choices?.[0]?.message?.content;
-    if (!text) throw new Error('No content in response.');
-    return text;
+  switch (settings.provider) {
+    case 'anthropic': {
+      if (!settings.anthropicKey) throw new Error('No API key. Open Settings to configure.');
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': settings.anthropicKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: settings.model || 'claude-haiku-4-5-20251001',
+          max_tokens: 1024,
+          system: systemPrompt,
+          messages,
+        }),
+      });
+      if (!res.ok) throw new Error(`Anthropic error (${res.status}): ${await res.text()}`);
+      const data = await res.json();
+      return data.content?.find((b: { type: string }) => b.type === 'text')?.text ?? '';
+    }
+    case 'gemini': {
+      if (!settings.geminiKey) throw new Error('No Gemini key. Open Settings to configure.');
+      const model = settings.model || 'gemini-2.0-flash';
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.geminiKey}`;
+      const contents = messages.map((m) => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: m.content }],
+      }));
+      const body: Record<string, unknown> = {
+        contents,
+        generationConfig: { maxOutputTokens: 1024, temperature: 0 },
+      };
+      if (systemPrompt) body.systemInstruction = { parts: [{ text: systemPrompt }] };
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`Gemini error (${res.status}): ${await res.text()}`);
+      const data = await res.json();
+      return data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    }
+    case 'openai-compatible': {
+      if (!settings.openaiCompatibleUrl) throw new Error('No URL. Open Settings to configure.');
+      const url = settings.openaiCompatibleUrl.replace(/\/$/, '') + '/chat/completions';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (settings.openaiCompatibleKey) headers['Authorization'] = `Bearer ${settings.openaiCompatibleKey}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: settings.model,
+          max_tokens: 1024,
+          messages: [{ role: 'system', content: systemPrompt }, ...messages],
+        }),
+      });
+      if (!res.ok) throw new Error(`Error (${res.status}): ${await res.text()}`);
+      const data = await res.json();
+      return data.choices?.[0]?.message?.content ?? '';
+    }
+    default: { // ollama
+      if (!settings.ollamaUrl) throw new Error('No Ollama URL. Open Settings to configure.');
+      const url = settings.ollamaUrl.replace(/\/$/, '') + '/chat/completions';
+      const res = await wrapOllamaFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: settings.model || 'qwen2.5:14b',
+          messages: [{ role: 'system', content: systemPrompt }, ...messages],
+        }),
+      });
+      if (!res.ok) throw new Error(`Ollama error (${res.status}): ${await res.text()}`);
+      const data = await res.json();
+      return data.choices?.[0]?.message?.content ?? '';
+    }
   }
 }
 
@@ -214,14 +343,19 @@ export async function chatWithBook(
 
 export async function testConnection(settings: AiSettings): Promise<string> {
   const ping = 'Reply with exactly one word: OK';
-  if (settings.provider === 'anthropic') {
-    if (!settings.anthropicKey) throw new Error('No API key entered.');
-    const text = await callAnthropic(settings.anthropicKey, settings.model || 'claude-haiku-4-5-20251001', 'You are a test assistant.', ping);
-    return text.trim();
-  } else {
-    if (!settings.ollamaUrl) throw new Error('No Ollama URL entered.');
-    const text = await callOllama(settings.ollamaUrl, settings.model || 'qwen2.5:14b', 'You are a test assistant.', ping);
-    return text.trim();
+  switch (settings.provider) {
+    case 'anthropic':
+      if (!settings.anthropicKey) throw new Error('No API key entered.');
+      return (await callAnthropic(settings.anthropicKey, settings.model || 'claude-haiku-4-5-20251001', 'You are a test assistant.', ping)).trim();
+    case 'gemini':
+      if (!settings.geminiKey) throw new Error('No Gemini API key entered.');
+      return (await callGeminiClient(settings.geminiKey, settings.model || 'gemini-2.0-flash', 'You are a test assistant.', ping)).trim();
+    case 'openai-compatible':
+      if (!settings.openaiCompatibleUrl) throw new Error('No base URL entered.');
+      return (await callOpenAICompatibleClient(settings.openaiCompatibleUrl, settings.openaiCompatibleKey, settings.model, 'You are a test assistant.', ping)).trim();
+    default:
+      if (!settings.ollamaUrl) throw new Error('No Ollama URL entered.');
+      return (await callOllama(settings.ollamaUrl, settings.model || 'qwen2.5:14b', 'You are a test assistant.', ping)).trim();
   }
 }
 
@@ -297,14 +431,10 @@ async function callAndParseClient<T>(
   userPrompt: string,
   label: string,
 ): Promise<T | null> {
-  const callFn = settings.provider === 'anthropic'
-    ? () => callAnthropic(settings.anthropicKey, settings.model || 'claude-haiku-4-5-20251001', system, userPrompt)
-    : () => callOllama(settings.ollamaUrl, settings.model || 'qwen2.5:14b', system, userPrompt);
-
   const maxRetries = 2;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const raw = await callFn();
+      const raw = await callAi(settings, userPrompt, system);
       const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
       try {
         return JSON.parse(cleaned) as T;
