@@ -573,9 +573,7 @@ export default function Home() {
       const snapshots = propagate
         ? cur.snapshots.map((snap) => ({ ...snap, result: propagate(snap.result) }))
         : cur.snapshots;
-      const updated: StoredBookState = { ...cur, result: newResult, snapshots };
-      storedRef.current = updated;
-      saveStored(book.title, book.author, updated);
+      let updated: StoredBookState = { ...cur, result: newResult, snapshots };
 
       // Sync parentArcs with arc edits (rename, delete, merge, split)
       if (updated.parentArcs?.length) {
@@ -615,10 +613,11 @@ export default function Home() {
         }
         // Remove empty parents
         parentArcs = parentArcs.filter((pa) => pa.children.length > 0);
-        const synced = { ...updated, parentArcs: parentArcs.length > 0 ? parentArcs : undefined };
-        storedRef.current = synced;
-        saveStored(book.title, book.author, synced);
+        updated = { ...updated, parentArcs: parentArcs.length > 0 ? parentArcs : undefined };
       }
+
+      storedRef.current = updated;
+      saveStored(book.title, book.author, updated);
     }
 
     if (pinUpdates) {
