@@ -91,6 +91,6 @@ export function useDerivedEntities(
       arcChapterMap.set(arc.name, indices);
     }
 
-    return { aggregated, locationAliasMap, resolvedCharacters, locationGroups, arcChapterMap };
+    return { aggregated, locationAliasMap, resolvedCharacters: locResolvedCharacters, locationGroups, arcChapterMap };
   }, [snapshots, currentResult]);
 }
