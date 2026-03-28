@@ -31,6 +31,8 @@ export interface AiSettings {
   openaiCompatibleUrl: string;
   openaiCompatibleKey: string;
   openaiCompatibleName: string;
+  ollamaContextLength?: number;         // user override
+  ollamaDetectedContextLength?: number; // last auto-detected value
 }
 
 const SETTINGS_KEY = 'cc-ai-settings';
@@ -49,6 +51,8 @@ export function loadAiSettings(): AiSettings {
         openaiCompatibleUrl: parsed.openaiCompatibleUrl ?? '',
         openaiCompatibleKey: parsed.openaiCompatibleKey ?? '',
         openaiCompatibleName: parsed.openaiCompatibleName ?? '',
+        ollamaContextLength: parsed.ollamaContextLength ?? undefined,
+        ollamaDetectedContextLength: parsed.ollamaDetectedContextLength ?? undefined,
       };
     }
   } catch { /* ignore */ }
@@ -61,6 +65,8 @@ export function loadAiSettings(): AiSettings {
     openaiCompatibleUrl: '',
     openaiCompatibleKey: '',
     openaiCompatibleName: '',
+    ollamaContextLength: undefined,
+    ollamaDetectedContextLength: undefined,
   };
 }
 
@@ -95,6 +101,42 @@ export async function diagnoseOllamaConnection(baseUrl: string): Promise<OllamaD
     return { reachable: true, corsOk: true };
   } catch {
     return { reachable: true, corsOk: false, hint: 'Ollama is running but blocking requests from this site. Set OLLAMA_ORIGINS=* and restart Ollama.' };
+  }
+}
+
+/**
+ * Query Ollama's /api/show from the browser to detect the model's default context window.
+ * Returns the detected token count, or null on failure.
+ */
+export async function detectOllamaContextWindow(baseUrl: string, model: string): Promise<number | null> {
+  const ollamaBase = baseUrl.replace(/\/v1\/?$/, '');
+  try {
+    const res = await fetch(`${ollamaBase}/api/show`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: model }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as {
+      model_info?: Record<string, unknown>;
+      parameters?: string;
+    };
+    // Strategy 1: model_info key like "qwen2.5.context_length"
+    if (data.model_info) {
+      for (const [key, value] of Object.entries(data.model_info)) {
+        if (key.endsWith('.context_length') && typeof value === 'number' && value > 0) {
+          return value;
+        }
+      }
+    }
+    // Strategy 2: parameters string "num_ctx <number>"
+    if (data.parameters) {
+      const match = data.parameters.match(/num_ctx\s+(\d+)/);
+      if (match) return parseInt(match[1], 10);
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 
