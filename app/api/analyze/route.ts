@@ -1628,7 +1628,7 @@ async function runMultiPassDelta(
   const { result: charsResult, rateLimitWaitMs: rlChars } = await runPassWithSplitting<CharDeltaResult>(
     charSystem,
     (t) => buildCharactersDeltaPrompt(bookTitle, bookAuthor, chapterTitle, previousResult.characters, t, charDeltaSchema),
-    config, 'characters-delta', text, contextWindow, config.provider === 'ollama' ? 8192 : undefined,
+    config, 'characters-delta', text, contextWindow, config.provider === 'ollama' ? 4096 : undefined,
   );
   totalRateLimitMs += rlChars;
   // Text grounding: drop delta characters whose names don't appear in the new chapter text
@@ -1677,7 +1677,7 @@ async function runMultiPassDelta(
   const { result: locsResult, rateLimitWaitMs: rlLocs } = await runPassWithSplitting<LocDeltaResult>(
     locSystem,
     (t) => buildLocationsDeltaPrompt(bookTitle, bookAuthor, chapterTitle, currentCharacters, previousResult.locations, t, locDeltaSchema),
-    config, 'locations-delta', text, contextWindow, config.provider === 'ollama' ? 8192 : undefined,
+    config, 'locations-delta', text, contextWindow, config.provider === 'ollama' ? 2048 : undefined,
   );
   totalRateLimitMs += rlLocs;
   const deltaLocs = locsResult?.updatedLocations ?? [];
@@ -1697,7 +1697,7 @@ async function runMultiPassDelta(
   const { result: arcsResult, rateLimitWaitMs: rlArcs } = await runPassWithSplitting<ArcDeltaResult>(
     arcSystem,
     (t) => buildArcsDeltaPrompt(bookTitle, bookAuthor, chapterTitle, previousResult.arcs, currentCharacters, currentLocations, t),
-    config, 'arcs-delta', text, contextWindow, config.provider === 'ollama' ? 4096 : undefined,
+    config, 'arcs-delta', text, contextWindow, config.provider === 'ollama' ? 2048 : undefined,
   );
   totalRateLimitMs += rlArcs;
   const arcDelta = {
