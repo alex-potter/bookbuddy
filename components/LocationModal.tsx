@@ -128,6 +128,7 @@ export default function LocationModal({ locationName, snapshots, chapterTitles, 
   // Build timeline
   const timeline: TimelineEntry[] = [];
   let prevCharNames = new Set<string>();
+  let prevEvents: string | undefined;
   for (const snap of sorted) {
     if (currentChapterIndex != null && snap.index > currentChapterIndex) break;
     const locInfo = snap.result.locations?.find(
@@ -138,14 +139,15 @@ export default function LocationModal({ locationName, snapshots, chapterTitles, 
     );
     const curNames = new Set(present.map((c) => c.name));
     const charsChanged = present.length !== prevCharNames.size || [...curNames].some((n) => !prevCharNames.has(n));
-    const hasEvents = !!locInfo?.recentEvents;
-    if (hasEvents || (present.length > 0 && charsChanged)) {
+    const eventsChanged = !!locInfo?.recentEvents && locInfo.recentEvents !== prevEvents;
+    if (eventsChanged || (present.length > 0 && charsChanged)) {
       timeline.push({
         chapterIndex: snap.index,
-        locationEvents: locInfo?.recentEvents,
+        locationEvents: eventsChanged ? locInfo?.recentEvents : undefined,
         characters: present.map((c) => ({ name: c.name, status: c.status })),
       });
     }
+    if (locInfo?.recentEvents) prevEvents = locInfo.recentEvents;
     if (present.length > 0) prevCharNames = curNames;
   }
   const timelineReversed = [...timeline].reverse();
