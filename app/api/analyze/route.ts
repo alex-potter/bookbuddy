@@ -1492,7 +1492,7 @@ async function runMultiPassFull(
   const { result: charsResult, rateLimitWaitMs: rlChars } = await runPassWithSplitting<{ characters?: AnalysisResult['characters'] }>(
     charSystem,
     (t) => buildCharactersFullPrompt(bookTitle, bookAuthor, chapterTitle, t, charSchema),
-    config, 'characters-full', text, contextWindow, config.provider === 'ollama' ? 16384 : undefined,
+    config, 'characters-full', text, contextWindow, config.provider === 'ollama' ? 4096 : undefined,
   );
   totalRateLimitMs += rlChars;
   let characters = charsResult?.characters ?? [];
@@ -1535,7 +1535,7 @@ async function runMultiPassFull(
   const { result: locsResult, rateLimitWaitMs: rlLocs } = await runPassWithSplitting<LocResult>(
     locSystem,
     (t) => buildLocationsFullPrompt(bookTitle, bookAuthor, chapterTitle, characters, t, allChapterTitles, locSchema),
-    config, 'locations-full', text, contextWindow, config.provider === 'ollama' ? 8192 : undefined,
+    config, 'locations-full', text, contextWindow, config.provider === 'ollama' ? 2048 : undefined,
   );
   totalRateLimitMs += rlLocs;
   const rawLocations = locsResult?.locations ?? [];
@@ -1556,7 +1556,7 @@ async function runMultiPassFull(
   const { result: arcsResult, rateLimitWaitMs: rlArcs } = await runPassWithSplitting<{ arcs?: AnalysisResult['arcs'] }>(
     arcSystem,
     (t) => buildArcsFullPrompt(bookTitle, bookAuthor, chapterTitle, t, characters, locations, allChapterTitles),
-    config, 'arcs-full', text, contextWindow, config.provider === 'ollama' ? 4096 : undefined,
+    config, 'arcs-full', text, contextWindow, config.provider === 'ollama' ? 2048 : undefined,
   );
   totalRateLimitMs += rlArcs;
   let arcs = arcsResult?.arcs ?? [];
