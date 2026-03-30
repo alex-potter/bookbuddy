@@ -175,7 +175,10 @@ async function callOllamaProvider(config: LLMCallConfig): Promise<DispatchResult
     const data = await res.json() as { choices?: { message?: { content?: string }; finish_reason?: string }[] };
     let text = data.choices?.[0]?.message?.content;
     if (isQwen3 && text) text = stripThinkTags(text);
-    if (!text) throw new Error('No content in Ollama response.');
+    if (!text) {
+      console.warn(`[llm] Ollama returned empty content (pass ${pass + 1}, model: ${model})`);
+      break;
+    }
     fullText += text;
 
     const finishReason = data.choices?.[0]?.finish_reason;
@@ -187,7 +190,10 @@ async function callOllamaProvider(config: LLMCallConfig): Promise<DispatchResult
     }
   }
 
-  if (!fullText) throw new Error('No content in Ollama response.');
+  if (!fullText) {
+    console.warn(`[llm] Ollama produced no usable content for model ${model}`);
+    return { text: '', truncated: false };
+  }
   return { text: fullText, truncated };
 }
 
