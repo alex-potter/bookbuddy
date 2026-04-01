@@ -7,6 +7,7 @@ import { callLLM, resolveConfig, type LLMResult } from '@/lib/llm';
 import { getContextWindow, splitChapterText, computeTextBudget } from '@/lib/context-window';
 import type { ProviderType } from '@/lib/rate-limiter';
 import { resolveCharacterLocationsToExtracted } from '@/lib/resolve-locations';
+import { groupLocations } from '@/lib/group-locations';
 
 // ─── System prompts (one per pass) ───────────────────────────────────────────
 
@@ -1641,6 +1642,17 @@ async function runMultiPassFull(
   // Final location dedup (catches any remaining duplicates after reconciliation)
   reconciled = { ...reconciled, locations: deduplicateLocations(reconciled.locations) };
 
+  // Location parent grouping: absorb trivial sub-locations, assign parentLocation on children
+  if (reconciled.locations?.length) {
+    const callAndParse: CallAndParseFn = async <T>(system: string, userPrompt: string, label: string) => {
+      const { result, rateLimitWaitMs: rl } = await callAndParseJSON<T>(system, userPrompt, config, label, config.provider === 'ollama' ? 4096 : undefined, contextWindow);
+      totalRateLimitMs += rl;
+      return result;
+    };
+    const groupResult = await groupLocations(reconciled.locations, reconciled.characters, bookTitle, bookAuthor, callAndParse);
+    reconciled = { ...reconciled, locations: groupResult.locations, characters: groupResult.characters };
+  }
+
   return { result: reconciled, totalRateLimitMs };
 }
 
@@ -1754,8 +1766,22 @@ async function runMultiPassDelta(
   const labeledLocations = assignArcsToLocations(finalResult.locations, finalResult.arcs, finalResult.characters) ?? finalResult.locations;
   const hierarchicalLocations = labeledLocations ? inferParentLocations(labeledLocations) : labeledLocations;
 
-  console.log(`[analyze] Delta complete: ${finalResult.characters.length} chars, ${finalResult.arcs?.length ?? 0} arcs, ${finalResult.locations?.length ?? 0} locs`);
-  return { result: { ...finalResult, locations: hierarchicalLocations }, totalRateLimitMs };
+  // Location parent grouping: absorb trivial sub-locations, assign parentLocation on children
+  let groupedLocations = hierarchicalLocations;
+  let groupedCharacters = finalResult.characters;
+  if (hierarchicalLocations?.length) {
+    const callAndParse: CallAndParseFn = async <T>(system: string, userPrompt: string, label: string) => {
+      const { result, rateLimitWaitMs: rl } = await callAndParseJSON<T>(system, userPrompt, config, label, config.provider === 'ollama' ? 4096 : undefined, contextWindow);
+      totalRateLimitMs += rl;
+      return result;
+    };
+    const groupResult = await groupLocations(hierarchicalLocations, finalResult.characters, bookTitle, bookAuthor, callAndParse);
+    groupedLocations = groupResult.locations;
+    groupedCharacters = groupResult.characters;
+  }
+
+  console.log(`[analyze] Delta complete: ${groupedCharacters.length} chars, ${finalResult.arcs?.length ?? 0} arcs, ${groupedLocations?.length ?? 0} locs`);
+  return { result: { ...finalResult, locations: groupedLocations, characters: groupedCharacters }, totalRateLimitMs };
 }
 
 // ─── Route handlers ───────────────────────────────────────────────────────────
