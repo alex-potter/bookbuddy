@@ -23,6 +23,7 @@ import type { SnapshotTransform } from '@/lib/propagate-edit';
 import StoryTimeline from '@/components/StoryTimeline';
 import WelcomeBanner from '@/components/WelcomeBanner';
 import LibrarySubmitModal from '@/components/LibrarySubmitModal';
+import BookmarkModal from '@/components/BookmarkModal';
 import { useDerivedEntities } from '@/lib/use-derived-entities';
 
 type SortKey = 'importance' | 'name' | 'status';
@@ -483,6 +484,8 @@ export default function Home() {
     try {
       const { title, author } = await importBookBuddy(file);
       loadBookFromMeta(title, author);
+      setBookmarkModalMode('import');
+      setShowBookmarkModal(true);
     } catch (err) {
       setImportError(err instanceof Error ? err.message : 'Import failed.');
     }
@@ -588,15 +591,9 @@ export default function Home() {
 
   const [playing, setPlaying] = useState(false);
   const [playSpeed, setPlaySpeed] = useState(2000); // ms per step
-  const [showBookmarkDropdown, setShowBookmarkDropdown] = useState(false);
+  const [showBookmarkModal, setShowBookmarkModal] = useState(false);
+  const [bookmarkModalMode, setBookmarkModalMode] = useState<'import' | 'update'>('update');
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => {
-    if (!showBookmarkDropdown) return;
-    const close = () => setShowBookmarkDropdown(false);
-    document.addEventListener('click', close);
-    return () => document.removeEventListener('click', close);
-  }, [showBookmarkDropdown]);
 
   // Drive playback: advance one snapshot per interval tick
   useEffect(() => {
@@ -1529,6 +1526,18 @@ export default function Home() {
   return (
     <main className="h-screen flex flex-col overflow-hidden">
       {showSettings && <SettingsModal onClose={() => { setShowSettings(false); setShowSetupPrompt(false); }} />}
+      {showBookmarkModal && book && (
+        <BookmarkModal
+          chapters={book.chapters}
+          currentBookmark={storedRef.current?.readingBookmark ?? null}
+          mode={bookmarkModalMode}
+          onSelect={(index) => {
+            handleSetBookmark(index);
+            setShowBookmarkModal(false);
+          }}
+          onClose={() => setShowBookmarkModal(false)}
+        />
+      )}
       {showTimeline && book && (
         <StoryTimeline
           snapshots={stored?.snapshots ?? []}
@@ -1569,45 +1578,21 @@ export default function Home() {
           />
           {isSeriesContinuation && <span className="hidden sm:inline text-xs text-violet-400 font-medium">Series mode</span>}
           {hasStoredState && <span className="hidden md:inline text-xs text-stone-400 dark:text-zinc-600">Saved · ch.{stored.lastAnalyzedIndex + 1}</span>}
-          {stored?.readingBookmark != null && (
-            <div className="relative hidden md:inline-block" onClick={(e) => e.stopPropagation()}>
-              <button
-                onClick={() => setShowBookmarkDropdown((v) => !v)}
-                className="text-xs text-amber-500/80 hover:text-amber-500 transition-colors flex items-center gap-1"
-                title="Reading bookmark"
-              >
-                <svg width="8" height="11" viewBox="0 0 10 14" fill="currentColor" className="flex-shrink-0">
-                  <path d="M0 0h10v14L5 10.5 0 14V0z"/>
-                </svg>
-                Ch.{stored.readingBookmark + 1}
-              </button>
-              {showBookmarkDropdown && (
-                <div className="absolute top-full right-0 mt-1 z-50 bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-700 rounded-xl shadow-xl p-2 max-h-64 overflow-y-auto min-w-36">
-                  <div className="flex items-center justify-between px-2 py-1 mb-1">
-                    <span className="text-[10px] font-medium text-stone-400 dark:text-zinc-500 uppercase tracking-wider">Bookmark</span>
-                    <button
-                      onClick={() => { handleSetBookmark(null); setShowBookmarkDropdown(false); }}
-                      className="text-[10px] text-stone-400 dark:text-zinc-600 hover:text-red-400 transition-colors"
-                    >
-                      Clear
-                    </button>
-                  </div>
-                  {book.chapters.map((ch, i) => (
-                    <button
-                      key={i}
-                      onClick={() => { handleSetBookmark(i); setShowBookmarkDropdown(false); }}
-                      className={`w-full text-left px-2 py-1 text-xs rounded-md transition-colors truncate ${
-                        i === stored?.readingBookmark
-                          ? 'bg-amber-500/15 text-amber-500 font-medium'
-                          : 'text-stone-600 dark:text-zinc-400 hover:bg-stone-100 dark:hover:bg-zinc-800'
-                      }`}
-                    >
-                      {i + 1}. {normalizeTitle(ch.title)}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+          {hasStoredState && (
+            <button
+              onClick={() => { setBookmarkModalMode('update'); setShowBookmarkModal(true); }}
+              className={`text-xs flex items-center gap-1 transition-colors ${
+                stored?.readingBookmark != null
+                  ? 'text-amber-500/80 hover:text-amber-500'
+                  : 'text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300'
+              }`}
+              title="Reading bookmark"
+            >
+              <svg width="8" height="11" viewBox="0 0 10 14" fill={stored?.readingBookmark != null ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={stored?.readingBookmark != null ? 0 : 1.5} className="flex-shrink-0">
+                <path d="M0 0h10v14L5 10.5 0 14V0z"/>
+              </svg>
+              {stored?.readingBookmark != null ? `Ch.${stored.readingBookmark + 1}` : 'Bookmark'}
+            </button>
           )}
           {hasStoredState && (
             <button
