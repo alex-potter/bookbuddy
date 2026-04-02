@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { parseEpub } from '@/lib/epub-parser';
-import type { AnalysisResult, Character, MapState, NarrativeArc, ParentArc, ParsedEbook, PinUpdates, QueueJob, Snapshot } from '@/types';
+import type { AnalysisResult, BookBuddyExport, BookMeta, Character, MapState, NarrativeArc, ParentArc, ParsedEbook, PinUpdates, QueueJob, SavedBookEntry, Snapshot, StoredBookState } from '@/types';
 import CalibreLibrary from '@/components/CalibreLibrary';
 import CharacterCard from '@/components/CharacterCard';
 import ChapterSelector from '@/components/ChapterSelector';
@@ -13,7 +13,8 @@ import SettingsModal from '@/components/SettingsModal';
 import GithubLibrary from '@/components/GithubLibrary';
 import UploadZone from '@/components/UploadZone';
 import { normalizeTitle } from '@/lib/normalize-title';
-import { saveChapters, loadChapters, deleteChapters } from '@/lib/chapter-storage';
+import { saveChapters, loadChapters } from '@/lib/chapter-storage';
+import { listSavedBooks, loadBookState, saveBookState, deleteBookState, loadBookMapState, saveBookMapState, migrateFromLocalStorage, onCrossTabSync } from '@/lib/book-storage';
 import ProcessingQueue from '@/components/ProcessingQueue';
 import ChatPanel from '@/components/ChatPanel';
 import ArcsPanel from '@/components/ArcsPanel';
@@ -35,116 +36,14 @@ const IMPORTANCE_ORDER: Record<Character['importance'], number> = {
   minor: 2,
 };
 
-interface BookMeta {
-  chapters: Array<{ id: string; title: string; order: number; bookIndex?: number; bookTitle?: string }>;
-  books?: string[];
-}
-
-interface StoredBookState {
-  lastAnalyzedIndex: number; // -2 = meta only, -1 = series carry-forward, ≥0 = analyzed
-  result: AnalysisResult;
-  snapshots: Snapshot[];
-  excludedBooks?: number[];
-  excludedChapters?: number[];  // global chapter indices excluded from analysis
-  chapterRange?: { start: number; end: number }; // inclusive chapter index range for analysis
-  bookMeta?: BookMeta;
-  readingBookmark?: number; // user-set "read up to" chapter index (inclusive)
-  parentArcs?: ParentArc[];
-}
-
-interface SavedBookEntry {
-  title: string;
-  author: string;
-  lastAnalyzedIndex: number;
-  chapterCount?: number;
-}
-
-function storageKey(title: string, author: string) {
-  return `bookbuddy::${title}::${author}`;
-}
-
-function loadStored(title: string, author: string): StoredBookState | null {
-  try {
-    // Migrate from legacy key if new key not yet written
-    const raw = localStorage.getItem(storageKey(title, author))
-      ?? localStorage.getItem(`ebook-tracker::${title}::${author}`);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredBookState;
-    // Back-compat: old saves without snapshots
-    if (!parsed.snapshots) parsed.snapshots = [];
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function saveStored(title: string, author: string, state: StoredBookState) {
-  try {
-    localStorage.setItem(storageKey(title, author), JSON.stringify(state));
-  } catch { /* ignore */ }
-}
-
-function deleteStored(title: string, author: string) {
-  localStorage.removeItem(storageKey(title, author));
-  localStorage.removeItem(`ebook-tracker::${title}::${author}`);
-  localStorage.removeItem(mapStorageKey(title, author));
-  deleteChapters(title, author).catch(() => {});
-}
-
-function mapStorageKey(title: string, author: string) {
-  return `bookbuddy-map::${title}::${author}`;
-}
-
-function loadMapState(title: string, author: string): MapState | null {
-  try {
-    const raw = localStorage.getItem(mapStorageKey(title, author));
-    return raw ? (JSON.parse(raw) as MapState) : null;
-  } catch { return null; }
-}
-
-function saveMapState(title: string, author: string, state: MapState) {
-  try {
-    localStorage.setItem(mapStorageKey(title, author), JSON.stringify(state));
-  } catch { /* ignore */ }
-}
-
-interface BookBuddyExport {
-  version: 2;
-  title: string;
-  author: string;
-  state: StoredBookState;
-  mapState: MapState | null;
-}
-
-function exportBook(title: string, author: string, liveParsed?: ParsedEbook) {
-  const state = loadStored(title, author);
-  if (!state) return;
-  // Synthesize bookMeta from live parsed book if it wasn't saved yet
-  if (!state.bookMeta && liveParsed && liveParsed.title === title && liveParsed.author === author) {
-    state.bookMeta = {
-      chapters: liveParsed.chapters.map(({ id, title: t, order, bookIndex, bookTitle }) => ({ id, title: t, order, bookIndex, bookTitle })),
-      books: liveParsed.books,
-    };
-  }
-  const mapState = loadMapState(title, author);
-  const payload: BookBuddyExport = { version: 2, title, author, state, mapState };
-  const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${title} — ${author}.bookbuddy`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 async function importBookBuddy(file: File): Promise<{ title: string; author: string }> {
   const text = await file.text();
   const payload = JSON.parse(text) as Partial<BookBuddyExport>;
   if (!payload.title || !payload.author || !payload.state) {
     throw new Error('Invalid or unrecognised .bookbuddy file.');
   }
-  saveStored(payload.title, payload.author, payload.state);
-  if (payload.mapState) saveMapState(payload.title, payload.author, payload.mapState);
+  await saveBookState(payload.title, payload.author, payload.state);
+  if (payload.mapState) await saveBookMapState(payload.title, payload.author, payload.mapState);
   return { title: payload.title, author: payload.author };
 }
 
@@ -161,23 +60,6 @@ function bestSnapshot(snapshots: Snapshot[], targetIndex: number): Snapshot | nu
 function upsertSnapshot(snapshots: Snapshot[], index: number, result: AnalysisResult, model?: string, appVersion?: string): Snapshot[] {
   const without = snapshots.filter((s) => s.index !== index);
   return [...without, { index, result, ...(model ? { model } : {}), ...(appVersion ? { appVersion } : {}) }];
-}
-
-function listSavedBooks(excludeTitle?: string, excludeAuthor?: string): SavedBookEntry[] {
-  const results: SavedBookEntry[] = [];
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (!key?.startsWith('bookbuddy::') && !key?.startsWith('ebook-tracker::')) continue;
-      const [, title, author] = key.split('::');
-      if (title === excludeTitle && author === excludeAuthor) continue;
-      const raw = localStorage.getItem(key);
-      if (!raw) continue;
-      const state = JSON.parse(raw) as StoredBookState;
-      results.push({ title, author, lastAnalyzedIndex: state.lastAnalyzedIndex, chapterCount: state.bookMeta?.chapters.length });
-    }
-  } catch { /* ignore */ }
-  return results.sort((a, b) => b.lastAnalyzedIndex - a.lastAnalyzedIndex);
 }
 
 const IS_MOBILE = process.env.NEXT_PUBLIC_MOBILE === 'true';
@@ -436,6 +318,13 @@ export default function Home() {
     localStorage.setItem('theme', next ? 'dark' : 'light');
   }
 
+  // --- IndexedDB migration (runs once) ---
+  const [migrationDone, setMigrationDone] = useState(false);
+  useEffect(() => { migrateFromLocalStorage().then(() => setMigrationDone(true)); }, []);
+
+  // --- Save error surfacing ---
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const [book, setBook] = useState<ParsedEbook | null>(null);
   const [parsing, setParsing] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -510,6 +399,42 @@ export default function Home() {
   const [mapState, setMapState] = useState<MapState | null>(null);
   const [showSetupPrompt, setShowSetupPrompt] = useState(false);
 
+  // Fire-and-forget save wrappers — surface errors instead of swallowing them
+  function persistState(title: string, author: string, state: StoredBookState) {
+    saveBookState(title, author, state).catch((err) => {
+      console.error('[book-storage] Save failed:', err);
+      setSaveError('Failed to save analysis data. Your browser storage may be full.');
+    });
+  }
+  function persistMapState(title: string, author: string, state: MapState) {
+    saveBookMapState(title, author, state).catch((err) => {
+      console.error('[book-storage] Map save failed:', err);
+    });
+  }
+
+  // Export: use in-memory state for active book, fall back to IndexedDB
+  async function exportBook(title: string, author: string, liveParsed?: ParsedEbook) {
+    const isActiveBook = book && book.title === title && book.author === author;
+    let state = isActiveBook ? storedRef.current : await loadBookState(title, author);
+    if (!state) return;
+    // Synthesize bookMeta from live parsed book if it wasn't saved yet
+    if (!state.bookMeta && liveParsed && liveParsed.title === title && liveParsed.author === author) {
+      state = { ...state, bookMeta: {
+        chapters: liveParsed.chapters.map(({ id, title: t, order, bookIndex, bookTitle }) => ({ id, title: t, order, bookIndex, bookTitle })),
+        books: liveParsed.books,
+      }};
+    }
+    const ms = isActiveBook ? mapState : await loadBookMapState(title, author);
+    const payload: BookBuddyExport = { version: 2, title, author, state, mapState: ms };
+    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${title} — ${author}.bookbuddy`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   function toggleBook(bookIndex: number) {
     setExcludedBooks((prev) => {
       const next = new Set(prev);
@@ -517,7 +442,7 @@ export default function Home() {
       if (book && storedRef.current) {
         const updated = { ...storedRef.current, excludedBooks: [...next] };
         storedRef.current = updated;
-        saveStored(book.title, book.author, updated);
+        persistState(book.title, book.author, updated);
       }
       return next;
     });
@@ -530,7 +455,7 @@ export default function Home() {
       if (book && storedRef.current) {
         const updated = { ...storedRef.current, excludedChapters: [...next] };
         storedRef.current = updated;
-        saveStored(book.title, book.author, updated);
+        persistState(book.title, book.author, updated);
       }
       return next;
     });
@@ -542,7 +467,7 @@ export default function Home() {
       const updated: StoredBookState = { ...storedRef.current };
       if (range) updated.chapterRange = range; else delete updated.chapterRange;
       storedRef.current = updated;
-      saveStored(book.title, book.author, updated);
+      persistState(book.title, book.author, updated);
     }
   }
 
@@ -553,7 +478,7 @@ export default function Home() {
     // Clean up: if readingBookmark is undefined, delete the key entirely
     if (index == null) delete (updated as any).readingBookmark;
     storedRef.current = updated;
-    saveStored(book.title, book.author, updated);
+    persistState(book.title, book.author, updated);
 
     // Load the appropriate snapshot for the new bookmark position
     const bookmark = index ?? stored.lastAnalyzedIndex;
@@ -574,7 +499,7 @@ export default function Home() {
     if (!book || !storedRef.current) return;
     const updated = { ...storedRef.current, parentArcs: parentArcs.length > 0 ? parentArcs : undefined };
     storedRef.current = updated;
-    saveStored(book.title, book.author, updated);
+    persistState(book.title, book.author, updated);
     setParentArcsRev((r) => r + 1);
   }
 
@@ -620,15 +545,16 @@ export default function Home() {
     return () => { if (playIntervalRef.current) clearInterval(playIntervalRef.current); };
   }, [playing, playSpeed]);
 
-  // Sync map state across browser tabs via the storage event
+  // Sync state across browser tabs via BroadcastChannel
   useEffect(() => {
-    function onStorage(e: StorageEvent) {
-      if (!book || !e.key) return;
-      if (e.key === mapStorageKey(book.title, book.author)) {
-        setMapState(e.newValue ? (JSON.parse(e.newValue) as MapState) : null);
-      }
-      if (e.key === storageKey(book.title, book.author) && e.newValue) {
-        const updated = JSON.parse(e.newValue) as StoredBookState;
+    return onCrossTabSync(async (msg) => {
+      if (!book || msg.title !== book.title || msg.author !== book.author) return;
+      if (msg.type === 'map') {
+        const ms = await loadBookMapState(msg.title, msg.author);
+        setMapState(ms);
+      } else if (msg.type === 'state') {
+        const updated = await loadBookState(msg.title, msg.author);
+        if (!updated) return;
         storedRef.current = updated;
         if (!playing) {
           setResult(updated.result);
@@ -636,9 +562,7 @@ export default function Home() {
           setViewingSnapshotIndex(null);
         }
       }
-    }
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
+    });
   }, [book, playing]);
 
   const storedRef = useRef<StoredBookState | null>(null);
@@ -705,7 +629,7 @@ export default function Home() {
       }
 
       storedRef.current = updated;
-      saveStored(book.title, book.author, updated);
+      persistState(book.title, book.author, updated);
     }
 
     if (pinUpdates) {
@@ -725,7 +649,7 @@ export default function Home() {
         }
         const next = { ...ms, pins };
         setMapState(next);
-        saveMapState(book.title, book.author, next);
+        persistMapState(book.title, book.author, next);
       }
     }
   }, [book]);
@@ -746,7 +670,7 @@ export default function Home() {
 
     async function run() {
       try {
-        const stored = loadStored(title, author);
+        const stored = await loadBookState(title, author);
         if (!stored?.bookMeta) throw new Error('No book metadata — open the book first');
 
         const entries = await loadChapters(title, author);
@@ -786,7 +710,7 @@ export default function Home() {
             if (accumulated) {
               snapshots = upsertSnapshot(snapshots, i, accumulated);
               latestStored = { ...latestStored, lastAnalyzedIndex: i, result: accumulated, snapshots };
-              saveStored(title, author, latestStored);
+              persistState(title, author, latestStored);
               if (bookRef.current?.title === title && bookRef.current?.author === author) {
                 storedRef.current = latestStored;
               }
@@ -800,7 +724,7 @@ export default function Home() {
           if (recentText.length > MAX_RECENT_TEXT) recentText = recentText.slice(-MAX_RECENT_TEXT);
           snapshots = upsertSnapshot(snapshots, i, accumulated, chModel, APP_VERSION);
           latestStored = { ...latestStored, lastAnalyzedIndex: i, result: accumulated, snapshots };
-          saveStored(title, author, latestStored);
+          persistState(title, author, latestStored);
 
           // If this is the active book, update the live view too
           if (bookRef.current?.title === title && bookRef.current?.author === author) {
@@ -819,7 +743,7 @@ export default function Home() {
               accumulated = await reconcileResult(title, author, accumulated, recentText);
               snapshots = upsertSnapshot(snapshots, i, accumulated, undefined, APP_VERSION);
               latestStored = { ...latestStored, result: accumulated, snapshots };
-              saveStored(title, author, latestStored);
+              persistState(title, author, latestStored);
               if (bookRef.current?.title === title && bookRef.current?.author === author) {
                 storedRef.current = latestStored;
                 setResult(accumulated);
@@ -839,7 +763,7 @@ export default function Home() {
             accumulated = await reconcileResult(title, author, accumulated, recentText);
             snapshots = upsertSnapshot(snapshots, toIndex, accumulated, undefined, APP_VERSION);
             latestStored = { ...latestStored, result: accumulated, snapshots };
-            saveStored(title, author, latestStored);
+            persistState(title, author, latestStored);
             if (bookRef.current?.title === title && bookRef.current?.author === author) {
               storedRef.current = latestStored;
               setResult(accumulated);
@@ -854,7 +778,7 @@ export default function Home() {
           try {
             const parentArcs = await generateParentArcs(title, author, accumulated.arcs);
             latestStored = { ...latestStored, parentArcs };
-            saveStored(title, author, latestStored);
+            persistState(title, author, latestStored);
             if (bookRef.current?.title === title && bookRef.current?.author === author) {
               storedRef.current = latestStored;
             }
@@ -875,7 +799,7 @@ export default function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queue]);
 
-  function activateBook(parsed: ParsedEbook, initialStored: StoredBookState | null) {
+  function activateBook(parsed: ParsedEbook, initialStored: StoredBookState | null, initialMapState?: MapState | null) {
     const bookMeta: BookMeta = {
       chapters: parsed.chapters.map(({ id, title, order, bookIndex, bookTitle }) => ({ id, title, order, bookIndex, bookTitle })),
       books: parsed.books,
@@ -884,7 +808,7 @@ export default function Home() {
       ? { ...initialStored, bookMeta }
       : { lastAnalyzedIndex: -2, result: { characters: [], summary: '' }, snapshots: [], bookMeta };
     storedRef.current = stateToSave;
-    saveStored(parsed.title, parsed.author, stateToSave);
+    persistState(parsed.title, parsed.author, stateToSave);
     // Persist chapter texts in IndexedDB so re-upload is not required next session
     const chaptersWithText = parsed.chapters.filter((ch) => ch.text).map(({ id, text }) => ({ id, text }));
     if (chaptersWithText.length > 0) {
@@ -894,7 +818,7 @@ export default function Home() {
     setExcludedBooks(initialStored?.excludedBooks ? new Set(initialStored.excludedBooks) : new Set());
     setExcludedChapters(initialStored?.excludedChapters ? new Set(initialStored.excludedChapters) : new Set());
     setChapterRangeState(initialStored?.chapterRange ?? null);
-    setMapState(loadMapState(parsed.title, parsed.author));
+    setMapState(initialMapState ?? null);
     setBook(parsed);
     if (initialStored && initialStored.lastAnalyzedIndex >= 0) {
       const bookmark = initialStored.readingBookmark;
@@ -932,7 +856,7 @@ export default function Home() {
   }
 
   async function loadBookFromMeta(title: string, author: string) {
-    const stored = loadStored(title, author);
+    const stored = await loadBookState(title, author);
     if (!stored) return;
     // Try to restore chapter texts from IndexedDB
     let textMap: Map<string, string> | null = null;
@@ -955,7 +879,8 @@ export default function Home() {
           // No chapter list available — analysis data still loads fine
           chapters: [],
         };
-    activateBook(parsed, stored);
+    const ms = await loadBookMapState(title, author);
+    activateBook(parsed, stored, ms);
   }
 
   /** Called whenever the user selects a chapter in the sidebar */
@@ -1022,8 +947,12 @@ export default function Home() {
     seriesBaseRef.current = null;
     try {
       const parsed = await parseEpub(file);
-      const ownStored = loadStored(parsed.title, parsed.author);
-      if (ownStored) { activateBook(parsed, ownStored); return; }
+      const ownStored = await loadBookState(parsed.title, parsed.author);
+      if (ownStored) {
+        const ownMap = await loadBookMapState(parsed.title, parsed.author);
+        activateBook(parsed, ownStored, ownMap);
+        return;
+      }
       const others = listSavedBooks(parsed.title, parsed.author).filter((b) => b.lastAnalyzedIndex >= 0);
       if (others.length > 0) {
         setPendingBook(parsed);
@@ -1038,9 +967,9 @@ export default function Home() {
     }
   }, []);
 
-  function handleContinueFrom(prevTitle: string, prevAuthor: string) {
+  async function handleContinueFrom(prevTitle: string, prevAuthor: string) {
     if (!pendingBook) return;
-    const prevStored = loadStored(prevTitle, prevAuthor);
+    const prevStored = await loadBookState(prevTitle, prevAuthor);
     if (!prevStored) { activateBook(pendingBook, null); return; }
     const carried: StoredBookState = { lastAnalyzedIndex: -1, result: prevStored.result, snapshots: [] };
     setPendingBook(null);
@@ -1119,7 +1048,7 @@ export default function Home() {
         snapshots = upsertSnapshot(snapshots, i, accumulated, chapterModel, APP_VERSION);
         const partial: StoredBookState = { ...analyzeBase, lastAnalyzedIndex: i, result: accumulated, snapshots };
         storedRef.current = partial;
-        saveStored(book.title, book.author, partial);
+        persistState(book.title, book.author, partial);
         setResult(accumulated);
         setViewingSnapshotIndex(null);
       }
@@ -1128,7 +1057,7 @@ export default function Home() {
       const rEnd = chapterRange?.end ?? (book.chapters.length - 1);
       const withParents = await maybeGenerateParentArcs(storedRef.current!, book.title, book.author, rEnd, analyzeCancelRef.current);
       storedRef.current = withParents;
-      saveStored(book.title, book.author, withParents);
+      persistState(book.title, book.author, withParents);
     } catch (err) {
       setAnalyzeError(err instanceof Error ? err.message : 'Analysis failed.');
     } finally {
@@ -1165,7 +1094,7 @@ export default function Home() {
         snapshots = upsertSnapshot(snapshots, i, accumulated, rebuildModel, APP_VERSION);
         const partial: StoredBookState = { ...rebuildBase, lastAnalyzedIndex: i, result: accumulated, snapshots };
         storedRef.current = partial;
-        saveStored(book.title, book.author, partial);
+        persistState(book.title, book.author, partial);
         setResult(accumulated);
         setViewingSnapshotIndex(null);
       }
@@ -1173,7 +1102,7 @@ export default function Home() {
       const rEnd = chapterRange?.end ?? (book.chapters.length - 1);
       const withParents = await maybeGenerateParentArcs(storedRef.current!, book.title, book.author, rEnd, rebuildCancelRef.current);
       storedRef.current = withParents;
-      saveStored(book.title, book.author, withParents);
+      persistState(book.title, book.author, withParents);
     } catch (err) {
       setAnalyzeError(err instanceof Error ? err.message : 'Rebuild failed.');
     } finally {
@@ -1211,7 +1140,7 @@ export default function Home() {
         snapshots = upsertSnapshot(snapshots, i, accumulated, chModel, APP_VERSION);
         const partial: StoredBookState = { ...processBase, lastAnalyzedIndex: i, result: accumulated, snapshots };
         storedRef.current = partial;
-        saveStored(book.title, book.author, partial);
+        persistState(book.title, book.author, partial);
         setResult(accumulated);
         setCurrentIndex(i);
         setViewingSnapshotIndex(null);
@@ -1220,7 +1149,7 @@ export default function Home() {
       const rEnd = chapterRange?.end ?? (book.chapters.length - 1);
       const withParents = await maybeGenerateParentArcs(storedRef.current!, book.title, book.author, rEnd, rebuildCancelRef.current);
       storedRef.current = withParents;
-      saveStored(book.title, book.author, withParents);
+      persistState(book.title, book.author, withParents);
     } catch (err) {
       setAnalyzeError(err instanceof Error ? err.message : 'Process failed.');
     } finally {
@@ -1238,7 +1167,7 @@ export default function Home() {
     if (newSnapshots.length === 0) {
       const updated: StoredBookState = { lastAnalyzedIndex: -2, result: { characters: [], summary: '' }, snapshots: [], bookMeta: cur.bookMeta };
       storedRef.current = updated;
-      saveStored(book.title, book.author, updated);
+      persistState(book.title, book.author, updated);
       setResult(null);
       setViewingSnapshotIndex(null);
       return;
@@ -1248,7 +1177,7 @@ export default function Home() {
     const newResult = sortedSnaps[0].result;
     const updated: StoredBookState = { lastAnalyzedIndex: newLastIdx, result: newResult, snapshots: newSnapshots, bookMeta: cur.bookMeta };
     storedRef.current = updated;
-    saveStored(book.title, book.author, updated);
+    persistState(book.title, book.author, updated);
     setResult(newResult);
     setViewingSnapshotIndex(null);
     if (currentIndex > newLastIdx) setCurrentIndex(newLastIdx);
@@ -1289,7 +1218,7 @@ export default function Home() {
   }
 
   if (!book) {
-    void myBooksRev; // used to trigger re-render after deletion
+    void myBooksRev; void migrationDone; // trigger re-render after deletion or migration
     const savedBooks = listSavedBooks();
     return (
       <main className="min-h-dvh flex flex-col">
@@ -1399,7 +1328,6 @@ export default function Home() {
                   </div>
                   <ul className="space-y-2">
                     {savedBooks.map((entry) => {
-                      const stored = loadStored(entry.title, entry.author);
                       const analyzed = entry.lastAnalyzedIndex >= 0;
                       const queuedJob = queue.find((j) => j.title === entry.title && j.author === entry.author && (j.status === 'waiting' || j.status === 'running'));
                       const fullyProcessed = entry.chapterCount != null && entry.lastAnalyzedIndex >= entry.chapterCount - 1;
@@ -1407,8 +1335,7 @@ export default function Home() {
                         <li key={`${entry.title}::${entry.author}`} className="flex items-center gap-2">
                           <button
                             onClick={() => loadBookFromMeta(entry.title, entry.author)}
-                            disabled={!stored}
-                            className="flex-1 text-left px-4 py-3 bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-800 rounded-xl hover:border-stone-300 dark:hover:border-zinc-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="flex-1 text-left px-4 py-3 bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-800 rounded-xl hover:border-stone-300 dark:hover:border-zinc-700 transition-colors"
                           >
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
@@ -1465,7 +1392,7 @@ export default function Home() {
                             <div className="flex items-center gap-1 flex-shrink-0">
                               <button
                                 onClick={() => {
-                                  deleteStored(entry.title, entry.author);
+                                  deleteBookState(entry.title, entry.author).catch(() => {});
                                   setPendingDelete(null);
                                   setMyBooksRev((r) => r + 1);
                                 }}
@@ -1694,6 +1621,12 @@ export default function Home() {
             onCompleteSetup={completeSetup}
           />
           {analyzeError && <p className="mt-3 text-xs text-red-500 text-center">{analyzeError}</p>}
+          {saveError && (
+            <div className="mt-3 p-2 rounded-lg bg-red-500/10 border border-red-500/20">
+              <p className="text-xs text-red-400">{saveError}</p>
+              <button onClick={() => setSaveError(null)} className="text-xs text-red-300 underline mt-1">Dismiss</button>
+            </div>
+          )}
         </aside>
 
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col">
@@ -1869,7 +1802,7 @@ export default function Home() {
                   parentArcs={stored?.parentArcs}
                   onMapStateChange={(state) => {
                     setMapState(state);
-                    saveMapState(book.title, book.author, state);
+                    persistMapState(book.title, book.author, state);
                   }}
                 />
               </div>

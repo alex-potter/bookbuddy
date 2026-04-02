@@ -1,6 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { loadBookState, loadBookMapState } from '@/lib/book-storage';
+import type { StoredBookState } from '@/types';
 
 interface Props {
   title: string;
@@ -8,45 +10,39 @@ interface Props {
   onClose: () => void;
 }
 
-const storageKey = (t: string, a: string) => `bookbuddy::${t}::${a}`;
-const mapStorageKey = (t: string, a: string) => `bookbuddy-map::${t}::${a}`;
-
-function loadStats(title: string, author: string) {
-  try {
-    const raw = localStorage.getItem(storageKey(title, author));
-    if (!raw) return null;
-    const state = JSON.parse(raw);
-    const chapterCount = state.bookMeta?.chapters?.length ?? 0;
-    const lastAnalyzedIndex = state.lastAnalyzedIndex ?? -1;
-    const chaptersAnalyzed = lastAnalyzedIndex >= 0 ? lastAnalyzedIndex + 1 : 0;
-    const characters = state.result?.characters?.length ?? 0;
-    const locations = state.result?.locations?.length ?? 0;
-    const arcs = state.result?.arcs?.length ?? 0;
-    return { chapterCount, chaptersAnalyzed, characters, locations, arcs };
-  } catch {
-    return null;
-  }
+interface Stats {
+  chapterCount: number;
+  chaptersAnalyzed: number;
+  characters: number;
+  locations: number;
+  arcs: number;
 }
 
-function buildExportPayload(title: string, author: string) {
-  const raw = localStorage.getItem(storageKey(title, author));
-  if (!raw) return null;
-  const state = JSON.parse(raw);
-  let mapState = null;
-  try {
-    const mapRaw = localStorage.getItem(mapStorageKey(title, author));
-    if (mapRaw) mapState = JSON.parse(mapRaw);
-  } catch { /* ignore */ }
-  return { version: 2, title, author, state, mapState };
+function extractStats(state: StoredBookState): Stats {
+  return {
+    chapterCount: state.bookMeta?.chapters?.length ?? 0,
+    chaptersAnalyzed: state.lastAnalyzedIndex >= 0 ? state.lastAnalyzedIndex + 1 : 0,
+    characters: state.result?.characters?.length ?? 0,
+    locations: state.result?.locations?.length ?? 0,
+    arcs: state.result?.arcs?.length ?? 0,
+  };
 }
 
 export default function LibrarySubmitModal({ title, author, onClose }: Props) {
   const [submitted, setSubmitted] = useState(false);
-  const stats = loadStats(title, author);
+  const [stats, setStats] = useState<Stats | null>(null);
+
+  useEffect(() => {
+    loadBookState(title, author).then((state) => {
+      if (state) setStats(extractStats(state));
+    });
+  }, [title, author]);
 
   async function handleSubmit() {
-    const payload = buildExportPayload(title, author);
-    if (!payload) return;
+    const state = await loadBookState(title, author);
+    if (!state) return;
+    const mapState = await loadBookMapState(title, author);
+    const payload = { version: 2, title, author, state, mapState };
 
     // Create .zip containing the .bookbuddy file
     const JSZip = (await import('jszip')).default;

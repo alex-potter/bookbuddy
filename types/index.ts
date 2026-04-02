@@ -108,3 +108,35 @@ export interface PinUpdates {
   renames?: Record<string, string>;  // oldName → newName
   deletes?: string[];
 }
+
+export interface BookMeta {
+  chapters: Array<{ id: string; title: string; order: number; bookIndex?: number; bookTitle?: string }>;
+  books?: string[];
+}
+
+export interface StoredBookState {
+  lastAnalyzedIndex: number; // -2 = meta only, -1 = series carry-forward, ≥0 = analyzed
+  result: AnalysisResult;
+  snapshots: Snapshot[];
+  excludedBooks?: number[];
+  excludedChapters?: number[];
+  chapterRange?: { start: number; end: number };
+  bookMeta?: BookMeta;
+  readingBookmark?: number;
+  parentArcs?: ParentArc[];
+}
+
+export interface SavedBookEntry {
+  title: string;
+  author: string;
+  lastAnalyzedIndex: number;
+  chapterCount?: number;
+}
+
+export interface BookBuddyExport {
+  version: 2;
+  title: string;
+  author: string;
+  state: StoredBookState;
+  mapState: MapState | null;
+}
