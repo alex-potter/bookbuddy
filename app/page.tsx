@@ -28,7 +28,7 @@ import BookmarkModal from '@/components/BookmarkModal';
 import BookStructureEditor from '@/components/BookStructureEditor';
 import BookFilterSelector from '@/components/BookFilterSelector';
 import { useDerivedEntities } from '@/lib/use-derived-entities';
-import { buildInitialSeriesDefinition, migrateToSeriesDefinition, getFilteredChapterOrders } from '@/lib/series';
+import { buildInitialSeriesDefinition, migrateToSeriesDefinition, getFilteredChapterOrders, getActiveParentArcs } from '@/lib/series';
 
 type SortKey = 'importance' | 'name' | 'status';
 type MainTab = 'characters' | 'locations' | 'map' | 'arcs' | 'manage';
@@ -1245,7 +1245,11 @@ export default function Home() {
   }, [book, currentIndex]);
 
   const characters = result?.characters ?? [];
-  const derived = useDerivedEntities(storedRef.current?.snapshots ?? [], result ?? null);
+  const derived = useDerivedEntities(
+    storedRef.current?.snapshots ?? [],
+    result ?? null,
+    filteredSnapshots.length !== (storedRef.current?.snapshots ?? []).length ? filteredSnapshots : undefined,
+  );
   const displayed = characters
     .filter((c) => {
       if (filter !== 'all' && c.importance !== filter) return false;
@@ -2045,7 +2049,9 @@ export default function Home() {
                       onResultEdit={applyResultEdit}
                       arcChapterMap={derived.arcChapterMap}
                       currentChapterIndex={currentChapterIndex}
-                      parentArcs={stored?.parentArcs}
+                      parentArcs={storedRef.current?.series
+                        ? getActiveParentArcs(storedRef.current.series, bookFilter, storedRef.current?.parentArcs)
+                        : storedRef.current?.parentArcs}
                       onUpdateParentArcs={handleUpdateParentArcs}
                     />
                   )}

@@ -25,6 +25,7 @@ export interface DerivedEntities {
 export function useDerivedEntities(
   snapshots: Snapshot[],
   currentResult: AnalysisResult | null,
+  filteredSnapshots?: Snapshot[],
 ): DerivedEntities {
   return useMemo(() => {
     const empty: DerivedEntities = {
@@ -36,10 +37,13 @@ export function useDerivedEntities(
     };
     if (!currentResult) return empty;
 
-    const sorted = [...snapshots].sort((a, b) => a.index - b.index);
+    const effectiveSnapshots = filteredSnapshots ?? snapshots;
+    const sorted = [...effectiveSnapshots].sort((a, b) => a.index - b.index);
+    // Keep full snapshots for alias map building (needs all data)
+    const allSorted = filteredSnapshots ? [...snapshots].sort((a, b) => a.index - b.index) : sorted;
 
     // 1. Single canonical alias map
-    const locationAliasMap = buildLocationAliasMap(sorted, currentResult.locations);
+    const locationAliasMap = buildLocationAliasMap(allSorted, currentResult.locations);
     const resolveLoc = (name: string | undefined) =>
       resolveLocationName(name?.trim(), locationAliasMap) ?? name?.trim();
 
@@ -99,5 +103,5 @@ export function useDerivedEntities(
     }
 
     return { aggregated, locationAliasMap, resolvedCharacters: locResolvedCharacters, locationGroups, arcChapterMap };
-  }, [snapshots, currentResult]);
+  }, [snapshots, currentResult, filteredSnapshots]);
 }
