@@ -69,6 +69,27 @@ export interface ParentArc {
   summary: string;     // AI-generated summary of the grouped theme
 }
 
+export interface BookDefinition {
+  index: number;              // 0-based book order in series
+  title: string;              // detected or user-provided book title
+  chapterStart: number;       // first chapter order (inclusive)
+  chapterEnd: number;         // last chapter order (inclusive)
+  excludedChapters: number[]; // chapter orders excluded within this book
+  confirmed: boolean;         // user has reviewed/confirmed this book's bounds
+  parentArcs?: ParentArc[];   // per-book thematic arc groupings
+  arcGroupingHash?: string;   // hash of bounds at last arc grouping, for staleness detection
+}
+
+export interface SeriesDefinition {
+  books: BookDefinition[];
+  seriesArcs?: ParentArc[];   // series-wide thematic arc groupings
+  unassignedChapters: number[]; // chapter orders not belonging to any book (auto-derived)
+}
+
+export type BookFilter =
+  | { mode: 'all' }
+  | { mode: 'books'; indices: number[] };
+
 export interface AnalysisResult {
   characters: Character[];
   locations?: LocationInfo[];
@@ -124,6 +145,7 @@ export interface StoredBookState {
   bookMeta?: BookMeta;
   readingBookmark?: number;
   parentArcs?: ParentArc[];
+  series?: SeriesDefinition;  // NEW
 }
 
 export interface SavedBookEntry {
