@@ -15,6 +15,8 @@ export interface EbookChapter {
   order: number;
   bookIndex?: number;   // which book in an omnibus (0-based); undefined for standalone
   bookTitle?: string;   // title of that book within the omnibus
+  preview?: string;     // first meaningful line of content (~80 chars)
+  contentType?: 'story' | 'front-matter' | 'back-matter' | 'structural';
 }
 
 export interface ParsedEbook {
@@ -76,6 +78,7 @@ export interface BookDefinition {
   chapterEnd: number;         // last chapter order (inclusive)
   excludedChapters: number[]; // chapter orders excluded within this book
   confirmed: boolean;         // user has reviewed/confirmed this book's bounds
+  excluded?: boolean;         // entire book excluded from analysis and sidebar
   parentArcs?: ParentArc[];   // per-book thematic arc groupings
   arcGroupingHash?: string;   // hash of bounds at last arc grouping, for staleness detection
 }
@@ -131,7 +134,15 @@ export interface PinUpdates {
 }
 
 export interface BookMeta {
-  chapters: Array<{ id: string; title: string; order: number; bookIndex?: number; bookTitle?: string }>;
+  chapters: Array<{
+    id: string;
+    title: string;
+    order: number;
+    bookIndex?: number;
+    bookTitle?: string;
+    preview?: string;
+    contentType?: 'story' | 'front-matter' | 'back-matter' | 'structural';
+  }>;
   books?: string[];
 }
 

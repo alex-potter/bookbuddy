@@ -25,6 +25,7 @@ function openDB(): Promise<IDBDatabase> {
 export interface ChapterTextEntry {
   id: string;
   text: string;
+  htmlHead?: string;  // first ~1KB of raw HTML for title re-extraction
 }
 
 export async function saveChapters(
