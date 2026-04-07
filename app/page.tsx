@@ -941,7 +941,8 @@ export default function Home() {
 
   function activateBook(parsed: ParsedEbook, initialStored: StoredBookState | null, initialMapState?: MapState | null) {
     const bookMeta: BookMeta = {
-      chapters: parsed.chapters.map(({ id, title, order, bookIndex, bookTitle }) => ({ id, title, order, bookIndex, bookTitle })),
+      chapters: parsed.chapters.map(({ id, title, order, bookIndex, bookTitle, preview, contentType }) =>
+        ({ id, title, order, bookIndex, bookTitle, preview, contentType })),
       books: parsed.books,
     };
     let stateToSave: StoredBookState = initialStored
@@ -968,7 +969,11 @@ export default function Home() {
     storedRef.current = stateToSave;
     persistState(parsed.title, parsed.author, stateToSave);
     // Persist chapter texts in IndexedDB so re-upload is not required next session
-    const chaptersWithText = parsed.chapters.filter((ch) => ch.text).map(({ id, text }) => ({ id, text }));
+    const chaptersWithText = parsed.chapters.filter((ch) => ch.text).map((ch) => ({
+      id: ch.id,
+      text: ch.text,
+      htmlHead: (ch as unknown as Record<string, string>)._htmlHead,
+    }));
     if (chaptersWithText.length > 0) {
       saveChapters(parsed.title, parsed.author, chaptersWithText).catch(() => {});
     }
@@ -1633,7 +1638,8 @@ export default function Home() {
       {showBookStructureEditor && book && storedRef.current?.series && (
         <BookStructureEditor
           series={storedRef.current.series}
-          chapters={book.chapters.map(({ order, title, bookIndex }) => ({ order, title, bookIndex }))}
+          chapters={book.chapters.map(({ order, title, bookIndex, preview, contentType }) =>
+            ({ order, title, bookIndex, preview, contentType }))}
           onSave={handleSaveSeries}
           onClose={() => setShowBookStructureEditor(false)}
           mode={bookStructureMode}
