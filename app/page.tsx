@@ -1612,7 +1612,7 @@ export default function Home() {
   const isSeriesContinuation = stored?.lastAnalyzedIndex === -1;
   const isMetaOnly = book.chapters.every((ch) => !ch.text);
   const busy = analyzing || rebuilding;
-  const snapshotIndices = new Set((stored?.snapshots ?? []).map((s) => s.index));
+  const snapshotIndices = new Set(visibleSnapshots.map((s) => s.index));
   // Whether the displayed result is from a historical snapshot rather than the latest
   const isViewingHistory = viewingSnapshotIndex !== null;
   const effectiveBookmark = Math.max(0, Math.min(

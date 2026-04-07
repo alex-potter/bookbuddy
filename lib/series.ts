@@ -125,24 +125,6 @@ export function isBookArcStale(book: BookDefinition): boolean {
   return computeArcGroupingHash(book) !== book.arcGroupingHash;
 }
 
-export function getFilteredChapterOrders(
-  series: SeriesDefinition,
-  filter: BookFilter,
-): Set<number> {
-  const result = new Set<number>();
-  const targetBooks = filter.mode === 'all'
-    ? series.books
-    : series.books.filter((b) => filter.indices.includes(b.index));
-
-  const excludedSet = new Set<number>();
-  for (const b of targetBooks) {
-    for (const ex of b.excludedChapters) excludedSet.add(ex);
-    for (let o = b.chapterStart; o <= b.chapterEnd; o++) {
-      if (!excludedSet.has(o)) result.add(o);
-    }
-  }
-  return result;
-}
 
 export function findBookForChapter(series: SeriesDefinition, chapterOrder: number): BookDefinition | undefined {
   return series.books.find((b) => chapterOrder >= b.chapterStart && chapterOrder <= b.chapterEnd);
@@ -170,6 +152,7 @@ export function getActiveParentArcs(
   }
   const result: ParentArc[] = [];
   for (const b of series.books) {
+    if (b.excluded) continue;
     if (filter.indices.includes(b.index) && b.parentArcs?.length) {
       result.push(...b.parentArcs);
     }
