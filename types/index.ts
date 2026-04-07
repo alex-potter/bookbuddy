@@ -100,9 +100,26 @@ export interface AnalysisResult {
   summary: string;
 }
 
+export interface ChapterEvent {
+  summary: string;
+  characters: string[];
+  locations: string[];
+  characterSnapshots: Character[];
+  locationSnapshots: LocationInfo[];
+  arcSnapshots?: NarrativeArc[];
+  chapterProgress: number;
+  textAnchor?: string;
+}
+
+export interface ReadingPosition {
+  chapterIndex: number;
+  progress?: number;
+}
+
 export interface Snapshot {
   index: number;         // chapter index (0-based)
   result: AnalysisResult;
+  events?: ChapterEvent[];
   model?: string;        // model used to analyze this chapter (e.g. "qwen2.5:14b", "claude-haiku-4-5")
   appVersion?: string;   // BookBuddy version that processed this chapter (e.g. "0.1.0")
 }
@@ -155,6 +172,7 @@ export interface StoredBookState {
   chapterRange?: { start: number; end: number };
   bookMeta?: BookMeta;
   readingBookmark?: number;
+  readingPosition?: ReadingPosition;
   parentArcs?: ParentArc[];
   series?: SeriesDefinition;  // NEW
 }
