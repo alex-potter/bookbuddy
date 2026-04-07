@@ -134,6 +134,88 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
     setBooks((prev) => [...prev, newBook].sort((a, b) => a.chapterStart - b.chapterStart));
   }
 
+  function handleExpandEnd(bookIndex: number) {
+    setBooks((prev) => {
+      const sorted = [...prev].sort((a, b) => a.chapterStart - b.chapterStart);
+      const idx = sorted.findIndex((b) => b.index === bookIndex);
+      if (idx < 0) return prev;
+      const book = sorted[idx];
+      const nextBook = sorted[idx + 1];
+      const newEnd = book.chapterEnd + 1;
+
+      // Check there's a chapter to absorb
+      const chapterExists = chapters.some((ch) => ch.order === newEnd);
+      if (!chapterExists) return prev;
+
+      if (nextBook && newEnd >= nextBook.chapterStart) {
+        // Steal from next book's start
+        if (nextBook.chapterStart >= nextBook.chapterEnd) return prev; // next book would become empty
+        return prev.map((b) => {
+          if (b.index === bookIndex) return { ...b, chapterEnd: newEnd, parentArcs: undefined, arcGroupingHash: undefined };
+          if (b.index === nextBook.index) return { ...b, chapterStart: newEnd + 1, excludedChapters: b.excludedChapters.filter((o) => o > newEnd), parentArcs: undefined, arcGroupingHash: undefined };
+          return b;
+        });
+      }
+      // Absorb from unassigned
+      return prev.map((b) => b.index === bookIndex ? { ...b, chapterEnd: newEnd, parentArcs: undefined, arcGroupingHash: undefined } : b);
+    });
+  }
+
+  function handleShrinkEnd(bookIndex: number) {
+    setBooks((prev) => {
+      const book = prev.find((b) => b.index === bookIndex);
+      if (!book || book.chapterStart >= book.chapterEnd) return prev; // can't shrink to 0
+      const released = book.chapterEnd;
+      return prev.map((b) => b.index === bookIndex ? {
+        ...b,
+        chapterEnd: released - 1,
+        excludedChapters: b.excludedChapters.filter((o) => o < released),
+        parentArcs: undefined,
+        arcGroupingHash: undefined,
+      } : b);
+    });
+  }
+
+  function handleExpandStart(bookIndex: number) {
+    setBooks((prev) => {
+      const sorted = [...prev].sort((a, b) => a.chapterStart - b.chapterStart);
+      const idx = sorted.findIndex((b) => b.index === bookIndex);
+      if (idx < 0) return prev;
+      const book = sorted[idx];
+      const prevBook = sorted[idx - 1];
+      const newStart = book.chapterStart - 1;
+
+      const chapterExists = chapters.some((ch) => ch.order === newStart);
+      if (!chapterExists || newStart < 0) return prev;
+
+      if (prevBook && newStart <= prevBook.chapterEnd) {
+        // Steal from previous book's end
+        if (prevBook.chapterStart >= prevBook.chapterEnd) return prev;
+        return prev.map((b) => {
+          if (b.index === bookIndex) return { ...b, chapterStart: newStart, parentArcs: undefined, arcGroupingHash: undefined };
+          if (b.index === prevBook.index) return { ...b, chapterEnd: newStart - 1, excludedChapters: b.excludedChapters.filter((o) => o < newStart), parentArcs: undefined, arcGroupingHash: undefined };
+          return b;
+        });
+      }
+      return prev.map((b) => b.index === bookIndex ? { ...b, chapterStart: newStart, parentArcs: undefined, arcGroupingHash: undefined } : b);
+    });
+  }
+
+  function handleShrinkStart(bookIndex: number) {
+    setBooks((prev) => {
+      const book = prev.find((b) => b.index === bookIndex);
+      if (!book || book.chapterStart >= book.chapterEnd) return prev;
+      const released = book.chapterStart;
+      return prev.map((b) => b.index === bookIndex ? {
+        ...b,
+        chapterStart: released + 1,
+        excludedChapters: b.excludedChapters.filter((o) => o > released),
+        parentArcs: undefined,
+        arcGroupingHash: undefined,
+      } : b);
+    });
+  }
+
   function handleSave() {
     const reindexed = [...books].sort((a, b) => a.chapterStart - b.chapterStart).map((b, i) => ({ ...b, index: i }));
     const assignedSet = new Set<number>();
@@ -232,6 +314,24 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
                         Tap where the next book starts
                       </p>
                     )}
+                    {splitMode !== book.index && (
+                      <div className="flex items-center gap-1 pb-1">
+                        <button
+                          onClick={() => handleExpandStart(book.index)}
+                          className="text-[10px] text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300 transition-colors px-1"
+                          title="Absorb previous chapter"
+                        >
+                          &#x25B2; Expand start
+                        </button>
+                        <button
+                          onClick={() => handleShrinkStart(book.index)}
+                          className="text-[10px] text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300 transition-colors px-1"
+                          title="Release first chapter"
+                        >
+                          &#x25BC; Shrink start
+                        </button>
+                      </div>
+                    )}
                     <div className="max-h-40 overflow-y-auto space-y-1">
                       {Array.from({ length: book.chapterEnd - book.chapterStart + 1 }, (_, j) => {
                         const order = book.chapterStart + j;
@@ -284,6 +384,25 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
                         );
                       })}
                     </div>
+
+                    {splitMode !== book.index && (
+                      <div className="flex items-center gap-1 pt-1">
+                        <button
+                          onClick={() => handleShrinkEnd(book.index)}
+                          className="text-[10px] text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300 transition-colors px-1"
+                          title="Release last chapter"
+                        >
+                          &#x25B2; Shrink end
+                        </button>
+                        <button
+                          onClick={() => handleExpandEnd(book.index)}
+                          className="text-[10px] text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300 transition-colors px-1"
+                          title="Absorb next chapter"
+                        >
+                          &#x25BC; Expand end
+                        </button>
+                      </div>
+                    )}
 
                     <div className="flex gap-2 pt-2 border-t border-stone-100 dark:border-zinc-800">
                       <button
