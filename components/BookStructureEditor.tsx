@@ -5,7 +5,13 @@ import type { SeriesDefinition, BookDefinition } from '@/types';
 
 interface Props {
   series: SeriesDefinition;
-  chapters: Array<{ order: number; title: string; bookIndex?: number }>;
+  chapters: Array<{
+    order: number;
+    title: string;
+    bookIndex?: number;
+    preview?: string;
+    contentType?: 'story' | 'front-matter' | 'back-matter' | 'structural';
+  }>;
   onSave: (series: SeriesDefinition) => void;
   onClose: () => void;
   mode: 'setup' | 'manage';
@@ -26,8 +32,31 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
     return chapters.find((ch) => ch.order === order)?.title ?? `Chapter ${order + 1}`;
   }
 
+  function getContentTypeLabel(order: number): string | null {
+    const ch = chapters.find((c) => c.order === order);
+    if (!ch?.contentType || ch.contentType === 'story') return null;
+    return ch.contentType.replace('-', ' ');
+  }
+
+  function getChapterPreview(order: number): string | null {
+    return chapters.find((c) => c.order === order)?.preview ?? null;
+  }
+
   function handleConfirmAll() {
-    const confirmed = books.map((b) => ({ ...b, confirmed: true }));
+    const confirmed = books.map((b) => {
+      const nonStoryOrders: number[] = [];
+      for (let o = b.chapterStart; o <= b.chapterEnd; o++) {
+        const ch = chapters.find((c) => c.order === o);
+        if (ch?.contentType && ch.contentType !== 'story' && !b.excludedChapters.includes(o)) {
+          nonStoryOrders.push(o);
+        }
+      }
+      return {
+        ...b,
+        confirmed: true,
+        excludedChapters: [...b.excludedChapters, ...nonStoryOrders],
+      };
+    });
     setBooks(confirmed);
     onSave({ ...series, books: confirmed, unassignedChapters: unassigned.map((ch) => ch.order) });
   }
@@ -151,6 +180,14 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
                   className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-stone-50 dark:hover:bg-zinc-800/50 transition-colors"
                   onClick={() => setExpandedBook(isExpanded ? null : book.index)}
                 >
+                  <input
+                    type="checkbox"
+                    checked={!book.excluded}
+                    onChange={(e) => { e.stopPropagation(); handleUpdateBook(book.index, { excluded: !book.excluded }); }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="rounded border-stone-300 dark:border-zinc-600 text-amber-500 focus:ring-amber-500/30 flex-shrink-0"
+                    title={book.excluded ? 'Include this book' : 'Exclude this book'}
+                  />
                   <svg
                     className={`w-3 h-3 text-stone-400 dark:text-zinc-500 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
                     viewBox="0 0 6 10" fill="currentColor"
@@ -169,14 +206,14 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
                       />
                     ) : (
                       <p
-                        className="text-sm font-medium text-stone-900 dark:text-zinc-100 truncate"
+                        className={`text-sm font-medium truncate ${book.excluded ? 'text-stone-300 dark:text-zinc-600 line-through' : 'text-stone-900 dark:text-zinc-100'}`}
                         onDoubleClick={(e) => { e.stopPropagation(); setEditingTitle(book.index); }}
                         title="Double-click to rename"
                       >
                         {book.title}
                       </p>
                     )}
-                    <p className="text-xs text-stone-400 dark:text-zinc-500 mt-0.5">
+                    <p className={`text-xs mt-0.5 ${book.excluded ? 'text-stone-300 dark:text-zinc-700' : 'text-stone-400 dark:text-zinc-500'}`}>
                       {getChapterTitle(book.chapterStart)} &rarr; {getChapterTitle(book.chapterEnd)}
                       <span className="ml-2">&middot; {chapterCount} ch.</span>
                     </p>
@@ -193,17 +230,31 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
                       {Array.from({ length: book.chapterEnd - book.chapterStart + 1 }, (_, j) => {
                         const order = book.chapterStart + j;
                         const isExcluded = book.excludedChapters.includes(order);
+                        const typeLabel = getContentTypeLabel(order);
+                        const preview = getChapterPreview(order);
                         return (
-                          <label key={order} className="flex items-center gap-2 text-xs cursor-pointer group">
+                          <label key={order} className="flex items-start gap-2 text-xs cursor-pointer group">
                             <input
                               type="checkbox"
                               checked={!isExcluded}
                               onChange={() => handleToggleExcluded(book.index, order)}
-                              className="rounded border-stone-300 dark:border-zinc-600 text-amber-500 focus:ring-amber-500/30"
+                              className="rounded border-stone-300 dark:border-zinc-600 text-amber-500 focus:ring-amber-500/30 mt-0.5"
                             />
-                            <span className={`truncate ${isExcluded ? 'text-stone-300 dark:text-zinc-600 line-through' : 'text-stone-600 dark:text-zinc-400'}`}>
-                              {getChapterTitle(order)}
-                            </span>
+                            <div className="flex-1 min-w-0">
+                              <span className={`truncate block ${isExcluded ? 'text-stone-300 dark:text-zinc-600 line-through' : typeLabel ? 'text-stone-400 dark:text-zinc-500 italic' : 'text-stone-600 dark:text-zinc-400'}`}>
+                                {getChapterTitle(order)}
+                                {typeLabel && (
+                                  <span className="ml-1.5 text-[10px] text-stone-300 dark:text-zinc-600 font-medium uppercase tracking-wider">
+                                    {typeLabel}
+                                  </span>
+                                )}
+                              </span>
+                              {preview && /^Part \d+$/.test(getChapterTitle(order)) && (
+                                <span className="text-[11px] text-stone-400 dark:text-zinc-500 truncate block">
+                                  {preview}
+                                </span>
+                              )}
+                            </div>
                           </label>
                         );
                       })}
