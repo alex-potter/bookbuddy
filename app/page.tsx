@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parseEpub } from '@/lib/epub-parser';
-import type { AnalysisResult, BookBuddyExport, BookFilter, BookMeta, Character, MapState, NarrativeArc, ParentArc, ParsedEbook, PinUpdates, QueueJob, SavedBookEntry, SeriesDefinition, Snapshot, StoredBookState } from '@/types';
+import type { AnalysisResult, BookBuddyExport, BookFilter, BookMeta, ChapterEvent, Character, MapState, NarrativeArc, ParentArc, ParsedEbook, PinUpdates, QueueJob, SavedBookEntry, SeriesDefinition, Snapshot, StoredBookState } from '@/types';
 import CalibreLibrary from '@/components/CalibreLibrary';
 import CharacterCard from '@/components/CharacterCard';
 import ChapterSelector from '@/components/ChapterSelector';
@@ -61,9 +61,9 @@ function bestSnapshot(snapshots: Snapshot[], targetIndex: number): Snapshot | nu
 }
 
 /** Add/replace a snapshot for this index */
-function upsertSnapshot(snapshots: Snapshot[], index: number, result: AnalysisResult, model?: string, appVersion?: string): Snapshot[] {
+function upsertSnapshot(snapshots: Snapshot[], index: number, result: AnalysisResult, model?: string, appVersion?: string, events?: ChapterEvent[]): Snapshot[] {
   const without = snapshots.filter((s) => s.index !== index);
-  return [...without, { index, result, ...(model ? { model } : {}), ...(appVersion ? { appVersion } : {}) }];
+  return [...without, { index, result, ...(model ? { model } : {}), ...(appVersion ? { appVersion } : {}), ...(events?.length ? { events } : {}) }];
 }
 
 const IS_MOBILE = process.env.NEXT_PUBLIC_MOBILE === 'true';
@@ -100,7 +100,7 @@ async function analyzeChapter(
   chapter: { title: string; text: string },
   previousResult: AnalysisResult | null,
   allChapterTitles?: string[],
-): Promise<{ result: AnalysisResult; model: string; rateLimitWaitMs?: number }> {
+): Promise<{ result: AnalysisResult; model: string; rateLimitWaitMs?: number; events?: ChapterEvent[] }> {
   if (IS_MOBILE) {
     const { analyzeChapterClient } = await import('@/lib/ai-client');
     const result = await analyzeChapterClient(bookTitle, bookAuthor, chapter, previousResult);
@@ -131,10 +131,10 @@ async function analyzeChapter(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  const data = await res.json() as AnalysisResult & { _model?: string; _rateLimitWaitMs?: number };
+  const data = await res.json() as AnalysisResult & { _model?: string; _rateLimitWaitMs?: number; _events?: ChapterEvent[] };
   if (!res.ok) throw new Error((data as unknown as { error?: string }).error ?? 'Analysis failed.');
-  const { _model, _rateLimitWaitMs, ...result } = data;
-  return { result: result as AnalysisResult, model: _model ?? 'unknown', rateLimitWaitMs: _rateLimitWaitMs };
+  const { _model, _rateLimitWaitMs, _events, ...result } = data;
+  return { result: result as AnalysisResult, model: _model ?? 'unknown', rateLimitWaitMs: _rateLimitWaitMs, events: _events };
 }
 
 async function reconcileResult(
@@ -926,11 +926,11 @@ export default function Home() {
             }
           }
 
-          const { result: chResult, model: chModel } = await analyzeChapter(title, author, { title: ch.title, text: ch.text }, accumulated, chapters.map((c) => c.title));
+          const { result: chResult, model: chModel, events: chEvents } = await analyzeChapter(title, author, { title: ch.title, text: ch.text }, accumulated, chapters.map((c) => c.title));
           accumulated = chResult;
           recentText += `\n=== ${ch.title} ===\n${ch.text}`;
           if (recentText.length > MAX_RECENT_TEXT) recentText = recentText.slice(-MAX_RECENT_TEXT);
-          snapshots = upsertSnapshot(snapshots, i, accumulated, chModel, APP_VERSION);
+          snapshots = upsertSnapshot(snapshots, i, accumulated, chModel, APP_VERSION, chEvents);
           latestStored = { ...latestStored, lastAnalyzedIndex: i, result: accumulated, snapshots };
           persistState(title, author, latestStored);
 
