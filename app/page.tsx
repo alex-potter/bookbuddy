@@ -574,10 +574,10 @@ export default function Home() {
         }
       }
 
-      // Fallback: use first line of plain text as title
+      // Fallback: use first line of plain text only if it looks title-like (short, no sentence punctuation)
       if (!newTitle) {
         const firstLine = entry.text.split('\n').find((l) => l.trim().length > 0)?.trim();
-        if (firstLine && firstLine.length < 100) {
+        if (firstLine && firstLine.length < 60 && !/[.!?,;]/.test(firstLine)) {
           newTitle = firstLine;
         }
       }
