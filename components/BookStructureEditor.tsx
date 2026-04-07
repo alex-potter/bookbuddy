@@ -78,13 +78,13 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
   }
 
   function handleSplitBook(bookIndex: number, splitAtOrder: number) {
-    let newBookIndex: number | null = null;
+    let originalRange: { start: number; end: number } | null = null;
     setBooks((prev) => {
       const book = prev.find((b) => b.index === bookIndex);
       if (!book || splitAtOrder <= book.chapterStart || splitAtOrder > book.chapterEnd) return prev;
 
+      originalRange = { start: book.chapterStart, end: book.chapterEnd };
       const maxIdx = Math.max(...prev.map((b) => b.index));
-      newBookIndex = maxIdx + 1;
       const book1: BookDefinition = {
         ...book,
         chapterEnd: splitAtOrder - 1,
@@ -93,8 +93,8 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
         arcGroupingHash: undefined,
       };
       const book2: BookDefinition = {
-        index: newBookIndex,
-        title: `Book ${newBookIndex + 1}`,
+        index: maxIdx + 1,
+        title: `Book ${maxIdx + 2}`,
         chapterStart: splitAtOrder,
         chapterEnd: book.chapterEnd,
         excludedChapters: book.excludedChapters.filter((o) => o >= splitAtOrder),
@@ -102,8 +102,8 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
       };
       return [...prev.filter((b) => b.index !== bookIndex), book1, book2].sort((a, b) => a.chapterStart - b.chapterStart);
     });
-    if (newBookIndex !== null) {
-      triggerReextract([bookIndex, newBookIndex]);
+    if (originalRange) {
+      triggerReextract([originalRange]);
     }
   }
 
@@ -142,6 +142,7 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
   }
 
   function handleExpandEnd(bookIndex: number) {
+    let affectedRange: { start: number; end: number } | null = null;
     setBooks((prev) => {
       const sorted = [...prev].sort((a, b) => a.chapterStart - b.chapterStart);
       const idx = sorted.findIndex((b) => b.index === bookIndex);
@@ -157,6 +158,7 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
       if (nextBook && newEnd >= nextBook.chapterStart) {
         // Steal from next book's start
         if (nextBook.chapterStart >= nextBook.chapterEnd) return prev; // next book would become empty
+        affectedRange = { start: book.chapterStart, end: newEnd };
         return prev.map((b) => {
           if (b.index === bookIndex) return { ...b, chapterEnd: newEnd, parentArcs: undefined, arcGroupingHash: undefined };
           if (b.index === nextBook.index) return { ...b, chapterStart: newEnd + 1, excludedChapters: b.excludedChapters.filter((o) => o > newEnd), parentArcs: undefined, arcGroupingHash: undefined };
@@ -164,15 +166,18 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
         });
       }
       // Absorb from unassigned
+      affectedRange = { start: book.chapterStart, end: newEnd };
       return prev.map((b) => b.index === bookIndex ? { ...b, chapterEnd: newEnd, parentArcs: undefined, arcGroupingHash: undefined } : b);
     });
-    triggerReextract([bookIndex]);
+    if (affectedRange) triggerReextract([affectedRange]);
   }
 
   function handleShrinkEnd(bookIndex: number) {
+    let affectedRange: { start: number; end: number } | null = null;
     setBooks((prev) => {
       const book = prev.find((b) => b.index === bookIndex);
       if (!book || book.chapterStart >= book.chapterEnd) return prev; // can't shrink to 0
+      affectedRange = { start: book.chapterStart, end: book.chapterEnd - 1 };
       const released = book.chapterEnd;
       return prev.map((b) => b.index === bookIndex ? {
         ...b,
@@ -182,10 +187,11 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
         arcGroupingHash: undefined,
       } : b);
     });
-    triggerReextract([bookIndex]);
+    if (affectedRange) triggerReextract([affectedRange]);
   }
 
   function handleExpandStart(bookIndex: number) {
+    let affectedRange: { start: number; end: number } | null = null;
     setBooks((prev) => {
       const sorted = [...prev].sort((a, b) => a.chapterStart - b.chapterStart);
       const idx = sorted.findIndex((b) => b.index === bookIndex);
@@ -200,21 +206,25 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
       if (prevBook && newStart <= prevBook.chapterEnd) {
         // Steal from previous book's end
         if (prevBook.chapterStart >= prevBook.chapterEnd) return prev;
+        affectedRange = { start: newStart, end: book.chapterEnd };
         return prev.map((b) => {
           if (b.index === bookIndex) return { ...b, chapterStart: newStart, parentArcs: undefined, arcGroupingHash: undefined };
           if (b.index === prevBook.index) return { ...b, chapterEnd: newStart - 1, excludedChapters: b.excludedChapters.filter((o) => o < newStart), parentArcs: undefined, arcGroupingHash: undefined };
           return b;
         });
       }
+      affectedRange = { start: newStart, end: book.chapterEnd };
       return prev.map((b) => b.index === bookIndex ? { ...b, chapterStart: newStart, parentArcs: undefined, arcGroupingHash: undefined } : b);
     });
-    triggerReextract([bookIndex]);
+    if (affectedRange) triggerReextract([affectedRange]);
   }
 
   function handleShrinkStart(bookIndex: number) {
+    let affectedRange: { start: number; end: number } | null = null;
     setBooks((prev) => {
       const book = prev.find((b) => b.index === bookIndex);
       if (!book || book.chapterStart >= book.chapterEnd) return prev;
+      affectedRange = { start: book.chapterStart + 1, end: book.chapterEnd };
       const released = book.chapterStart;
       return prev.map((b) => b.index === bookIndex ? {
         ...b,
@@ -224,16 +234,14 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
         arcGroupingHash: undefined,
       } : b);
     });
-    triggerReextract([bookIndex]);
+    if (affectedRange) triggerReextract([affectedRange]);
   }
 
-  async function triggerReextract(affectedBookIndices: number[]) {
+  async function triggerReextract(ranges: Array<{ start: number; end: number }>) {
     if (!onReextract) return;
     const partNOrders: number[] = [];
-    for (const bi of affectedBookIndices) {
-      const book = books.find((b) => b.index === bi);
-      if (!book) continue;
-      for (let o = book.chapterStart; o <= book.chapterEnd; o++) {
+    for (const range of ranges) {
+      for (let o = range.start; o <= range.end; o++) {
         const title = localChapters.find((ch) => ch.order === o)?.title ?? '';
         if (/^Part \d+$/.test(title)) partNOrders.push(o);
       }
