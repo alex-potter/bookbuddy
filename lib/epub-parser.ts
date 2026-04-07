@@ -67,7 +67,8 @@ export async function parseEpub(file: File): Promise<ParsedEbook> {
     // Title resolution priority:
     // 1. NCX/nav label (most reliable — editor-provided)
     // 2. First h1-h3 heading in the HTML
-    // 3. "Part N" fallback
+    // 3. Extended heading scan (h4-h6, bold paragraphs, title-classed elements)
+    // 4. "Part N" fallback
     const basename = href.split('/').pop()!;
     const ncxTitle = ncxTitleMap.get(basename) ?? ncxTitleMap.get(href);
     let chapterTitle: string;
@@ -76,8 +77,15 @@ export async function parseEpub(file: File): Promise<ParsedEbook> {
     } else {
       const headingMatch = html.match(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/i);
       const rawTitle = headingMatch?.[1] ? extractText(headingMatch[1]) : '';
-      chapterTitle = rawTitle.trim() || `Part ${order + 1}`;
+      if (rawTitle.trim()) {
+        chapterTitle = rawTitle.trim();
+      } else {
+        const extended = extractExtendedHeading(html);
+        chapterTitle = extended || `Part ${order + 1}`;
+      }
     }
+
+    const preview = extractPreview(text);
 
     // Store the resolved href so we can map it during omnibus detection
     const contentType = detectContentType(chapterTitle, text.trim().length);
@@ -87,9 +95,11 @@ export async function parseEpub(file: File): Promise<ParsedEbook> {
       title: chapterTitle,
       text: text.trim(),
       order: order++,
+      preview,
       contentType,
       _href: candidates[0],
-    } as EbookChapter & { _href: string });
+      _htmlHead: html.slice(0, 1024),
+    } as EbookChapter & { _href: string; _htmlHead: string });
   }
 
   if (chapters.length === 0) {
@@ -122,7 +132,7 @@ export async function parseEpub(file: File): Promise<ParsedEbook> {
     }
   }
 
-  // Clean up the internal _href field
+  // Clean up the internal _href field (_htmlHead is kept for page.tsx to read during saveChapters)
   for (const ch of chapters) delete (ch as unknown as Record<string, unknown>)._href;
 
   return { title, author, chapters, books: books.length > 1 ? books : undefined };
@@ -372,4 +382,45 @@ function extractText(html: string): string {
     .replace(/[ \t]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+/** Scan the first portion of HTML for heading-like elements beyond h1-h3.
+ *  Looks for h4-h6, bold/strong-only paragraphs, and elements with title-like classes. */
+function extractExtendedHeading(html: string): string {
+  const head = html.slice(0, 2000);
+
+  // Try h4-h6
+  const hMatch = head.match(/<h[4-6][^>]*>([\s\S]*?)<\/h[4-6]>/i);
+  if (hMatch) {
+    const t = extractText(hMatch[1]).trim();
+    if (t.length > 0 && t.length < 100) return t;
+  }
+
+  // Look for a <p> or <div> whose only meaningful child is <b>, <strong>, or <em>
+  const boldParaRe = /<(?:p|div)[^>]*>\s*<(?:b|strong|em)>([\s\S]*?)<\/(?:b|strong|em)>\s*<\/(?:p|div)>/gi;
+  for (const m of head.matchAll(boldParaRe)) {
+    const t = extractText(m[1]).trim();
+    if (t.length > 0 && t.length < 100) return t;
+  }
+
+  // Look for elements with title-like class names
+  const classRe = /<(?:p|div|span)[^>]+class="[^"]*(?:title|heading|chapter|ct)[^"]*"[^>]*>([\s\S]*?)<\/(?:p|div|span)>/gi;
+  for (const m of head.matchAll(classRe)) {
+    const t = extractText(m[1]).trim();
+    if (t.length > 0 && t.length < 100 && !isGenericTitle(t)) return t;
+  }
+
+  return '';
+}
+
+/** Extract a short preview from the chapter's plain text — first non-empty line, capped at 80 chars. */
+function extractPreview(text: string): string {
+  const lines = text.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.length >= 10) {
+      return trimmed.length <= 80 ? trimmed : trimmed.slice(0, 77) + '...';
+    }
+  }
+  return '';
 }
