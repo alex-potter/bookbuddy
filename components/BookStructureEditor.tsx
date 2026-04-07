@@ -21,6 +21,7 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
   const [books, setBooks] = useState<BookDefinition[]>(() => [...series.books].sort((a, b) => a.index - b.index));
   const [editingTitle, setEditingTitle] = useState<number | null>(null);
   const [expandedBook, setExpandedBook] = useState<number | null>(null);
+  const [splitMode, setSplitMode] = useState<number | null>(null); // bookIndex being split
 
   const assignedOrders = new Set<number>();
   for (const b of books) {
@@ -89,7 +90,7 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
       };
       const book2: BookDefinition = {
         index: maxIdx + 1,
-        title: `${book.title} (Part 2)`,
+        title: `Book ${maxIdx + 2}`,
         chapterStart: splitAtOrder,
         chapterEnd: book.chapterEnd,
         excludedChapters: book.excludedChapters.filter((o) => o >= splitAtOrder),
@@ -226,20 +227,44 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
                 {/* Expanded: Chapter List + Actions */}
                 {isExpanded && (
                   <div className="border-t border-stone-200 dark:border-zinc-800 px-4 py-3 space-y-2">
+                    {splitMode === book.index && (
+                      <p className="text-xs text-amber-500 font-medium pb-1">
+                        Tap where the next book starts
+                      </p>
+                    )}
                     <div className="max-h-40 overflow-y-auto space-y-1">
                       {Array.from({ length: book.chapterEnd - book.chapterStart + 1 }, (_, j) => {
                         const order = book.chapterStart + j;
                         const isExcluded = book.excludedChapters.includes(order);
                         const typeLabel = getContentTypeLabel(order);
                         const preview = getChapterPreview(order);
+                        const isSplittable = splitMode === book.index && order > book.chapterStart;
                         return (
-                          <label key={order} className="flex items-start gap-2 text-xs cursor-pointer group">
-                            <input
-                              type="checkbox"
-                              checked={!isExcluded}
-                              onChange={() => handleToggleExcluded(book.index, order)}
-                              className="rounded border-stone-300 dark:border-zinc-600 text-amber-500 focus:ring-amber-500/30 mt-0.5"
-                            />
+                          <label
+                            key={order}
+                            className={`flex items-start gap-2 text-xs cursor-pointer group ${isSplittable ? 'hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded px-1 -mx-1 py-0.5' : ''}`}
+                            onClick={(e) => {
+                              if (isSplittable) {
+                                e.preventDefault();
+                                handleSplitBook(book.index, order);
+                                setSplitMode(null);
+                              }
+                            }}
+                          >
+                            {splitMode !== book.index && (
+                              <input
+                                type="checkbox"
+                                checked={!isExcluded}
+                                onChange={() => handleToggleExcluded(book.index, order)}
+                                className="rounded border-stone-300 dark:border-zinc-600 text-amber-500 focus:ring-amber-500/30 mt-0.5"
+                              />
+                            )}
+                            {isSplittable && (
+                              <span className="text-amber-400 mt-0.5 flex-shrink-0">&#x2192;</span>
+                            )}
+                            {splitMode === book.index && order === book.chapterStart && (
+                              <span className="text-stone-300 dark:text-zinc-600 mt-0.5 flex-shrink-0">&middot;</span>
+                            )}
                             <div className="flex-1 min-w-0">
                               <span className={`truncate block ${isExcluded ? 'text-stone-300 dark:text-zinc-600 line-through' : typeLabel ? 'text-stone-400 dark:text-zinc-500 italic' : 'text-stone-600 dark:text-zinc-400'}`}>
                                 {getChapterTitle(order)}
@@ -262,10 +287,18 @@ export default function BookStructureEditor({ series, chapters, onSave, onClose,
 
                     <div className="flex gap-2 pt-2 border-t border-stone-100 dark:border-zinc-800">
                       <button
-                        onClick={(e) => { e.stopPropagation(); const mid = Math.ceil((book.chapterStart + book.chapterEnd) / 2); handleSplitBook(book.index, mid); }}
-                        className="text-xs text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300 transition-colors"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (splitMode === book.index) {
+                            setSplitMode(null);
+                          } else {
+                            setSplitMode(book.index);
+                            setExpandedBook(book.index);
+                          }
+                        }}
+                        className={`text-xs transition-colors ${splitMode === book.index ? 'text-amber-500 font-medium' : 'text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300'}`}
                       >
-                        Split
+                        {splitMode === book.index ? 'Cancel split' : 'Split'}
                       </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); handleMergeWithNext(book.index); }}
