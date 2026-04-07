@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parseEpub } from '@/lib/epub-parser';
-import type { AnalysisResult, BookBuddyExport, BookFilter, BookMeta, ChapterEvent, Character, MapState, NarrativeArc, ParentArc, ParsedEbook, PinUpdates, QueueJob, SavedBookEntry, SeriesDefinition, Snapshot, StoredBookState } from '@/types';
+import type { AnalysisResult, BookBuddyExport, BookFilter, BookMeta, ChapterEvent, Character, MapState, NarrativeArc, ParentArc, ParsedEbook, PinUpdates, QueueJob, ReadingPosition, SavedBookEntry, SeriesDefinition, Snapshot, StoredBookState } from '@/types';
 import CalibreLibrary from '@/components/CalibreLibrary';
 import CharacterCard from '@/components/CharacterCard';
 import ChapterSelector from '@/components/ChapterSelector';
@@ -498,6 +498,17 @@ export default function Home() {
         setViewingSnapshotIndex(snap.index);
       }
     }
+  }
+
+  function handleSetReadingPosition(position: ReadingPosition) {
+    if (!book || !storedRef.current) return;
+    const stored = storedRef.current;
+    const updated: StoredBookState = { ...stored, readingPosition: position, readingBookmark: position.chapterIndex };
+    persistState(book.title, book.author, updated);
+    storedRef.current = updated;
+    setCurrentIndex(position.chapterIndex);
+    const snap = bestSnapshot(updated.snapshots, position.chapterIndex);
+    if (snap) setResult(snap.result);
   }
 
   function handleUpdateParentArcs(parentArcs: ParentArc[]) {
@@ -1697,6 +1708,10 @@ export default function Home() {
   // When viewing beyond the bookmark (spoiler dismissed), spoilerDismissedIndex takes over.
   const currentChapterIndex = spoilerDismissedIndex ?? effectiveBookmark;
 
+  const readingPosition: ReadingPosition | undefined = stored?.readingPosition ?? (
+    stored?.readingBookmark != null ? { chapterIndex: stored.readingBookmark } : undefined
+  );
+
   const isBeyondBookmark = stored?.readingBookmark != null && currentIndex > effectiveBookmark;
   const showSpoilerBanner = isBeyondBookmark && spoilerDismissedIndex !== currentIndex;
 
@@ -1733,6 +1748,8 @@ export default function Home() {
           currentIndex={viewingSnapshotIndex ?? stored?.lastAnalyzedIndex ?? 0}
           currentResult={result ?? undefined}
           onResultEdit={applyResultEdit}
+          readingPosition={readingPosition}
+          onSetReadingPosition={handleSetReadingPosition}
           onClose={() => setShowTimeline(false)}
           onJumpToChapter={(i) => { handleChapterChange(i); setShowTimeline(false); }}
         />

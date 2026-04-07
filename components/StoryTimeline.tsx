@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { AnalysisResult, ChapterEvent, PinUpdates, Snapshot } from '@/types';
+import type { AnalysisResult, ChapterEvent, PinUpdates, ReadingPosition, Snapshot } from '@/types';
 import type { SnapshotTransform } from '@/lib/propagate-edit';
 import CharacterModal from './CharacterModal';
 import NarrativeArcModal from './NarrativeArcModal';
@@ -13,11 +13,13 @@ interface StoryTimelineProps {
   currentIndex: number;
   currentResult?: AnalysisResult;
   onResultEdit?: (result: AnalysisResult, propagate?: SnapshotTransform, pinUpdates?: PinUpdates) => void;
+  readingPosition?: ReadingPosition;
+  onSetReadingPosition?: (position: ReadingPosition) => void;
   onClose: () => void;
   onJumpToChapter: (index: number) => void;
 }
 
-export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, currentResult, onResultEdit, onClose, onJumpToChapter }: StoryTimelineProps) {
+export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, currentResult, onResultEdit, readingPosition, onSetReadingPosition, onClose, onJumpToChapter }: StoryTimelineProps) {
   const currentRef = useRef<HTMLDivElement>(null);
   const [selectedCharacter, setSelectedCharacter] = useState<string | null>(null);
   const [selectedArc, setSelectedArc] = useState<string | null>(null);
@@ -27,6 +29,10 @@ export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, 
   const entries = snapshots
     .filter((s) => s.result.summary && s.index <= currentIndex)
     .sort((a, b) => a.index - b.index);
+
+  const visibleEntries = readingPosition
+    ? entries.filter((s) => s.index <= readingPosition.chapterIndex)
+    : entries;
 
   // Close on Escape
   useEffect(() => {
@@ -102,7 +108,7 @@ export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, 
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6">
-          {entries.length === 0 ? (
+          {visibleEntries.length === 0 ? (
             <p className="text-sm text-stone-400 dark:text-zinc-500 text-center py-8">No chapter summaries yet</p>
           ) : (
             <div className="relative">
@@ -110,9 +116,9 @@ export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, 
               <div className="absolute left-[9px] top-3 bottom-3 w-px bg-stone-200 dark:bg-zinc-700" />
 
               <div className="space-y-5">
-                {entries.map((snap, entryIdx) => {
+                {visibleEntries.map((snap, entryIdx) => {
                   const isCurrent = snap.index === currentIndex;
-                  const prevResult = entries[entryIdx - 1]?.result;
+                  const prevResult = visibleEntries[entryIdx - 1]?.result;
                   const events: Array<{ summary: string; characters: string[]; locations: string[]; arcNames: string[] }> =
                     snap.events?.length
                       ? snap.events.map((ev) => ({
@@ -122,6 +128,16 @@ export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, 
                           arcNames: (ev.arcSnapshots ?? []).filter((a) => a.status === 'active').map((a) => a.name),
                         }))
                       : [buildLegacyEvent(snap, prevResult)];
+
+                  // Filter events by reading position within the current chapter
+                  const visibleEvents = (readingPosition && snap.index === readingPosition.chapterIndex && readingPosition.progress != null
+                    ? events.map((ev, i) => ({ ...ev, _origIdx: i })).filter(({ _origIdx }) => {
+                        const evProgress = snap.events?.[_origIdx]?.chapterProgress ?? 0.5;
+                        return evProgress <= readingPosition.progress!;
+                      })
+                    : events.map((ev, i) => ({ ...ev, _origIdx: i }))
+                  );
+                  if (visibleEvents.length === 0) return null;
 
                   return (
                     <div key={snap.index} ref={isCurrent ? currentRef : undefined}>
@@ -138,13 +154,13 @@ export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, 
                       </div>
 
                       {/* Event cards */}
-                      {events.map((ev, evIdx) => {
-                        const isLastEvent = isCurrent && evIdx === events.length - 1;
+                      {visibleEvents.map((ev, evIdx) => {
+                        const isLastVisible = snap.index === visibleEntries[visibleEntries.length - 1]?.index && evIdx === visibleEvents.length - 1;
                         return (
                           <div
                             key={evIdx}
                             className={`relative pl-8 cursor-pointer group transition-colors rounded-lg p-3 -ml-3 ${
-                              isLastEvent
+                              isLastVisible
                                 ? 'bg-amber-50 dark:bg-amber-950/30 ring-1 ring-amber-300 dark:ring-amber-700'
                                 : 'hover:bg-stone-50 dark:hover:bg-zinc-800/50'
                             }`}
@@ -153,7 +169,7 @@ export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, 
                             {/* Dot marker */}
                             <div
                               className={`absolute left-[5px] top-[18px] w-[10px] h-[10px] rounded-full border-2 ${
-                                isLastEvent
+                                isLastVisible
                                   ? 'bg-amber-400 border-amber-500 dark:bg-amber-500 dark:border-amber-400'
                                   : 'bg-white dark:bg-zinc-900 border-stone-300 dark:border-zinc-600 group-hover:border-stone-400 dark:group-hover:border-zinc-500'
                               }`}
@@ -202,6 +218,21 @@ export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, 
                                   </button>
                                 ))}
                               </div>
+                            )}
+                            {onSetReadingPosition && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const progress = snap.events?.[ev._origIdx]?.chapterProgress;
+                                  onSetReadingPosition({ chapterIndex: snap.index, progress });
+                                }}
+                                className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-stone-400 dark:text-zinc-500 hover:text-stone-600 dark:hover:text-zinc-300"
+                                title="Set reading position here"
+                              >
+                                <svg width="12" height="16" viewBox="0 0 10 14" fill="none" stroke="currentColor" strokeWidth="1.5" className="flex-shrink-0">
+                                  <path d="M1 1h8v12l-4-3-4 3V1z" />
+                                </svg>
+                              </button>
                             )}
                           </div>
                         );
