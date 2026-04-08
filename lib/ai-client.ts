@@ -368,6 +368,18 @@ export async function chatWithBook(
       const data = await res.json();
       return data.choices?.[0]?.message?.content ?? '';
     }
+    case 'local': {
+      const { ensureModelLoaded, chatCompletion, findModelEntry } = await import('./local-llm');
+      if (!settings.localModel) throw new Error('No local model selected. Open Settings to download one.');
+      const entry = findModelEntry(settings.localModel);
+      const ctxLen = entry?.contextLength ?? 8192;
+      await ensureModelLoaded(settings.localModel, ctxLen);
+      const chatMessages = [
+        { role: 'system' as const, content: systemPrompt },
+        ...messages,
+      ];
+      return chatCompletion(chatMessages);
+    }
     default: { // ollama
       if (!settings.ollamaUrl) throw new Error('No Ollama URL. Open Settings to configure.');
       const url = settings.ollamaUrl.replace(/\/$/, '') + '/chat/completions';
