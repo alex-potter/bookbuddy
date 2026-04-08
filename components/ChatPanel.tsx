@@ -96,6 +96,16 @@ export default function ChatPanel({
     inputRef.current?.focus();
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (isLocalProvider) {
+        import('@/lib/local-llm').then(({ unloadModel }) => {
+          unloadModel().catch(() => {});
+        });
+      }
+    };
+  }, [isLocalProvider]);
+
   async function handleSend(text?: string) {
     const content = (text ?? input).trim();
     if (!content || loading) return;
