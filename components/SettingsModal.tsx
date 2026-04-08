@@ -2,6 +2,10 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { loadAiSettings, saveAiSettings, testConnection, diagnoseOllamaConnection, type AiSettings } from '@/lib/ai-client';
+import type { ModelInfo, DownloadProgress } from '@/lib/llama-plugin';
+import type { ModelEntry } from '@/lib/local-llm';
+
+const IS_MOBILE = process.env.NEXT_PUBLIC_MOBILE === 'true';
 
 interface Props {
   onClose: () => void;
@@ -26,6 +30,13 @@ export default function SettingsModal({ onClose }: Props) {
   const [detectingCtx, setDetectingCtx] = useState(false);
   const [detectError, setDetectError] = useState(false);
   const detectDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [localModels, setLocalModels] = useState<ModelInfo[]>([]);
+  const [availableModels, setAvailableModels] = useState<ModelEntry[]>([]);
+  const [downloading, setDownloading] = useState<string | null>(null); // fileName
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
+  const [freeSpace, setFreeSpace] = useState<number | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
 
   function set<K extends keyof AiSettings>(key: K, value: AiSettings[K]) {
     setSettings((prev) => ({ ...prev, [key]: value }));
@@ -108,6 +119,24 @@ export default function SettingsModal({ onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (settings.provider !== 'local') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { listModels, getFreeDiskSpace, AVAILABLE_MODELS } = await import('@/lib/local-llm');
+        const models = await listModels();
+        const space = await getFreeDiskSpace();
+        if (!cancelled) {
+          setLocalModels(models);
+          setAvailableModels(AVAILABLE_MODELS);
+          setFreeSpace(space);
+        }
+      } catch { /* plugin not available in web */ }
+    })();
+    return () => { cancelled = true; };
+  }, [settings.provider]);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70" onClick={onClose}>
       <div
@@ -122,12 +151,13 @@ export default function SettingsModal({ onClose }: Props) {
         {/* Provider toggle */}
         <div>
           <label className="block text-xs font-medium text-stone-400 dark:text-zinc-500 mb-2">Provider</label>
-          <div className="grid grid-cols-2 gap-1 rounded-lg border border-stone-300 dark:border-zinc-700 p-1">
+          <div className={`grid gap-1 rounded-lg border border-stone-300 dark:border-zinc-700 p-1 ${IS_MOBILE ? 'grid-cols-3' : 'grid-cols-2'}`}>
             {([
               { value: 'ollama' as const, label: 'Ollama (local)' },
               { value: 'anthropic' as const, label: 'Anthropic' },
               { value: 'gemini' as const, label: 'Gemini (free)' },
               { value: 'openai-compatible' as const, label: settings.openaiCompatibleName || 'OpenAI-compat' },
+              ...(IS_MOBILE ? [{ value: 'local' as const, label: 'On-device (free)' }] : []),
             ] as const).map((opt) => (
               <button
                 key={opt.value}
@@ -448,7 +478,148 @@ export default function SettingsModal({ onClose }: Props) {
           </div>
         )}
 
+        {/* Local (on-device) config */}
+        {settings.provider === 'local' && (
+          <div className="space-y-3">
+            {freeSpace !== null && (
+              <p className="text-[10px] text-stone-400 dark:text-zinc-600">
+                Free space: {freeSpace > 1024 * 1024 * 1024
+                  ? `${(freeSpace / (1024 * 1024 * 1024)).toFixed(1)} GB`
+                  : `${(freeSpace / (1024 * 1024)).toFixed(0)} MB`}
+              </p>
+            )}
+
+            <div className="space-y-2">
+              {availableModels.map((entry) => {
+                const installed = localModels.find((m) => m.fileName === entry.fileName);
+                const isDownloading = downloading === entry.fileName;
+                const isSelected = settings.localModel === entry.fileName;
+
+                return (
+                  <div
+                    key={entry.id}
+                    className={`rounded-lg border p-3 transition-colors ${
+                      isSelected
+                        ? 'border-amber-500/50 bg-amber-500/10'
+                        : 'border-stone-300 dark:border-zinc-700'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-stone-800 dark:text-zinc-200">{entry.name}</p>
+                        <p className="text-[10px] text-stone-400 dark:text-zinc-500">
+                          {entry.sizeLabel} · {entry.description}
+                        </p>
+                      </div>
+                      <div className="flex gap-1.5 flex-shrink-0">
+                        {installed ? (
+                          <>
+                            {!isSelected && (
+                              <button
+                                onClick={() => set('localModel', entry.fileName)}
+                                className="px-2 py-1 text-[10px] rounded border border-stone-300 dark:border-zinc-700 text-stone-500 dark:text-zinc-400 hover:border-amber-500/50 hover:text-amber-400 transition-colors"
+                              >
+                                Select
+                              </button>
+                            )}
+                            {isSelected && (
+                              <span className="px-2 py-1 text-[10px] text-amber-400">Active</span>
+                            )}
+                            <button
+                              onClick={async () => {
+                                setLocalError(null);
+                                try {
+                                  const { deleteModel } = await import('@/lib/local-llm');
+                                  await deleteModel(entry.fileName);
+                                  setLocalModels((m) => m.filter((x) => x.fileName !== entry.fileName));
+                                  if (settings.localModel === entry.fileName) set('localModel', undefined as unknown as string);
+                                } catch (e) {
+                                  setLocalError(e instanceof Error ? e.message : 'Delete failed');
+                                }
+                              }}
+                              className="px-2 py-1 text-[10px] rounded border border-red-300 dark:border-red-800 text-red-400 hover:bg-red-500/10 transition-colors"
+                            >
+                              Delete
+                            </button>
+                          </>
+                        ) : isDownloading ? (
+                          <button
+                            onClick={async () => {
+                              const { cancelDownload } = await import('@/lib/local-llm');
+                              await cancelDownload();
+                              setDownloading(null);
+                              setDownloadProgress(null);
+                            }}
+                            className="px-2 py-1 text-[10px] rounded border border-red-300 dark:border-red-800 text-red-400 hover:bg-red-500/10 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        ) : (
+                          <button
+                            onClick={async () => {
+                              setLocalError(null);
+                              if (freeSpace !== null && freeSpace < entry.sizeBytes * 1.1) {
+                                setLocalError(`Not enough space. Need ${entry.sizeLabel}, have ${(freeSpace / (1024 * 1024 * 1024)).toFixed(1)} GB free.`);
+                                return;
+                              }
+                              setDownloading(entry.fileName);
+                              setDownloadProgress({ bytesDownloaded: 0, totalBytes: entry.sizeBytes });
+                              try {
+                                const { downloadModel } = await import('@/lib/local-llm');
+                                await downloadModel(entry, (p) => setDownloadProgress(p));
+                                const { listModels, getFreeDiskSpace } = await import('@/lib/local-llm');
+                                setLocalModels(await listModels());
+                                setFreeSpace(await getFreeDiskSpace());
+                                // Auto-select if first model
+                                if (!settings.localModel) set('localModel', entry.fileName);
+                              } catch (e) {
+                                setLocalError(e instanceof Error ? e.message : 'Download failed');
+                              } finally {
+                                setDownloading(null);
+                                setDownloadProgress(null);
+                              }
+                            }}
+                            className="px-2 py-1 text-[10px] rounded border border-stone-300 dark:border-zinc-700 text-stone-500 dark:text-zinc-400 hover:border-amber-500/50 hover:text-amber-400 transition-colors"
+                          >
+                            Download
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Download progress bar */}
+                    {isDownloading && downloadProgress && (
+                      <div className="mt-2">
+                        <div className="h-1.5 rounded-full bg-stone-200 dark:bg-zinc-700 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-amber-500 transition-all duration-300"
+                            style={{ width: `${Math.round((downloadProgress.bytesDownloaded / downloadProgress.totalBytes) * 100)}%` }}
+                          />
+                        </div>
+                        <p className="text-[10px] text-stone-400 dark:text-zinc-500 mt-1">
+                          {(downloadProgress.bytesDownloaded / (1024 * 1024)).toFixed(0)} / {(downloadProgress.totalBytes / (1024 * 1024)).toFixed(0)} MB
+                          ({Math.round((downloadProgress.bytesDownloaded / downloadProgress.totalBytes) * 100)}%)
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {localError && (
+              <p className="text-xs text-red-400 text-center">{localError}</p>
+            )}
+
+            <p className="text-[10px] text-stone-400 dark:text-zinc-600 text-center">
+              Chat only — book analysis requires a cloud provider.
+              <br />Models run entirely on your device. No data is sent anywhere.
+            </p>
+          </div>
+        )}
+
         {/* Test connection */}
+        {settings.provider !== 'local' && (
         <div>
           <button
             onClick={handleTest}
@@ -480,6 +651,7 @@ export default function SettingsModal({ onClose }: Props) {
             <p className="mt-1.5 text-xs text-red-400 text-center">✗ {testMsg}</p>
           )}
         </div>
+        )}
 
         <button
           onClick={handleSave}
