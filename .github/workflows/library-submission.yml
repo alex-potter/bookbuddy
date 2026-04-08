@@ -52,8 +52,8 @@ jobs:
           cd /tmp
           unzip -o submission.zip -d submission
 
-          # Find the .bookbuddy file
-          BOOKBUDDY_FILE=$(find submission -name '*.bookbuddy' -o -name '*.etbook' | head -1)
+          # Find the .bookbuddy file (use absolute path so later steps can read it)
+          BOOKBUDDY_FILE=$(find /tmp/submission -name '*.bookbuddy' -o -name '*.etbook' | head -1)
 
           if [ -z "$BOOKBUDDY_FILE" ]; then
             echo "error=no-bookbuddy" >> "$GITHUB_OUTPUT"
