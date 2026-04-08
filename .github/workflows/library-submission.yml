@@ -1,7 +1,7 @@
 name: Process Library Submission
 on:
   issues:
-    types: [opened]
+    types: [opened, reopened]
 
 permissions:
   contents: write
@@ -63,9 +63,9 @@ jobs:
           echo "bookbuddy_path=$BOOKBUDDY_FILE" >> "$GITHUB_OUTPUT"
 
           # Validate JSON structure with Node
-          node -e "
+          BOOKBUDDY_FILE_PATH="$BOOKBUDDY_FILE" node -e "
             const fs = require('fs');
-            const data = JSON.parse(fs.readFileSync('$BOOKBUDDY_FILE', 'utf8'));
+            const data = JSON.parse(fs.readFileSync(process.env.BOOKBUDDY_FILE_PATH, 'utf8'));
             const errors = [];
 
             if (!data.title || typeof data.title !== 'string') errors.push('missing or invalid field: title');
@@ -110,9 +110,10 @@ jobs:
       - name: Check for duplicate
         if: steps.validate.outputs.error == '' && steps.download.outputs.error == ''
         id: duplicate
+        env:
+          AUTHOR: ${{ steps.validate.outputs.author }}
+          TITLE: ${{ steps.validate.outputs.title }}
         run: |
-          AUTHOR="${{ steps.validate.outputs.author }}"
-          TITLE="${{ steps.validate.outputs.title }}"
           TARGET_PATH="books/${AUTHOR}/${TITLE} — ${AUTHOR}.bookbuddy"
 
           if [ -f "$TARGET_PATH" ]; then
@@ -145,7 +146,7 @@ jobs:
               .replace(/[^a-z0-9]+/g, '-')
               .replace(/^-|-$/g, '')
               .slice(0, 60);
-            const branchName = `library/${sanitized}`;
+            let branchName = `library/${sanitized}`;
 
             // Get the default branch SHA
             const { data: ref } = await github.rest.git.getRef({
@@ -155,13 +156,27 @@ jobs:
             });
             const baseSha = ref.object.sha;
 
-            // Create the branch
-            await github.rest.git.createRef({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: `refs/heads/${branchName}`,
-              sha: baseSha,
-            });
+            // Create the branch, handling collision by appending issue number
+            try {
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `refs/heads/${branchName}`,
+                sha: baseSha,
+              });
+            } catch (e) {
+              if (e.status === 422) {
+                branchName = `library/${sanitized}-${ISSUE_NUMBER}`;
+                await github.rest.git.createRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `refs/heads/${branchName}`,
+                  sha: baseSha,
+                });
+              } else {
+                throw e;
+              }
+            }
 
             // Read the .bookbuddy file and create it in the repo
             const content = fs.readFileSync(BOOKBUDDY_PATH);
@@ -202,11 +217,15 @@ jobs:
       - name: Comment on issue (success)
         if: steps.create-pr.outputs.pr_url
         uses: actions/github-script@v7
+        env:
+          IS_DUPLICATE: ${{ steps.duplicate.outputs.is_duplicate }}
+          PR_URL: ${{ steps.create-pr.outputs.pr_url }}
         with:
           script: |
-            const isDuplicate = '${{ steps.duplicate.outputs.is_duplicate }}' === 'true';
+            const { IS_DUPLICATE, PR_URL } = process.env;
+            const isDuplicate = IS_DUPLICATE === 'true';
             let body = `Your submission has been processed and a pull request has been created:\n\n`;
-            body += `${{ steps.create-pr.outputs.pr_url }}\n\n`;
+            body += `${PR_URL}\n\n`;
             if (isDuplicate) {
               body += `> **Note:** This book already exists in the library. The PR will update the existing file. A maintainer will review the changes.\n\n`;
             }
@@ -222,23 +241,25 @@ jobs:
       - name: Comment on issue (error)
         if: steps.download.outputs.error != '' || steps.validate.outputs.error != ''
         uses: actions/github-script@v7
+        env:
+          DOWNLOAD_ERROR: ${{ steps.download.outputs.error }}
+          VALIDATE_ERROR: ${{ steps.validate.outputs.error }}
+          VALIDATION_ERRORS: ${{ steps.validate.outputs.validation_errors }}
         with:
           script: |
-            const downloadError = '${{ steps.download.outputs.error }}';
-            const validateError = '${{ steps.validate.outputs.error }}';
-            const validationErrors = '${{ steps.validate.outputs.validation_errors }}';
+            const { DOWNLOAD_ERROR, VALIDATE_ERROR, VALIDATION_ERRORS } = process.env;
 
             let body = '';
-            if (downloadError === 'no-attachment') {
+            if (DOWNLOAD_ERROR === 'no-attachment') {
               body = `No \`.zip\` attachment was found on this issue.\n\nPlease edit this issue and attach your \`.bookbuddy\` ZIP file, then close and re-open the issue to retry.`;
-            } else if (downloadError === 'download-failed') {
+            } else if (DOWNLOAD_ERROR === 'download-failed') {
               body = `Failed to download the attached file. Please close and re-open the issue to retry.`;
-            } else if (validateError === 'no-bookbuddy') {
+            } else if (VALIDATE_ERROR === 'no-bookbuddy') {
               body = `The ZIP file did not contain a \`.bookbuddy\` or \`.etbook\` file. Please re-export from BookBuddy and try again.`;
-            } else if (validateError === 'invalid-json') {
+            } else if (VALIDATE_ERROR === 'invalid-json') {
               body = `The \`.bookbuddy\` file is not valid JSON. It may be corrupted. Please re-export from BookBuddy and try again.`;
-            } else if (validateError === 'validation-failed') {
-              body = `The \`.bookbuddy\` file failed validation:\n\n- ${validationErrors.split('; ').join('\n- ')}\n\nPlease re-export from BookBuddy and try again.`;
+            } else if (VALIDATE_ERROR === 'validation-failed') {
+              body = `The \`.bookbuddy\` file failed validation:\n\n- ${VALIDATION_ERRORS.split('; ').join('\n- ')}\n\nPlease re-export from BookBuddy and try again.`;
             }
 
             await github.rest.issues.createComment({
@@ -248,8 +269,7 @@ jobs:
               body,
             });
 
-            // Add 'invalid' label for validation errors
-            if (validateError) {
+            if (VALIDATE_ERROR) {
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
