@@ -30,6 +30,11 @@ import BookFilterSelector from '@/components/BookFilterSelector';
 import { useDerivedEntities } from '@/lib/use-derived-entities';
 import { buildInitialSeriesDefinition, migrateToSeriesDefinition, getActiveParentArcs, getStaleBooks, computeArcGroupingHash } from '@/lib/series';
 import { generateParentArcs, generateSeriesArcs } from '@/lib/generate-arcs';
+import SearchFAB from '@/components/SearchFAB';
+import SearchSheet from '@/components/SearchSheet';
+import CharacterModal from '@/components/CharacterModal';
+import LocationModal from '@/components/LocationModal';
+import NarrativeArcModal from '@/components/NarrativeArcModal';
 
 type SortKey = 'importance' | 'name' | 'status';
 type MainTab = 'characters' | 'locations' | 'map' | 'arcs' | 'manage';
@@ -632,6 +637,8 @@ export default function Home() {
   const [showBookStructureEditor, setShowBookStructureEditor] = useState(false);
   const [bookStructureMode, setBookStructureMode] = useState<'setup' | 'manage'>('setup');
   const [bookFilter, setBookFilter] = useState<BookFilter>({ mode: 'all' });
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchEntity, setSearchEntity] = useState<{ type: 'character' | 'location' | 'arc'; name: string } | null>(null);
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Drive playback: advance one snapshot per interval tick
@@ -726,6 +733,11 @@ export default function Home() {
     }
     setCurrentIndex(Math.min(...visibleChapterOrders));
   }, [visibleChapterOrders, currentIndex]);
+
+  const handleSearchEntitySelect = useCallback((type: 'character' | 'location' | 'arc', name: string) => {
+    setShowSearch(false);
+    setSearchEntity({ type, name });
+  }, []);
 
   const applyResultEdit = useCallback((
     updatedResult: AnalysisResult,
@@ -2329,6 +2341,77 @@ export default function Home() {
           onClose={() => setShowChat(false)}
         />
       )}
+      {/* Global entity search */}
+      {result && stored && !showSearch && !searchEntity && (
+        <SearchFAB onClick={() => setShowSearch(true)} />
+      )}
+      {result && stored && (
+        <SearchSheet
+          isOpen={showSearch}
+          onClose={() => setShowSearch(false)}
+          onEntitySelect={handleSearchEntitySelect}
+          characters={derived.aggregated.characters}
+          locations={derived.aggregated.locations}
+          arcs={derived.aggregated.arcs}
+        />
+      )}
+      {/* Modals opened from search */}
+      {searchEntity?.type === 'character' && (() => {
+        let char = result?.characters.find((c) => c.name === searchEntity.name);
+        if (!char) {
+          char = derived.aggregated.characters.find((e) => e.character.name === searchEntity.name)?.character;
+        }
+        if (!char) return null;
+        const inCurrent = !!result?.characters.find((c) => c.name === searchEntity.name);
+        return (
+          <CharacterModal
+            character={char}
+            snapshots={stored?.snapshots ?? []}
+            chapterTitles={book?.chapters.map((ch) => ch.title) ?? []}
+            currentResult={inCurrent ? result ?? undefined : undefined}
+            onResultEdit={inCurrent ? applyResultEdit : undefined}
+            currentChapterIndex={currentChapterIndex}
+            onClose={() => setSearchEntity(null)}
+            onEntityClick={(type, name) => {
+              setSearchEntity({ type, name });
+            }}
+          />
+        );
+      })()}
+      {searchEntity?.type === 'location' && (() => {
+        const inCurrent = result?.locations?.some((l) => l.name === searchEntity.name) ?? false;
+        return (
+          <LocationModal
+            locationName={searchEntity.name}
+            snapshots={stored?.snapshots ?? []}
+            chapterTitles={book?.chapters.map((ch) => ch.title) ?? []}
+            currentResult={inCurrent ? result ?? undefined : undefined}
+            onResultEdit={inCurrent ? applyResultEdit : undefined}
+            currentChapterIndex={currentChapterIndex}
+            onClose={() => setSearchEntity(null)}
+            onEntityClick={(type, name) => {
+              setSearchEntity({ type, name });
+            }}
+          />
+        );
+      })()}
+      {searchEntity?.type === 'arc' && (() => {
+        const inCurrent = result?.arcs?.some((a) => a.name === searchEntity.name) ?? false;
+        return (
+          <NarrativeArcModal
+            arcName={searchEntity.name}
+            snapshots={stored?.snapshots ?? []}
+            chapterTitles={book?.chapters.map((ch) => ch.title) ?? []}
+            currentResult={inCurrent ? result ?? undefined : undefined}
+            onResultEdit={inCurrent ? applyResultEdit : undefined}
+            currentChapterIndex={currentChapterIndex}
+            onClose={() => setSearchEntity(null)}
+            onEntityClick={(type, name) => {
+              setSearchEntity({ type, name });
+            }}
+          />
+        );
+      })()}
     </main>
   );
 }
