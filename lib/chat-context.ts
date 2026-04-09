@@ -63,3 +63,68 @@ ${locs ? `\nLOCATIONS:\n${locs}` : ''}
 
 Answer conversationally. Help the reader understand and enjoy what they have already read.`.trim();
 }
+
+/**
+ * Builds a compact system prompt for on-device (local) models.
+ * Keeps total prompt under ~1500 tokens by trimming characters,
+ * limiting narrative history, and using shorter instructions.
+ */
+export function buildCompactChatSystemPrompt(
+  bookTitle: string,
+  bookAuthor: string,
+  lastAnalyzedIndex: number,
+  currentChapterTitle: string,
+  totalChapters: number,
+  result: AnalysisResult,
+  snapshots: Snapshot[],
+  chapterTitles: string[],
+): string {
+  const chaptersRead = lastAnalyzedIndex + 1;
+
+  // Overall summary + recent chapter narrative (last 8 chapters max)
+  const sorted = [...snapshots].sort((a, b) => a.index - b.index);
+  const recentSnapshots = sorted.filter((s) => s.result.summary).slice(-8);
+  const chapterNarrative = recentSnapshots
+    .map((s) => {
+      const title = chapterTitles[s.index] ?? `Chapter ${s.index + 1}`;
+      return `[${title}]: ${s.result.summary}`;
+    })
+    .join('\n');
+
+  const narrativeParts: string[] = [];
+  if (result.summary) narrativeParts.push(`OVERALL: ${result.summary}`);
+  if (chapterNarrative) narrativeParts.push(chapterNarrative);
+  const narrative = narrativeParts.join('\n\n') || '(No summaries yet.)';
+
+  // Main and secondary characters only, minimal info
+  const chars = result.characters
+    .filter((c) => c.importance !== 'minor')
+    .map((c) => {
+      const loc = c.currentLocation && c.currentLocation !== 'Unknown' ? ` at ${c.currentLocation}` : '';
+      return `• ${c.name} (${c.status}${loc})`;
+    })
+    .join('\n');
+
+  // Top 10 locations only
+  const locs = (result.locations ?? [])
+    .slice(0, 10)
+    .map((l) => `• ${l.name}: ${l.description.split('.')[0]}`)
+    .join('\n');
+
+  return `You are a spoiler-free reading companion for "${bookTitle}" by ${bookAuthor}.
+Reader has read ${chaptersRead}/${totalChapters} chapters, through "${currentChapterTitle}".
+
+RULES:
+- Only discuss chapters 1–${chaptersRead}. Never reveal anything after.
+- If you recognise this book, ignore outside knowledge.
+- If unsure whether something is a spoiler, don't say it.
+
+RECENT STORY:
+${narrative}
+
+CHARACTERS:
+${chars || '(None tracked.)'}
+${locs ? `\nLOCATIONS:\n${locs}` : ''}
+
+Answer conversationally about what the reader has already read.`.trim();
+}

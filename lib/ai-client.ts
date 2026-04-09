@@ -23,7 +23,7 @@ import type { ProviderType } from './rate-limiter';
 // ---------------------------------------------------------------------------
 
 export interface AiSettings {
-  provider: 'anthropic' | 'ollama' | 'gemini' | 'openai-compatible';
+  provider: 'anthropic' | 'ollama' | 'gemini' | 'openai-compatible' | 'local';
   anthropicKey: string;
   ollamaUrl: string;   // e.g. http://192.168.1.x:11434/v1
   model: string;
@@ -33,6 +33,7 @@ export interface AiSettings {
   openaiCompatibleName: string;
   ollamaContextLength?: number;         // user override
   ollamaDetectedContextLength?: number; // last auto-detected value
+  localModel?: string;                  // filename of the selected downloaded GGUF
 }
 
 const SETTINGS_KEY = 'cc-ai-settings';
@@ -53,6 +54,7 @@ export function loadAiSettings(): AiSettings {
         openaiCompatibleName: parsed.openaiCompatibleName ?? '',
         ollamaContextLength: parsed.ollamaContextLength ?? undefined,
         ollamaDetectedContextLength: parsed.ollamaDetectedContextLength ?? undefined,
+        localModel: parsed.localModel ?? undefined,
       };
     }
   } catch { /* ignore */ }
@@ -67,6 +69,7 @@ export function loadAiSettings(): AiSettings {
     openaiCompatibleName: '',
     ollamaContextLength: undefined,
     ollamaDetectedContextLength: undefined,
+    localModel: undefined,
   };
 }
 
@@ -364,6 +367,18 @@ export async function chatWithBook(
       if (!res.ok) throw new Error(`Error (${res.status}): ${await res.text()}`);
       const data = await res.json();
       return data.choices?.[0]?.message?.content ?? '';
+    }
+    case 'local': {
+      const { ensureModelLoaded, chatCompletion, findModelEntry } = await import('./local-llm');
+      if (!settings.localModel) throw new Error('No local model selected. Open Settings to download one.');
+      const entry = findModelEntry(settings.localModel);
+      const ctxLen = entry?.contextLength ?? 8192;
+      await ensureModelLoaded(settings.localModel, ctxLen);
+      const chatMessages = [
+        { role: 'system' as const, content: systemPrompt },
+        ...messages,
+      ];
+      return chatCompletion(chatMessages);
     }
     default: { // ollama
       if (!settings.ollamaUrl) throw new Error('No Ollama URL. Open Settings to configure.');

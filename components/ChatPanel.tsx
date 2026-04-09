@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { AnalysisResult, Snapshot } from '@/types';
-import { buildChatSystemPrompt } from '@/lib/chat-context';
+import { buildChatSystemPrompt, buildCompactChatSystemPrompt } from '@/lib/chat-context';
 
 const IS_MOBILE = process.env.NEXT_PUBLIC_MOBILE === 'true';
 
@@ -71,10 +71,19 @@ export default function ChatPanel({
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isLocalProvider, setIsLocalProvider] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  const systemPrompt = buildChatSystemPrompt(
+  useEffect(() => {
+    if (IS_MOBILE) {
+      import('@/lib/ai-client').then(({ loadAiSettings }) => {
+        setIsLocalProvider(loadAiSettings().provider === 'local');
+      });
+    }
+  }, []);
+
+  const systemPrompt = (isLocalProvider ? buildCompactChatSystemPrompt : buildChatSystemPrompt)(
     bookTitle, bookAuthor, lastAnalyzedIndex, currentChapterTitle,
     totalChapters, result, snapshots, chapterTitles,
   );
@@ -86,6 +95,16 @@ export default function ChatPanel({
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (isLocalProvider) {
+        import('@/lib/local-llm').then(({ unloadModel }) => {
+          unloadModel().catch(() => {});
+        });
+      }
+    };
+  }, [isLocalProvider]);
 
   async function handleSend(text?: string) {
     const content = (text ?? input).trim();
@@ -129,7 +148,7 @@ export default function ChatPanel({
           <div className="min-w-0">
             <p className="text-sm font-semibold text-stone-800 dark:text-zinc-200 truncate">Ask about your book</p>
             <p className="text-xs text-stone-400 dark:text-zinc-500 truncate">
-              Spoiler-free · knows ch. 1–{chaptersRead} of {totalChapters}
+              {isLocalProvider ? 'On-device AI · ' : 'Spoiler-free · '}knows ch. 1–{chaptersRead} of {totalChapters}
             </p>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
@@ -188,6 +207,9 @@ export default function ChatPanel({
           {loading && (
             <div className="flex justify-start">
               <div className="bg-stone-100 dark:bg-zinc-800 rounded-2xl rounded-bl-sm px-4 py-3">
+                {isLocalProvider && messages.length <= 1 && (
+                  <p className="text-[10px] text-stone-400 dark:text-zinc-500 mb-1">Loading AI model...</p>
+                )}
                 <div className="flex gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-stone-400 dark:bg-zinc-500 animate-bounce [animation-delay:0ms]" />
                   <span className="w-1.5 h-1.5 rounded-full bg-stone-400 dark:bg-zinc-500 animate-bounce [animation-delay:150ms]" />
