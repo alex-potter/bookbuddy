@@ -14,11 +14,11 @@ import kotlinx.coroutines.*
 
 @CapacitorPlugin(name = "LlamaPlugin")
 class LlamaPlugin : Plugin() {
-    private lateinit var bridge: LlamaBridge
+    private lateinit var llamaBridge: LlamaBridge
     private var downloadJob: Job? = null
 
     override fun load() {
-        bridge = LlamaBridge(context)
+        llamaBridge = LlamaBridge(context)
     }
 
     // -----------------------------------------------------------------------
@@ -29,8 +29,8 @@ class LlamaPlugin : Plugin() {
     fun downloadModel(call: PluginCall) {
         val urlStr = call.getString("url") ?: return call.reject("Missing url")
         val fileName = call.getString("fileName") ?: return call.reject("Missing fileName")
-        val dest = File(bridge.modelsDir(), fileName)
-        val tempDest = File(bridge.modelsDir(), "$fileName.part")
+        val dest = File(llamaBridge.modelsDir(), fileName)
+        val tempDest = File(llamaBridge.modelsDir(), "$fileName.part")
 
         downloadJob = CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -93,14 +93,14 @@ class LlamaPlugin : Plugin() {
     @PluginMethod
     fun deleteModel(call: PluginCall) {
         val fileName = call.getString("fileName") ?: return call.reject("Missing fileName")
-        val file = File(bridge.modelsDir(), fileName)
+        val file = File(llamaBridge.modelsDir(), fileName)
         if (file.exists()) file.delete()
         call.resolve()
     }
 
     @PluginMethod
     fun listModels(call: PluginCall) {
-        val dir = bridge.modelsDir()
+        val dir = llamaBridge.modelsDir()
         val models = JSONArray()
         dir.listFiles()?.filter { it.extension == "gguf" }?.forEach { file ->
             val model = JSObject()
@@ -116,7 +116,7 @@ class LlamaPlugin : Plugin() {
     @PluginMethod
     fun getFreeDiskSpace(call: PluginCall) {
         val result = JSObject()
-        result.put("bytes", bridge.modelsDir().usableSpace)
+        result.put("bytes", llamaBridge.modelsDir().usableSpace)
         call.resolve(result)
     }
 
@@ -128,7 +128,7 @@ class LlamaPlugin : Plugin() {
     fun loadModel(call: PluginCall) {
         val fileName = call.getString("fileName") ?: return call.reject("Missing fileName")
         val contextLength = call.getInt("contextLength") ?: 8192
-        val path = bridge.modelPath(fileName)
+        val path = llamaBridge.modelPath(fileName)
 
         if (!File(path).exists()) {
             return call.reject("Model file not found: $fileName")
@@ -136,7 +136,7 @@ class LlamaPlugin : Plugin() {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val ok = bridge.nativeLoadModel(path, contextLength)
+                val ok = llamaBridge.nativeLoadModel(path, contextLength)
                 if (ok) call.resolve() else call.reject("Failed to load model — possibly not enough RAM")
             } catch (e: Exception) {
                 call.reject("Load failed: ${e.message}")
@@ -146,18 +146,18 @@ class LlamaPlugin : Plugin() {
 
     @PluginMethod
     fun unloadModel(call: PluginCall) {
-        bridge.nativeUnloadModel()
+        llamaBridge.nativeUnloadModel()
         call.resolve()
     }
 
     @PluginMethod
     fun isModelLoaded(call: PluginCall) {
-        val loaded = bridge.nativeIsLoaded()
-        val loadedPath = bridge.nativeGetLoadedPath()
+        val loaded = llamaBridge.nativeIsLoaded()
+        val loadedPath = llamaBridge.nativeGetLoadedPath()
         val result = JSObject()
         result.put("loaded", loaded)
         // Extract just the filename from the full path
-        val fileName = if (loadedPath.isNotEmpty()) File(loadedPath).name else null
+        val fileName = if (loadedPath.isNotEmpty()) File(loadedPath as String).name else null
         result.put("fileName", fileName)
         call.resolve(result)
     }
@@ -177,12 +177,12 @@ class LlamaPlugin : Plugin() {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val result = bridge.nativeChatCompletion(
+                val result = llamaBridge.nativeChatCompletion(
                     roles.toTypedArray(),
                     contents.toTypedArray()
                 )
                 val response = JSObject()
-                response.put("text", result)
+                response.put("text", result as String)
                 call.resolve(response)
             } catch (e: Exception) {
                 call.reject("Inference failed: ${e.message}")

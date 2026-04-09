@@ -135,14 +135,14 @@ export async function unloadModel(): Promise<void> {
   await LlamaPlugin.unloadModel();
 }
 
-const INFERENCE_TIMEOUT_MS = 60_000; // 60 seconds
+const INFERENCE_TIMEOUT_MS = 120_000; // 120 seconds
 
 export async function chatCompletion(
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
 ): Promise<string> {
   resetIdleTimer();
   const timeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error('On-device inference timed out after 60 seconds. Try a shorter question or a smaller model.')), INFERENCE_TIMEOUT_MS),
+    setTimeout(() => reject(new Error('On-device inference timed out. Try a shorter question or a smaller model.')), INFERENCE_TIMEOUT_MS),
   );
   const { text } = await Promise.race([LlamaPlugin.chatCompletion({ messages }), timeout]);
   return text;

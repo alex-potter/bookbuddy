@@ -21,12 +21,10 @@ add_library(llama-jni SHARED llama-jni.cpp)
 target_include_directories(llama-jni PRIVATE
     ${LLAMA_DIR}/include
     ${LLAMA_DIR}/ggml/include
-    ${LLAMA_DIR}/common
 )
 
 target_link_libraries(llama-jni
     llama
-    common
     log
     android
 )

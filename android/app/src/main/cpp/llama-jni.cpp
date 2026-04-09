@@ -132,26 +132,70 @@ Java_com_chaptercompanion_app_LlamaBridge_nativeChatCompletion(
         messages.push_back({roleStrs[i].c_str(), contentStrs[i].c_str()});
     }
 
-    // Apply chat template to get the formatted prompt
+    // Apply chat template to get the formatted prompt.
+    // Try: model's Jinja template → arch name → arch family → chatml.
     const char *tmpl = llama_model_chat_template(g_model, nullptr);
+    std::string fallback_tmpl;          // storage for fallback name
+    const char *effective_tmpl = tmpl;   // tracks whichever template succeeds
+
     std::vector<char> buf(4096);
     int len = llama_chat_apply_template(
-        tmpl,
+        effective_tmpl,
         messages.data(), messages.size(),
         true, buf.data(), (int32_t)buf.size()
     );
+    // Fallback: try architecture name (e.g. "gemma4"), then family (e.g. "gemma")
+    if (len < 0 && tmpl != nullptr) {
+        char arch[64] = {};
+        if (llama_model_meta_val_str(g_model, "general.architecture", arch, sizeof(arch)) > 0) {
+            fallback_tmpl = arch;
+            LOGI("Model template not recognised, trying built-in for arch '%s'", arch);
+            effective_tmpl = fallback_tmpl.c_str();
+            len = llama_chat_apply_template(
+                effective_tmpl,
+                messages.data(), messages.size(),
+                true, buf.data(), (int32_t)buf.size()
+            );
+            // Strip trailing digits: "gemma4" → "gemma"
+            if (len < 0) {
+                std::string family(arch);
+                while (!family.empty() && isdigit((unsigned char)family.back())) family.pop_back();
+                if (!family.empty() && family != fallback_tmpl) {
+                    LOGI("Trying family template '%s'", family.c_str());
+                    fallback_tmpl = family;
+                    effective_tmpl = fallback_tmpl.c_str();
+                    len = llama_chat_apply_template(
+                        effective_tmpl,
+                        messages.data(), messages.size(),
+                        true, buf.data(), (int32_t)buf.size()
+                    );
+                }
+            }
+        }
+    }
+    // Last resort: chatml
+    if (len < 0) {
+        LOGI("Falling back to chatml template");
+        effective_tmpl = nullptr;
+        len = llama_chat_apply_template(
+            nullptr,
+            messages.data(), messages.size(),
+            true, buf.data(), (int32_t)buf.size()
+        );
+    }
     if (len < 0) {
         return env->NewStringUTF("[error] Failed to apply chat template");
     }
     if (len > (int)buf.size()) {
         buf.resize(len + 1);
         len = llama_chat_apply_template(
-            tmpl,
+            effective_tmpl,
             messages.data(), messages.size(),
             true, buf.data(), (int32_t)buf.size()
         );
     }
     std::string prompt(buf.data(), len);
+    LOGI("Formatted prompt length: %d chars", len);
 
     // Get vocabulary handle
     const llama_vocab *vocab = llama_model_get_vocab(g_model);
@@ -169,14 +213,19 @@ Java_com_chaptercompanion_app_LlamaBridge_nativeChatCompletion(
         return env->NewStringUTF("[error] Tokenization failed — prompt may be too long");
     }
     tokens.resize(n_tokens);
+    LOGI("Prompt tokenized: %d tokens", n_tokens);
 
     // Clear KV cache for new conversation
     llama_memory_clear(llama_get_memory(g_ctx), false);
 
-    // Decode prompt tokens using batch_get_one
-    llama_batch batch = llama_batch_get_one(tokens.data(), n_tokens);
-    if (llama_decode(g_ctx, batch) != 0) {
-        return env->NewStringUTF("[error] Decode failed");
+    // Decode prompt tokens in chunks that fit n_batch to avoid ggml_abort
+    const int n_batch = 512;
+    for (int i = 0; i < n_tokens; i += n_batch) {
+        int chunk = std::min(n_batch, n_tokens - i);
+        llama_batch batch = llama_batch_get_one(tokens.data() + i, chunk);
+        if (llama_decode(g_ctx, batch) != 0) {
+            return env->NewStringUTF("[error] Decode failed");
+        }
     }
 
     // Set up sampler chain
@@ -186,7 +235,7 @@ Java_com_chaptercompanion_app_LlamaBridge_nativeChatCompletion(
     llama_sampler_chain_add(sampler, llama_sampler_init_dist(42));
 
     std::string result;
-    int max_tokens = 1024;
+    int max_tokens = 300;
 
     for (int i = 0; i < max_tokens; i++) {
         llama_token new_token = llama_sampler_sample(sampler, g_ctx, -1);
@@ -204,8 +253,8 @@ Java_com_chaptercompanion_app_LlamaBridge_nativeChatCompletion(
         }
 
         // Decode the next single token
-        batch = llama_batch_get_one(&new_token, 1);
-        if (llama_decode(g_ctx, batch) != 0) {
+        llama_batch next = llama_batch_get_one(&new_token, 1);
+        if (llama_decode(g_ctx, next) != 0) {
             break;
         }
     }
