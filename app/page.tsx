@@ -1503,10 +1503,10 @@ export default function Home() {
     void myBooksRev; void migrationDone; // trigger re-render after deletion or migration
     const savedBooks = listSavedBooks();
     return (
-      <main className="min-h-dvh flex flex-col">
+      <main className="min-h-dvh flex flex-col bg-paper">
         {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
         {submitBook && <LibrarySubmitModal title={submitBook.title} author={submitBook.author} onClose={() => setSubmitBook(null)} />}
-        <div className="flex items-end border-b border-stone-200 dark:border-zinc-800 px-2 sm:px-6 pt-4 sm:pt-6 overflow-x-auto scrollbar-none">
+        <div className="flex items-end border-b border-border px-2 sm:px-6 pt-4 sm:pt-6 overflow-x-auto scrollbar-none">
           {([
             { key: 'file', label: 'Upload EPUB' },
             ...(!IS_MOBILE ? [{ key: 'calibre' as const, label: 'Calibre' }] : []),
@@ -1520,7 +1520,7 @@ export default function Home() {
               className={`flex-shrink-0 px-2.5 sm:px-4 py-2 text-xs sm:text-sm font-medium rounded-t-lg border-b-2 transition-colors -mb-px whitespace-nowrap ${
                 uploadTab === key
                   ? 'border-amber-500 text-amber-400'
-                  : 'border-transparent text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300'
+                  : 'border-transparent text-ink-dim hover:text-ink'
               }`}
             >
               {label}
@@ -1535,7 +1535,7 @@ export default function Home() {
             />
             <button
               onClick={() => setShowSettings(true)}
-              className="text-xs text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300 transition-colors"
+              className="text-xs text-ink-dim hover:text-ink transition-colors"
               title="AI Settings"
             >
               ⚙ Settings
@@ -1560,7 +1560,7 @@ export default function Home() {
               <div className="mb-5 flex items-center gap-3">
                 <label
                   htmlFor="bookbuddy-import"
-                  className="px-3 py-1.5 bg-stone-100 dark:bg-zinc-800 text-stone-700 dark:text-zinc-300 text-xs font-medium rounded-lg cursor-pointer hover:bg-stone-200 dark:hover:bg-zinc-700 transition-colors border border-stone-300 dark:border-zinc-700"
+                  className="px-3 py-1.5 bg-paper-dark text-ink text-xs font-medium rounded-lg cursor-pointer hover:bg-paper-dark/80 transition-colors border border-border"
                 >
                   Import .bookbuddy
                 </label>
@@ -1577,13 +1577,13 @@ export default function Home() {
               {savedBooks.length === 0 ? (
                 <div className="flex flex-col items-center justify-center min-h-[30vh] gap-3 text-center">
                   <span className="text-4xl opacity-30">📚</span>
-                  <p className="text-stone-500 dark:text-zinc-400 font-medium">No books yet</p>
-                  <p className="text-sm text-stone-400 dark:text-zinc-600">Books you open will appear here for quick access.</p>
+                  <p className="text-ink-soft font-medium font-serif">No books yet</p>
+                  <p className="text-sm text-ink-dim">Books you open will appear here for quick access.</p>
                 </div>
               ) : (
                 <>
                   <div className="flex items-center justify-between mb-3">
-                    <p className="text-xs font-medium text-stone-400 dark:text-zinc-600 uppercase tracking-wider">
+                    <p className="text-xs font-medium text-ink-dim font-mono uppercase tracking-wider">
                       {savedBooks.length} saved book{savedBooks.length !== 1 ? 's' : ''}
                     </p>
                     {savedBooks.some((e) => {
@@ -1602,7 +1602,7 @@ export default function Home() {
                             ...toAdd.map((e) => ({ id: `${e.title}::${e.author}::${Date.now()}`, title: e.title, author: e.author, status: 'waiting' as const })),
                           ]);
                         }}
-                        className="text-xs text-stone-400 dark:text-zinc-600 hover:text-amber-400 transition-colors"
+                        className="text-xs text-ink-dim hover:text-amber transition-colors"
                       >
                         + Queue all unfinished
                       </button>
@@ -1617,20 +1617,20 @@ export default function Home() {
                         <li key={`${entry.title}::${entry.author}`} className="flex items-center gap-2">
                           <button
                             onClick={() => loadBookFromMeta(entry.title, entry.author)}
-                            className="flex-1 text-left px-4 py-3 bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-800 rounded-xl hover:border-stone-300 dark:hover:border-zinc-700 transition-colors"
+                            className="flex-1 text-left px-4 py-3 bg-paper-raised border border-border rounded-xl hover:border-border/60 transition-colors"
                           >
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
-                                <p className="font-medium text-stone-800 dark:text-zinc-200 truncate">{entry.title}</p>
-                                <p className="text-xs text-stone-400 dark:text-zinc-500 truncate mt-0.5">{entry.author}</p>
+                                <p className="font-medium text-ink font-serif truncate">{entry.title}</p>
+                                <p className="text-xs text-ink-soft truncate mt-0.5">{entry.author}</p>
                               </div>
                               <div className="flex-shrink-0 text-right">
                                 {analyzed ? (
-                                  <span className="text-xs text-amber-500/80">
+                                  <span className="text-xs text-amber-500/80 font-mono">
                                     Ch. {entry.lastAnalyzedIndex + 1}{entry.chapterCount ? ` / ${entry.chapterCount}` : ''} analyzed
                                   </span>
                                 ) : (
-                                  <span className="text-xs text-stone-400 dark:text-zinc-600">Not analyzed</span>
+                                  <span className="text-xs text-ink-dim font-mono">Not analyzed</span>
                                 )}
                               </div>
                             </div>
@@ -1647,7 +1647,7 @@ export default function Home() {
                                 }
                               }}
                               title={queuedJob ? 'Remove from queue' : 'Add to processing queue'}
-                              className={`flex-shrink-0 p-2 transition-colors text-sm ${queuedJob ? 'text-amber-400 hover:text-red-400' : 'text-stone-300 dark:text-zinc-700 hover:text-amber-400'}`}
+                              className={`flex-shrink-0 p-2 transition-colors text-sm ${queuedJob ? 'text-amber-400 hover:text-red-400' : 'text-ink-dim hover:text-amber'}`}
                             >
                               {queuedJob ? (queuedJob.status === 'running' ? '◌' : '⏳') : '+'}
                             </button>
@@ -1657,14 +1657,14 @@ export default function Home() {
                               <button
                                 onClick={() => setSubmitBook({ title: entry.title, author: entry.author })}
                                 title="Share to Library"
-                                className="flex-shrink-0 p-2 text-stone-400 dark:text-zinc-600 hover:text-amber-400 transition-colors"
+                                className="flex-shrink-0 p-2 text-ink-dim hover:text-amber transition-colors"
                               >
                                 ↑
                               </button>
                               <button
                                 onClick={() => exportBook(entry.title, entry.author)}
                                 title="Export .bookbuddy"
-                                className="flex-shrink-0 p-2 text-stone-400 dark:text-zinc-600 hover:text-stone-700 dark:hover:text-zinc-300 transition-colors"
+                                className="flex-shrink-0 p-2 text-ink-dim hover:text-ink transition-colors"
                               >
                                 ↓
                               </button>
@@ -1684,7 +1684,7 @@ export default function Home() {
                               </button>
                               <button
                                 onClick={() => setPendingDelete(null)}
-                                className="text-xs px-2 py-1 rounded-md text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300 transition-colors"
+                                className="text-xs px-2 py-1 rounded-md text-ink-soft hover:text-ink transition-colors"
                               >
                                 Cancel
                               </button>
@@ -1693,7 +1693,7 @@ export default function Home() {
                             <button
                               onClick={() => setPendingDelete(`${entry.title}::${entry.author}`)}
                               title="Delete saved data"
-                              className="flex-shrink-0 p-2 text-stone-300 dark:text-zinc-700 hover:text-red-400 transition-colors"
+                              className="flex-shrink-0 p-2 text-ink-dim hover:text-red-400 transition-colors"
                             >
                               ✕
                             </button>
