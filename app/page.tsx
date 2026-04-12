@@ -4,9 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parseEpub } from '@/lib/epub-parser';
 import type { AnalysisResult, BookBuddyExport, BookFilter, BookMeta, ChapterEvent, Character, MapState, NarrativeArc, ParentArc, ParsedEbook, PinUpdates, QueueJob, ReadingPosition, SavedBookEntry, SeriesDefinition, Snapshot, StoredBookState } from '@/types';
 import CalibreLibrary from '@/components/CalibreLibrary';
-import CharacterCard from '@/components/CharacterCard';
 import ChapterSelector from '@/components/ChapterSelector';
-import LocationBoard from '@/components/LocationBoard';
 import MapBoard from '@/components/MapBoard';
 import SeriesPicker from '@/components/SeriesPicker';
 import SettingsModal from '@/components/SettingsModal';
@@ -18,7 +16,6 @@ import { listSavedBooks, loadBookState, saveBookState, deleteBookState, loadBook
 import ProcessingQueue from '@/components/ProcessingQueue';
 import ChatPanel from '@/components/ChatPanel';
 import ArcsPanel from '@/components/ArcsPanel';
-import EntityManager from '@/components/EntityManager';
 import { buildShareMarkdown, shareReadingContext } from '@/lib/share-context';
 import type { SnapshotTransform } from '@/lib/propagate-edit';
 import StoryTimeline from '@/components/StoryTimeline';
@@ -26,7 +23,6 @@ import WelcomeBanner from '@/components/WelcomeBanner';
 import LibrarySubmitModal from '@/components/LibrarySubmitModal';
 import BookmarkModal from '@/components/BookmarkModal';
 import BookStructureEditor from '@/components/BookStructureEditor';
-import BookFilterSelector from '@/components/BookFilterSelector';
 import { useDerivedEntities } from '@/lib/use-derived-entities';
 import { buildInitialSeriesDefinition, migrateToSeriesDefinition, getActiveParentArcs, getStaleBooks, computeArcGroupingHash } from '@/lib/series';
 import { generateParentArcs, generateSeriesArcs } from '@/lib/generate-arcs';
@@ -1840,7 +1836,7 @@ export default function Home() {
       )}
 
       {/* Main scrollable content area */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto p-4 lg:pl-20">
         {/* Snapshot navigator */}
         {stored && (
           <SnapshotNav

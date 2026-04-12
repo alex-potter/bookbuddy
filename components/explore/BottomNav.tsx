@@ -55,7 +55,7 @@ const TABS: { key: ExploreTab; label: string; icon: JSX.Element }[] = [
 
 export default function BottomNav({ activeTab, onChange }: BottomNavProps) {
   return (
-    <nav className="flex-shrink-0 bg-paper-raised border-t border-border flex items-center justify-around" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+    <nav className="flex-shrink-0 bg-paper-raised border-t border-border flex items-center justify-around lg:fixed lg:left-0 lg:top-0 lg:h-full lg:w-16 lg:flex-col lg:justify-start lg:pt-4 lg:gap-2 lg:border-t-0 lg:border-r" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {TABS.map(({ key, label, icon }) => {
         const active = activeTab === key;
         return (

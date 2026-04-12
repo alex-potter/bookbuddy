@@ -43,7 +43,7 @@ export default function ExploreHeader({
   }, [menuOpen]);
 
   return (
-    <header className="bg-paper-raised border-b border-border px-4 py-2 flex items-center justify-between gap-2 flex-shrink-0">
+    <header className="bg-paper-raised border-b border-border px-4 py-2 flex items-center justify-between gap-2 flex-shrink-0 lg:pl-20">
       <h1 className="font-serif italic text-ink text-sm truncate min-w-0 flex-1">
         {bookTitle}
       </h1>
