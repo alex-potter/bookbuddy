@@ -2,8 +2,44 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --paper: #f3ebdd;
+  --paper-raised: #faf5e8;
+  --paper-dark: #e8dbc3;
+  --ink: #2c2319;
+  --ink-soft: #6b5740;
+  --ink-dim: #8a7556;
+  --rust: #b5542b;
+  --rust-soft: #c97a4f;
+  --teal: #4f7579;
+  --teal-soft: #6a9a9e;
+  --amber: #c19024;
+  --amber-soft: #d4a83a;
+  --danger: #a33a2a;
+  --danger-soft: #c95a4a;
+  --border: #d9c9ab;
+}
+
+html.dark {
+  --paper: #1a1612;
+  --paper-raised: #231e18;
+  --paper-dark: #12100d;
+  --ink: #e8dbc3;
+  --ink-soft: #a89478;
+  --ink-dim: #7a6b55;
+  --rust: #c97a4f;
+  --rust-soft: #b5542b;
+  --teal: #6a9a9e;
+  --teal-soft: #4f7579;
+  --amber: #d4a83a;
+  --amber-soft: #c19024;
+  --danger: #c95a4a;
+  --danger-soft: #a33a2a;
+  --border: #3a3028;
+}
+
 html {
-  background-color: #fafaf9;
+  background-color: var(--paper);
   height: 100%;
   height: -webkit-fill-available;
 }
@@ -12,13 +48,9 @@ html {
   html { height: 100dvh; }
 }
 
-html.dark {
-  background-color: #09090b;
-}
-
 body {
-  background-color: #fafaf9;
-  color: #1c1917;
+  background-color: var(--paper);
+  color: var(--ink);
   height: 100%;
   height: -webkit-fill-available;
   padding-top: env(safe-area-inset-top);
@@ -29,11 +61,6 @@ body {
 
 @supports (height: 100dvh) {
   body { height: 100dvh; }
-}
-
-html.dark body {
-  background-color: #09090b;
-  color: #f4f4f5;
 }
 
 /* Prevent pull-to-refresh in iOS standalone */
