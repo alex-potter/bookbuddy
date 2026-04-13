@@ -23,7 +23,7 @@ export interface ParsedEbook {
   title: string;
   author: string;
   chapters: EbookChapter[];
-  books?: string[];  // individual book titles if omnibus detected
+  books: string[];   // book titles — always at least one entry
 }
 
 export interface CharacterRelationship {
@@ -81,12 +81,13 @@ export interface BookDefinition {
   excluded?: boolean;         // entire book excluded from analysis and sidebar
   parentArcs?: ParentArc[];   // per-book thematic arc groupings
   arcGroupingHash?: string;   // hash of bounds at last arc grouping, for staleness detection
+  sourceEpub?: string;        // which EPUB file these chapters came from
 }
 
-export interface SeriesDefinition {
-  books: BookDefinition[];
-  seriesArcs?: ParentArc[];   // series-wide thematic arc groupings
-  unassignedChapters: number[]; // chapter orders not belonging to any book (auto-derived)
+export interface BookContainer {
+  books: BookDefinition[];          // always >= 1 entry
+  seriesArcs?: ParentArc[];         // series-wide thematic arc groupings (books.length > 1)
+  unassignedChapters: number[];     // chapter orders not belonging to any book
 }
 
 export type BookFilter =
@@ -167,14 +168,11 @@ export interface StoredBookState {
   lastAnalyzedIndex: number; // -2 = meta only, -1 = series carry-forward, ≥0 = analyzed
   result: AnalysisResult;
   snapshots: Snapshot[];
-  excludedBooks?: number[];
-  excludedChapters?: number[];
-  chapterRange?: { start: number; end: number };
   bookMeta?: BookMeta;
   readingBookmark?: number;
   readingPosition?: ReadingPosition;
-  parentArcs?: ParentArc[];
-  series?: SeriesDefinition;  // NEW
+  chapterRange?: { start: number; end: number };
+  container: BookContainer;
 }
 
 export interface SavedBookEntry {
@@ -185,9 +183,12 @@ export interface SavedBookEntry {
 }
 
 export interface BookBuddyExport {
-  version: 2;
+  version: 3;
   title: string;
   author: string;
-  state: StoredBookState;
+  container: BookContainer;
+  bookMeta: BookMeta;
+  snapshots: Snapshot[];
+  result: AnalysisResult;
   mapState: MapState | null;
 }
