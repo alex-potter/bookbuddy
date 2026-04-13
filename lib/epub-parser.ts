@@ -135,7 +135,7 @@ export async function parseEpub(file: File): Promise<ParsedEbook> {
   // Clean up the internal _href field (_htmlHead is kept for page.tsx to read during saveChapters)
   for (const ch of chapters) delete (ch as unknown as Record<string, unknown>)._href;
 
-  return { title, author, chapters, books: books.length > 1 ? books : undefined };
+  return { title, author, chapters, books: books.length > 0 ? books : [title] };
 }
 
 // ---- Chapter title extraction from NCX / EPUB3 nav ----
