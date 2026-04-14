@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { AnalysisResult, EbookChapter, ParsedEbook, QueueJob, Snapshot, StoredBookState, SeriesDefinition, BookFilter } from '@/types';
+import type { AnalysisResult, EbookChapter, ParsedEbook, QueueJob, Snapshot, StoredBookState, BookContainer, BookFilter } from '@/types';
 import type { SnapshotTransform } from '@/lib/propagate-edit';
 import ChapterSelector from '@/components/ChapterSelector';
 import EntityManager from '@/components/EntityManager';
@@ -45,7 +45,7 @@ interface WorkshopScreenProps {
   currentChapterIndex: number;
 
   // Structure tab
-  onSaveSeries: (series: SeriesDefinition) => void;
+  onSaveContainer: (container: BookContainer) => void;
   onReextractTitles: (chapterOrders: number[]) => Promise<Map<number, { title: string; preview?: string }>>;
 
   // Library tab
@@ -77,12 +77,12 @@ export default function WorkshopScreen(props: WorkshopScreenProps) {
   return (
     <div className="fixed inset-0 z-50 bg-paper flex flex-col animate-slide-up">
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
-      {showStructureEditor && props.stored.series && (
+      {showStructureEditor && props.stored.container && (
         <BookStructureEditor
-          series={props.stored.series}
+          container={props.stored.container}
           chapters={props.book.chapters.map(({ order, title, bookIndex, preview, contentType }) =>
             ({ order, title, bookIndex, preview, contentType }))}
-          onSave={props.onSaveSeries}
+          onSave={props.onSaveContainer}
           onClose={() => setShowStructureEditor(false)}
           mode="manage"
           onReextract={props.onReextractTitles}
@@ -150,18 +150,18 @@ export default function WorkshopScreen(props: WorkshopScreenProps) {
 
         {activeTab === 'structure' && (
           <div>
-            {props.stored.series && props.stored.series.books.length > 1 && (
+            {props.stored.container && props.stored.container.books.length > 1 && (
               <button
                 onClick={() => setShowStructureEditor(true)}
                 className="w-full px-4 py-3 rounded-xl border border-border text-left hover:border-rust/30 transition-colors"
               >
                 <span className="text-sm font-serif text-ink">Edit Book Structure</span>
                 <span className="text-xs font-mono text-ink-dim ml-2">
-                  {props.stored.series.books.length} books
+                  {props.stored.container.books.length} books
                 </span>
               </button>
             )}
-            {!props.stored.series && (
+            {!props.stored.container && (
               <p className="text-sm font-serif text-ink-soft text-center py-12">
                 No series structure detected for this book.
               </p>
