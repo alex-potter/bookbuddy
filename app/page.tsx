@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parseEpub } from '@/lib/epub-parser';
-import type { AnalysisResult, BookBuddyExport, BookFilter, BookMeta, ChapterEvent, Character, MapState, NarrativeArc, ParentArc, ParsedEbook, PinUpdates, QueueJob, ReadingPosition, SavedBookEntry, SeriesDefinition, Snapshot, StoredBookState } from '@/types';
+import type { AnalysisResult, BookBuddyExport, BookContainer, BookFilter, BookMeta, ChapterEvent, Character, MapState, NarrativeArc, ParentArc, ParsedEbook, PinUpdates, QueueJob, ReadingPosition, SavedBookEntry, Snapshot, StoredBookState } from '@/types';
 import CalibreLibrary from '@/components/CalibreLibrary';
 import ChapterSelector from '@/components/ChapterSelector';
 import MapBoard from '@/components/MapBoard';
@@ -24,7 +24,7 @@ import LibrarySubmitModal from '@/components/LibrarySubmitModal';
 import BookmarkModal from '@/components/BookmarkModal';
 import BookStructureEditor from '@/components/BookStructureEditor';
 import { useDerivedEntities } from '@/lib/use-derived-entities';
-import { buildInitialSeriesDefinition, migrateToSeriesDefinition, getActiveParentArcs, getStaleBooks, computeArcGroupingHash } from '@/lib/series';
+import { buildContainer, getActiveParentArcs, getStaleBooks, computeArcGroupingHash, getExcludedOrders } from '@/lib/series';
 import { generateParentArcs, generateSeriesArcs } from '@/lib/generate-arcs';
 import SearchFAB from '@/components/SearchFAB';
 import SearchSheet from '@/components/SearchSheet';
@@ -35,7 +35,6 @@ import ExploreHeader from '@/components/explore/ExploreHeader';
 import BottomNav from '@/components/explore/BottomNav';
 import PullUpSheet from '@/components/explore/PullUpSheet';
 import RecapStrip from '@/components/explore/RecapStrip';
-import SnapshotNav from '@/components/explore/SnapshotNav';
 import NewCharacterCard from '@/components/cards/CharacterCard';
 import NewLocationCard from '@/components/cards/LocationCard';
 import ArcCard from '@/components/cards/ArcCard';
@@ -53,10 +52,18 @@ const IMPORTANCE_ORDER: Record<Character['importance'], number> = {
 async function importBookBuddy(file: File): Promise<{ title: string; author: string }> {
   const text = await file.text();
   const payload = JSON.parse(text) as Partial<BookBuddyExport>;
-  if (!payload.title || !payload.author || !payload.state) {
-    throw new Error('Invalid or unrecognised .bookbuddy file.');
+  if (!payload.title || !payload.author || payload.version !== 3) {
+    throw new Error('Invalid or unrecognised .bookbuddy file. Only v3 format is supported.');
   }
-  await saveBookState(payload.title, payload.author, payload.state);
+  const state: StoredBookState = {
+    lastAnalyzedIndex: payload.snapshots?.length ? Math.max(...payload.snapshots.map((s) => s.index)) : -2,
+    result: payload.result ?? { characters: [], summary: '' },
+    snapshots: payload.snapshots ?? [],
+    bookMeta: payload.bookMeta,
+    chapterRange: undefined,
+    container: payload.container!,
+  };
+  await saveBookState(payload.title, payload.author, state);
   if (payload.mapState) await saveBookMapState(payload.title, payload.author, payload.mapState);
   return { title: payload.title, author: payload.author };
 }
@@ -197,13 +204,13 @@ async function maybeGenerateParentArcs(
   if (stored.lastAnalyzedIndex < rangeEnd) return stored;
   if (!stored.result.arcs?.length) return stored;
 
-  // If we have a series, do per-book grouping
-  if (stored.series && stored.series.books.length > 1) {
-    let series = { ...stored.series, books: [...stored.series.books] };
+  // If we have a multi-book container, do per-book grouping
+  if (stored.container && stored.container.books.length > 1) {
+    let container = { ...stored.container, books: [...stored.container.books] };
     let anyBookGrouped = false;
 
-    for (let bi = 0; bi < series.books.length; bi++) {
-      const bookDef = series.books[bi];
+    for (let bi = 0; bi < container.books.length; bi++) {
+      const bookDef = container.books[bi];
       // Check if all chapters in this book are analyzed
       const bookEnd = bookDef.chapterEnd;
       if (stored.lastAnalyzedIndex < bookEnd) continue;
@@ -222,7 +229,7 @@ async function maybeGenerateParentArcs(
 
       try {
         const parentArcs = await generateParentArcs(bookTitle, bookAuthor, bookArcs);
-        series.books[bi] = {
+        container.books[bi] = {
           ...bookDef,
           parentArcs,
           arcGroupingHash: currentHash,
@@ -233,17 +240,17 @@ async function maybeGenerateParentArcs(
       }
     }
 
-    let result = { ...stored, series };
+    let result = { ...stored, container };
 
     // If all books have per-book arcs, generate series-level arcs
     if (anyBookGrouped) {
-      const booksWithArcs = series.books
+      const booksWithArcs = container.books
         .filter((b) => b.parentArcs?.length)
         .map((b) => ({ bookTitle: b.title, parentArcs: b.parentArcs! }));
       if (booksWithArcs.length >= 2) {
         try {
           const seriesArcs = await generateSeriesArcs(bookTitle, bookAuthor, booksWithArcs);
-          result = { ...result, series: { ...result.series!, seriesArcs } };
+          result = { ...result, container: { ...result.container, seriesArcs } };
         } catch (e) {
           console.warn('[parent-arcs] Series-level generation failed:', e);
         }
@@ -253,10 +260,13 @@ async function maybeGenerateParentArcs(
     return result;
   }
 
-  // Non-series fallback: original behavior
+  // Single-book fallback: store parentArcs on the first book in the container
   try {
     const parentArcs = await generateParentArcs(bookTitle, bookAuthor, stored.result.arcs);
-    return { ...stored, parentArcs };
+    const updatedBooks = stored.container.books.map((b, i) =>
+      i === 0 ? { ...b, parentArcs } : b
+    );
+    return { ...stored, container: { ...stored.container, books: updatedBooks } };
   } catch (e) {
     console.warn('[parent-arcs] Generation failed:', e);
     return stored;
@@ -465,7 +475,16 @@ export default function Home() {
       }};
     }
     const ms = isActiveBook ? mapState : await loadBookMapState(title, author);
-    const payload: BookBuddyExport = { version: 2, title, author, state, mapState: ms };
+    const payload: BookBuddyExport = {
+      version: 3,
+      title,
+      author,
+      container: state.container,
+      bookMeta: state.bookMeta!,
+      snapshots: state.snapshots,
+      result: state.result,
+      mapState: ms,
+    };
     const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -525,32 +544,35 @@ export default function Home() {
     if (!book || !storedRef.current) return;
     const stored = storedRef.current;
 
-    if (stored.series && bookFilter.mode === 'books' && bookFilter.indices.length === 1) {
+    if (stored.container && stored.container.books.length > 1 && bookFilter.mode === 'books' && bookFilter.indices.length === 1) {
       // Save to the specific book's parentArcs
       const bookIndex = bookFilter.indices[0];
-      const updatedBooks = stored.series.books.map((b) =>
+      const updatedBooks = stored.container.books.map((b) =>
         b.index === bookIndex ? { ...b, parentArcs: parentArcs.length > 0 ? parentArcs : undefined } : b,
       );
-      const updated = { ...stored, series: { ...stored.series, books: updatedBooks } };
+      const updated = { ...stored, container: { ...stored.container, books: updatedBooks } };
       storedRef.current = updated;
       persistState(book.title, book.author, updated);
-    } else if (stored.series && bookFilter.mode === 'all') {
+    } else if (stored.container && stored.container.books.length > 1 && bookFilter.mode === 'all') {
       // Save to series-level arcs
-      const updated = { ...stored, series: { ...stored.series, seriesArcs: parentArcs.length > 0 ? parentArcs : undefined } };
+      const updated = { ...stored, container: { ...stored.container, seriesArcs: parentArcs.length > 0 ? parentArcs : undefined } };
       storedRef.current = updated;
       persistState(book.title, book.author, updated);
     } else {
-      // Non-series fallback
-      const updated = { ...stored, parentArcs: parentArcs.length > 0 ? parentArcs : undefined };
+      // Single-book fallback: save parentArcs on the first book in the container
+      const updatedBooks = stored.container.books.map((b, i) =>
+        i === 0 ? { ...b, parentArcs: parentArcs.length > 0 ? parentArcs : undefined } : b
+      );
+      const updated = { ...stored, container: { ...stored.container, books: updatedBooks } };
       storedRef.current = updated;
       persistState(book.title, book.author, updated);
     }
     setParentArcsRev((r) => r + 1);
   }
 
-  function handleSaveSeries(updatedSeries: SeriesDefinition) {
+  function handleSaveContainer(updatedContainer: BookContainer) {
     if (!book || !storedRef.current) return;
-    const updated = { ...storedRef.current, series: updatedSeries };
+    const updated = { ...storedRef.current, container: updatedContainer };
     storedRef.current = updated;
     persistState(book.title, book.author, updated);
     setShowBookStructureEditor(false);
@@ -632,8 +654,6 @@ export default function Home() {
 
   const [tab, setTab] = useState<MainTab>('characters');
   const [sortKey, setSortKey] = useState<SortKey>('importance');
-  const [filter, setFilter] = useState<Character['importance'] | 'all'>('all');
-  const [search, setSearch] = useState('');
 
   const [playing, setPlaying] = useState(false);
   const [playSpeed, setPlaySpeed] = useState(2000); // ms per step
@@ -697,11 +717,11 @@ export default function Home() {
   useEffect(() => { mapStateRef.current = mapState; }, [mapState]);
 
   const visibleChapterOrders = useMemo(() => {
-    const series = storedRef.current?.series;
-    if (!series) return null;
+    const container = storedRef.current?.container;
+    if (!container) return null;
     const targetBooks = bookFilter.mode === 'all'
-      ? series.books
-      : series.books.filter((b) => bookFilter.indices.includes(b.index));
+      ? container.books
+      : container.books.filter((b) => bookFilter.indices.includes(b.index));
     const visible = new Set<number>();
     for (const b of targetBooks) {
       if (b.excluded) continue;
@@ -711,7 +731,7 @@ export default function Home() {
     }
     return visible;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storedRef.current?.series, bookFilter]);
+  }, [storedRef.current?.container, bookFilter]);
 
   const visibleSnapshots = useMemo(() => {
     const snaps = storedRef.current?.snapshots ?? [];
@@ -761,55 +781,14 @@ export default function Home() {
         : cur.snapshots;
       let updated: StoredBookState = { ...cur, result: newResult, snapshots };
 
-      // Sync parentArcs with arc edits (rename, delete, merge, split)
-      if (updated.parentArcs?.length) {
-        const oldArcNames = new Set((cur.result.arcs ?? []).map((a) => a.name));
-        const newArcNames = new Set((newResult.arcs ?? []).map((a) => a.name));
-        const removed = [...oldArcNames].filter((n) => !newArcNames.has(n));
-        const added = [...newArcNames].filter((n) => !oldArcNames.has(n));
-
-        let parentArcs: ParentArc[];
-
-        if (removed.length === 1 && added.length === 1) {
-          // Rename: replace old child name with new name in-place
-          parentArcs = updated.parentArcs.map((pa) => ({
-            ...pa,
-            children: pa.children.map((c) => c === removed[0] ? added[0] : c),
-          }));
-        } else {
-          // Delete/merge: remove old names from children
-          parentArcs = updated.parentArcs.map((pa) => ({
-            ...pa,
-            children: pa.children.filter((c) => !removed.includes(c)),
-          }));
-          // Split: original stays, new arc added to same parent
-          if (added.length > 0 && removed.length === 0) {
-            const newArcs = (newResult.arcs ?? []).filter((a) => added.includes(a.name));
-            for (const na of newArcs) {
-              const placed = parentArcs.find((pa) =>
-                pa.children.some((c) => {
-                  const existing = (newResult.arcs ?? []).find((a) => a.name === c);
-                  return existing?.characters.some((ch) => na.characters.includes(ch));
-                })
-              );
-              if (placed) placed.children.push(na.name);
-              else parentArcs[parentArcs.length - 1]?.children.push(na.name);
-            }
-          }
-        }
-        // Remove empty parents
-        parentArcs = parentArcs.filter((pa) => pa.children.length > 0);
-        updated = { ...updated, parentArcs: parentArcs.length > 0 ? parentArcs : undefined };
-      }
-
-      // Also sync per-book parentArcs in series
-      if (updated.series) {
+      // Sync per-book parentArcs in container with arc edits (rename, delete, merge, split)
+      if (updated.container) {
         const oldArcNamesS = new Set((cur.result.arcs ?? []).map((a) => a.name));
         const newArcNamesS = new Set((newResult.arcs ?? []).map((a) => a.name));
         const removedS = [...oldArcNamesS].filter((n) => !newArcNamesS.has(n));
         const addedS = [...newArcNamesS].filter((n) => !oldArcNamesS.has(n));
 
-        const syncedBooks = updated.series.books.map((b) => {
+        const syncedBooks = updated.container.books.map((b) => {
           if (!b.parentArcs?.length) return b;
           let bookParentArcs: ParentArc[];
           if (removedS.length === 1 && addedS.length === 1) {
@@ -839,7 +818,7 @@ export default function Home() {
           bookParentArcs = bookParentArcs.filter((pa) => pa.children.length > 0);
           return { ...b, parentArcs: bookParentArcs.length > 0 ? bookParentArcs : undefined };
         });
-        updated = { ...updated, series: { ...updated.series, books: syncedBooks } };
+        updated = { ...updated, container: { ...updated.container, books: syncedBooks } };
       }
 
       storedRef.current = updated;
@@ -903,17 +882,7 @@ export default function Home() {
 
         let accumulated: AnalysisResult | null = stored.lastAnalyzedIndex >= 0 ? stored.result : null;
         let snapshots = [...(stored.snapshots ?? [])];
-        const seriesExcluded = new Set<number>();
-        if (stored.series) {
-          for (const b of stored.series.books) {
-            if (b.excluded) {
-              for (let o = b.chapterStart; o <= b.chapterEnd; o++) seriesExcluded.add(o);
-            } else {
-              for (const ex of b.excludedChapters) seriesExcluded.add(ex);
-            }
-          }
-          for (const uo of stored.series.unassignedChapters) seriesExcluded.add(uo);
-        }
+        const excluded = getExcludedOrders(stored.container);
         let latestStored: StoredBookState = { ...stored };
         let recentText = '';
         const MAX_RECENT_TEXT = 30_000;
@@ -928,30 +897,16 @@ export default function Home() {
             : j));
 
           const ch = chapters[i];
-          if (stored.series) {
-            if (seriesExcluded.has(i)) {
-              if (accumulated) {
-                snapshots = upsertSnapshot(snapshots, i, accumulated);
-                latestStored = { ...latestStored, lastAnalyzedIndex: i, result: accumulated, snapshots };
-                persistState(title, author, latestStored);
-                if (bookRef.current?.title === title && bookRef.current?.author === author) {
-                  storedRef.current = latestStored;
-                }
+          if (excluded.has(i)) {
+            if (accumulated) {
+              snapshots = upsertSnapshot(snapshots, i, accumulated);
+              latestStored = { ...latestStored, lastAnalyzedIndex: i, result: accumulated, snapshots };
+              persistState(title, author, latestStored);
+              if (bookRef.current?.title === title && bookRef.current?.author === author) {
+                storedRef.current = latestStored;
               }
-              continue;
             }
-          } else {
-            if (isFrontMatter(ch)) {
-              if (accumulated) {
-                snapshots = upsertSnapshot(snapshots, i, accumulated);
-                latestStored = { ...latestStored, lastAnalyzedIndex: i, result: accumulated, snapshots };
-                persistState(title, author, latestStored);
-                if (bookRef.current?.title === title && bookRef.current?.author === author) {
-                  storedRef.current = latestStored;
-                }
-              }
-              continue;
-            }
+            continue;
           }
 
           const { result: chResult, model: chModel, events: chEvents } = await analyzeChapter(title, author, { title: ch.title, text: ch.text }, accumulated, chapters.map((c) => c.title));
@@ -1013,7 +968,10 @@ export default function Home() {
         if (accumulated?.arcs?.length) {
           try {
             const parentArcs = await generateParentArcs(title, author, accumulated.arcs);
-            latestStored = { ...latestStored, parentArcs };
+            const updatedBooks = latestStored.container.books.map((b, i) =>
+              i === 0 ? { ...b, parentArcs } : b
+            );
+            latestStored = { ...latestStored, container: { ...latestStored.container, books: updatedBooks } };
             persistState(title, author, latestStored);
             if (bookRef.current?.title === title && bookRef.current?.author === author) {
               storedRef.current = latestStored;
@@ -1043,23 +1001,16 @@ export default function Home() {
     };
     let stateToSave: StoredBookState = initialStored
       ? { ...initialStored, bookMeta }
-      : { lastAnalyzedIndex: -2, result: { characters: [], summary: '' }, snapshots: [], bookMeta };
+      : { lastAnalyzedIndex: -2, result: { characters: [], summary: '' }, snapshots: [], bookMeta, container: { books: [], unassignedChapters: [] } };
 
-    // Build or migrate series definition
-    if (!stateToSave.series && bookMeta.books && bookMeta.books.length >= 2) {
-      if (initialStored?.excludedBooks || initialStored?.bookMeta) {
-        // Migrate from legacy fields
-        const series = migrateToSeriesDefinition(bookMeta, initialStored?.excludedBooks);
-        if (series) stateToSave = { ...stateToSave, series };
-      } else {
-        // Fresh book — build from parser output
-        const chapterTexts = new Map<number, { title: string; text: string }>();
-        for (const ch of parsed.chapters) {
-          chapterTexts.set(ch.order, { title: ch.title, text: ch.text });
-        }
-        const series = buildInitialSeriesDefinition(bookMeta, detectChapterRange, chapterTexts);
-        if (series) stateToSave = { ...stateToSave, series };
+    // Build container if missing (always — single or multi-book)
+    if (!stateToSave.container || stateToSave.container.books.length === 0) {
+      const chapterTexts = new Map<number, { title: string; text: string }>();
+      for (const ch of parsed.chapters) {
+        chapterTexts.set(ch.order, { title: ch.title, text: ch.text });
       }
+      const ctr = buildContainer(bookMeta, detectChapterRange, chapterTexts, parsed.title);
+      stateToSave = { ...stateToSave, container: ctr };
     }
 
     storedRef.current = stateToSave;
@@ -1112,8 +1063,8 @@ export default function Home() {
       setNeedsSetup(false);
     }
 
-    // Show book structure editor for multi-book EPUBs with unconfirmed structure
-    if (stateToSave.series && stateToSave.series.books.some((b) => !b.confirmed)) {
+    // Show book structure editor for EPUBs with unconfirmed structure
+    if (stateToSave.container.books.some((b) => !b.confirmed)) {
       setBookStructureMode('setup');
       setShowBookStructureEditor(true);
     }
@@ -1122,16 +1073,6 @@ export default function Home() {
   async function loadBookFromMeta(title: string, author: string) {
     let stored = await loadBookState(title, author);
     if (!stored) return;
-
-    // Migrate legacy state to series definition if needed
-    if (!stored.series && stored.bookMeta?.books && stored.bookMeta.books.length >= 2) {
-      const series = migrateToSeriesDefinition(stored.bookMeta, stored.excludedBooks);
-      if (series) {
-        stored = { ...stored, series };
-        // Persist migrated state
-        persistState(title, author, stored);
-      }
-    }
 
     // Try to restore chapter texts from IndexedDB
     let textMap: Map<string, string> | null = null;
@@ -1146,13 +1087,14 @@ export default function Home() {
           title,
           author,
           chapters: stored.bookMeta.chapters.map((ch) => ({ ...ch, text: textMap?.get(ch.id) ?? '' })),
-          books: stored.bookMeta.books,
+          books: stored.bookMeta.books ?? [],
         }
       : {
           title,
           author,
           // No chapter list available — analysis data still loads fine
           chapters: [],
+          books: [],
         };
     const ms = await loadBookMapState(title, author);
     activateBook(parsed, stored, ms);
@@ -1246,7 +1188,7 @@ export default function Home() {
     if (!pendingBook) return;
     const prevStored = await loadBookState(prevTitle, prevAuthor);
     if (!prevStored) { activateBook(pendingBook, null); return; }
-    const carried: StoredBookState = { lastAnalyzedIndex: -1, result: prevStored.result, snapshots: [] };
+    const carried: StoredBookState = { lastAnalyzedIndex: -1, result: prevStored.result, snapshots: [], container: prevStored.container };
     setPendingBook(null);
     setSeriesOptions([]);
     activateBook(pendingBook, carried);
@@ -1266,7 +1208,6 @@ export default function Home() {
       const ch = book.chapters[i];
       if (!ch) continue;
       if (visibleChapterOrders && !visibleChapterOrders.has(i)) continue;
-      if (!visibleChapterOrders && isFrontMatter(ch)) continue;
       result.push(i);
     }
     return result;
@@ -1306,7 +1247,7 @@ export default function Home() {
     let accumulated: AnalysisResult | null =
       stored && stored.lastAnalyzedIndex >= 0 ? stored.result : seriesBaseRef.current;
     let snapshots: Snapshot[] = stored?.snapshots ?? [];
-    const analyzeBase = stored ?? { lastAnalyzedIndex: -1, result: { characters: [], summary: '' }, snapshots: [] };
+    const analyzeBase = stored ?? { lastAnalyzedIndex: -1, result: { characters: [], summary: '' }, snapshots: [], container: { books: [], unassignedChapters: [] } };
 
     try {
       for (let step = 0; step < toAnalyze.length; step++) {
@@ -1355,7 +1296,7 @@ export default function Home() {
 
     let accumulated: AnalysisResult | null = seriesBaseRef.current;
     let snapshots: Snapshot[] = storedRef.current?.snapshots ?? [];
-    const rebuildBase = storedRef.current ?? { lastAnalyzedIndex: -1, result: { characters: [], summary: '' }, snapshots: [] };
+    const rebuildBase = storedRef.current ?? { lastAnalyzedIndex: -1, result: { characters: [], summary: '' }, snapshots: [], container: { books: [], unassignedChapters: [] } };
 
     try {
       for (let step = 0; step < toRebuild.length; step++) {
@@ -1401,7 +1342,7 @@ export default function Home() {
 
     let accumulated: AnalysisResult | null = seriesBaseRef.current;
     let snapshots: Snapshot[] = storedRef.current?.snapshots ?? [];
-    const processBase = storedRef.current ?? { lastAnalyzedIndex: -1, result: { characters: [], summary: '' }, snapshots: [] };
+    const processBase = storedRef.current ?? { lastAnalyzedIndex: -1, result: { characters: [], summary: '' }, snapshots: [], container: { books: [], unassignedChapters: [] } };
 
     try {
       for (let step = 0; step < toProcess.length; step++) {
@@ -1439,7 +1380,7 @@ export default function Home() {
     // Remove snapshot at index and all later ones (they're based on the deleted analysis)
     const newSnapshots = cur.snapshots.filter((s) => s.index < index);
     if (newSnapshots.length === 0) {
-      const updated: StoredBookState = { lastAnalyzedIndex: -2, result: { characters: [], summary: '' }, snapshots: [], bookMeta: cur.bookMeta };
+      const updated: StoredBookState = { lastAnalyzedIndex: -2, result: { characters: [], summary: '' }, snapshots: [], bookMeta: cur.bookMeta, container: cur.container };
       storedRef.current = updated;
       persistState(book.title, book.author, updated);
       setResult(null);
@@ -1449,7 +1390,7 @@ export default function Home() {
     const sortedSnaps = [...newSnapshots].sort((a, b) => b.index - a.index);
     const newLastIdx = sortedSnaps[0].index;
     const newResult = sortedSnaps[0].result;
-    const updated: StoredBookState = { lastAnalyzedIndex: newLastIdx, result: newResult, snapshots: newSnapshots, bookMeta: cur.bookMeta };
+    const updated: StoredBookState = { lastAnalyzedIndex: newLastIdx, result: newResult, snapshots: newSnapshots, bookMeta: cur.bookMeta, container: cur.container };
     storedRef.current = updated;
     persistState(book.title, book.author, updated);
     setResult(newResult);
@@ -1464,16 +1405,6 @@ export default function Home() {
     visibleSnapshots.length !== (storedRef.current?.snapshots ?? []).length ? visibleSnapshots : undefined,
   );
   const displayed = characters
-    .filter((c) => {
-      if (filter !== 'all' && c.importance !== filter) return false;
-      if (search) {
-        const q = search.toLowerCase();
-        const hit = c.name.toLowerCase().includes(q)
-          || (c.aliases ?? []).some((a) => a.toLowerCase().includes(q));
-        if (!hit) return false;
-      }
-      return true;
-    })
     .sort((a, b) => {
       if (sortKey === 'importance') return IMPORTANCE_ORDER[a.importance] - IMPORTANCE_ORDER[b.importance];
       if (sortKey === 'name') return a.name.localeCompare(b.name);
@@ -1736,12 +1667,12 @@ export default function Home() {
     <main className="h-screen flex flex-col overflow-hidden bg-paper">
       {/* Modals — unchanged */}
       {showSettings && <SettingsModal onClose={() => { setShowSettings(false); setShowSetupPrompt(false); }} />}
-      {showBookStructureEditor && book && storedRef.current?.series && (
+      {showBookStructureEditor && book && storedRef.current?.container && (
         <BookStructureEditor
-          series={storedRef.current.series}
+          container={storedRef.current.container}
           chapters={book.chapters.map(({ order, title, bookIndex, preview, contentType }) =>
             ({ order, title, bookIndex, preview, contentType }))}
-          onSave={handleSaveSeries}
+          onSave={handleSaveContainer}
           onClose={() => setShowBookStructureEditor(false)}
           mode={bookStructureMode}
           onReextract={handleReextractTitles}
@@ -1802,7 +1733,7 @@ export default function Home() {
           derived={derived}
           onResultEdit={applyResultEdit}
           currentChapterIndex={currentChapterIndex}
-          onSaveSeries={handleSaveSeries}
+          onSaveContainer={handleSaveContainer}
           onReextractTitles={handleReextractTitles}
           savedBooks={listSavedBooks()}
           onLoadBook={loadBookFromMeta}
@@ -1836,24 +1767,8 @@ export default function Home() {
       )}
 
       {/* Main scrollable content area */}
-      <div className="flex-1 overflow-y-auto p-4 lg:pl-20">
-        {/* Snapshot navigator */}
-        {stored && (
-          <SnapshotNav
-            snapshots={visibleSnapshots}
-            chapters={book.chapters}
-            viewingSnapshotIndex={viewingSnapshotIndex}
-            stored={stored}
-            onNavigate={(snapIdx, chIdx, res) => {
-              setViewingSnapshotIndex(snapIdx);
-              setCurrentIndex(chIdx);
-              setResult(res);
-              setSpoilerDismissedIndex(null);
-            }}
-          />
-        )}
-
-        {/* Spoiler banner */}
+      <div className="flex-1 overflow-y-auto p-4 pb-32 lg:pl-20">
+{/* Spoiler banner */}
         {showSpoilerBanner && (
           <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex-shrink-0">
             <span className="text-amber-500 text-sm flex-shrink-0">&#9888;</span>
@@ -1932,28 +1847,6 @@ export default function Home() {
           <div>
             {tab === 'characters' && (
               <>
-                <div className="flex flex-wrap items-center gap-2 mb-4">
-                  <input
-                    type="search"
-                    placeholder="Search..."
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    className="bg-paper border border-border rounded-lg px-3 py-2 text-sm text-ink placeholder-ink-dim font-serif focus:outline-none focus:border-rust min-w-36 flex-1"
-                  />
-                  <div className="flex gap-1.5 flex-wrap">
-                    {(['all', 'main', 'secondary', 'minor'] as const).map((f) => (
-                      <button
-                        key={f}
-                        onClick={() => setFilter(f)}
-                        className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
-                          filter === f ? 'bg-rust/10 text-rust' : 'text-ink-soft border border-border hover:border-rust/30'
-                        }`}
-                      >
-                        {f.charAt(0).toUpperCase() + f.slice(1)}
-                      </button>
-                    ))}
-                  </div>
-                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                   {displayed.map((character) => (
                     <NewCharacterCard
@@ -2020,7 +1913,7 @@ export default function Home() {
                   locationAliasMap={derived.locationAliasMap}
                   locationGroups={derived.locationGroups}
                   currentChapterIndex={currentChapterIndex}
-                  parentArcs={stored?.parentArcs}
+                  parentArcs={stored?.container.books[0]?.parentArcs}
                   onMapStateChange={(state) => {
                     setMapState(state);
                     persistMapState(book.title, book.author, state);
