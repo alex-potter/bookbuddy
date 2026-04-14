@@ -145,6 +145,7 @@ export default function WorkshopScreen(props: WorkshopScreenProps) {
             metaOnly={props.isMetaOnly}
             needsSetup={props.needsSetup}
             onCompleteSetup={props.onCompleteSetup}
+            container={props.stored.container}
           />
         )}
 

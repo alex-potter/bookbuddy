@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { EbookChapter } from '@/types';
+import type { EbookChapter, BookContainer } from '@/types';
 import { normalizeTitle } from '@/lib/normalize-title';
+import { getDisplayLabel, displayChapterNumber, findBookForChapter } from '@/lib/series';
 
 interface Props {
   chapters: EbookChapter[];
@@ -27,6 +28,7 @@ interface Props {
   metaOnly?: boolean;
   needsSetup?: boolean;
   onCompleteSetup?: (range: { start: number; end: number }) => void;
+  container?: BookContainer;
 }
 
 const BYTES_PER_LOCATION = 128;
@@ -97,13 +99,13 @@ function ChapterItem({
     : globalIndex < currentIndex ? '·'
     : '○';
 
-  const color = isExcluded ? 'text-stone-200 dark:text-zinc-800 cursor-default'
+  const color = isExcluded ? 'text-ink-dim/30 cursor-default'
     : isRebuildingThis ? 'bg-violet-500/10 text-violet-400'
-    : isCurrent ? 'bg-stone-300 dark:bg-zinc-800 text-stone-900 dark:text-zinc-100 font-semibold'
-    : hasSnapshot ? 'text-amber-600/70 hover:bg-amber-950/30 hover:text-amber-500'
-    : isAnalyzed || isLastAnalyzed ? 'text-stone-500 dark:text-zinc-400 hover:bg-stone-100/60 dark:hover:bg-zinc-800/60'
-    : globalIndex <= frontier ? 'text-stone-400 dark:text-zinc-500 hover:bg-stone-100/60 dark:hover:bg-zinc-800/60'
-    : 'text-stone-300 dark:text-zinc-700 cursor-default';
+    : isCurrent ? 'bg-paper-dark text-ink font-semibold'
+    : hasSnapshot ? 'text-amber/70 hover:bg-amber-500/10 hover:text-amber'
+    : isAnalyzed || isLastAnalyzed ? 'text-ink-soft hover:bg-paper'
+    : globalIndex <= frontier ? 'text-ink-dim hover:bg-paper'
+    : 'text-ink-dim/40 cursor-default';
 
   return (
     <div className="flex items-center group">
@@ -119,7 +121,7 @@ function ChapterItem({
         <span className="mr-1.5 text-[10px]">{marker}</span>
         {normalizeTitle(ch.title)}
         {mode === 'location' && (
-          <span className="ml-1 text-stone-400 dark:text-zinc-600">~{chapterIndexToLocation(globalIndex, chapters).toLocaleString()}</span>
+          <span className="ml-1 text-ink-dim">~{chapterIndexToLocation(globalIndex, chapters).toLocaleString()}</span>
         )}
       </button>
       {onSetBookmark && (
@@ -127,8 +129,8 @@ function ChapterItem({
           onClick={(e) => { e.stopPropagation(); onSetBookmark(globalIndex === readingBookmark ? null : globalIndex); }}
           className={`flex-shrink-0 ml-0.5 w-4 h-4 flex items-center justify-center rounded text-[9px] transition-opacity ${
             globalIndex === readingBookmark
-              ? 'text-amber-500 opacity-100'
-              : 'text-stone-300 dark:text-zinc-700 hover:text-amber-500 opacity-0 group-hover:opacity-100'
+              ? 'text-amber opacity-100'
+              : 'text-ink-dim/40 hover:text-amber opacity-0 group-hover:opacity-100'
           }`}
           title={globalIndex === readingBookmark ? 'Clear bookmark' : 'Bookmark here'}
         >
@@ -143,8 +145,8 @@ function ChapterItem({
           title="Set as analysis start"
           className={`flex-shrink-0 ml-0.5 w-4 h-4 flex items-center justify-center rounded text-[9px] transition-opacity ${
             isRangeStart
-              ? 'text-amber-500 opacity-100'
-              : 'text-stone-300 dark:text-zinc-700 hover:text-amber-500 opacity-0 group-hover:opacity-100'
+              ? 'text-amber opacity-100'
+              : 'text-ink-dim/40 hover:text-amber opacity-0 group-hover:opacity-100'
           }`}
         >
           ⌞
@@ -156,8 +158,8 @@ function ChapterItem({
           title="Set as analysis end"
           className={`flex-shrink-0 ml-0.5 w-4 h-4 flex items-center justify-center rounded text-[9px] transition-opacity ${
             isRangeEnd
-              ? 'text-amber-500 opacity-100'
-              : 'text-stone-300 dark:text-zinc-700 hover:text-amber-500 opacity-0 group-hover:opacity-100'
+              ? 'text-amber opacity-100'
+              : 'text-ink-dim/40 hover:text-amber opacity-0 group-hover:opacity-100'
           }`}
         >
           ⌟
@@ -167,7 +169,7 @@ function ChapterItem({
         <button
           onClick={(e) => { e.stopPropagation(); onDeleteSnapshot(globalIndex); }}
           title="Delete this snapshot (and all later ones)"
-          className="flex-shrink-0 ml-0.5 w-4 h-4 flex items-center justify-center rounded text-[9px] opacity-0 group-hover:opacity-100 transition-opacity text-stone-300 dark:text-zinc-700 hover:text-red-500"
+          className="flex-shrink-0 ml-0.5 w-4 h-4 flex items-center justify-center rounded text-[9px] opacity-0 group-hover:opacity-100 transition-opacity text-ink-dim/40 hover:text-danger"
         >
           🗑
         </button>
@@ -183,9 +185,10 @@ interface ComboboxProps {
   isOmnibus: boolean;
   bookGroups: Map<number, { bookTitle: string; items: Array<{ ch: EbookChapter; globalIndex: number; chapterNum: number }> }>;
   onChange: (index: number) => void;
+  container?: BookContainer;
 }
 
-function ChapterCombobox({ chapters, currentIndex, lastAnalyzedIndex, isOmnibus, bookGroups, onChange }: ComboboxProps) {
+function ChapterCombobox({ chapters, currentIndex, lastAnalyzedIndex, isOmnibus, bookGroups, onChange, container }: ComboboxProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -196,6 +199,7 @@ function ChapterCombobox({ chapters, currentIndex, lastAnalyzedIndex, isOmnibus,
   const displayLabel = currentCh ? normalizeTitle(currentCh.title) : '—';
   const subLabel = (() => {
     if (!currentCh) return '';
+    if (container) return getDisplayLabel(container, currentCh.order);
     if (currentCh.bookIndex === undefined) return `${currentIndex + 1} of ${chapters.length} chapters`;
     let num = 0, bookTotal = 0;
     for (const c of chapters) {
@@ -209,12 +213,17 @@ function ChapterCombobox({ chapters, currentIndex, lastAnalyzedIndex, isOmnibus,
   const flatItems: FlatItem[] = isOmnibus
     ? [...bookGroups.entries()].flatMap(([, { bookTitle, items }]) =>
         items.map(({ ch, globalIndex, chapterNum }) => ({
-          globalIndex, chapterNum,
+          globalIndex,
+          chapterNum: container ? displayChapterNumber(container, ch.bookIndex ?? 0, ch.order) : chapterNum,
           label: normalizeTitle(ch.title),
-          groupLabel: bookTitle,
+          groupLabel: container ? (findBookForChapter(container, ch.order)?.title ?? bookTitle) : bookTitle,
         })),
       )
-    : chapters.map((ch, i) => ({ globalIndex: i, label: normalizeTitle(ch.title) }));
+    : chapters.map((ch, i) => ({
+        globalIndex: i,
+        label: normalizeTitle(ch.title),
+        chapterNum: container ? displayChapterNumber(container, 0, ch.order) : undefined,
+      }));
 
   const q = query.toLowerCase();
   const filtered = q
@@ -275,18 +284,18 @@ function ChapterCombobox({ chapters, currentIndex, lastAnalyzedIndex, isOmnibus,
       <button
         type="button"
         onClick={openDropdown}
-        className="w-full flex items-center justify-between bg-stone-100 dark:bg-zinc-800 border border-stone-300 dark:border-zinc-700 rounded-lg px-3 py-2.5 text-left focus:outline-none focus:border-stone-400 dark:focus:border-zinc-500 hover:border-stone-400 dark:hover:border-zinc-600 transition-colors"
+        className="w-full flex items-center justify-between bg-paper border border-border rounded-lg px-3 py-2.5 text-left focus:outline-none focus:border-rust hover:border-ink-dim transition-colors"
       >
-        <span className="text-sm text-stone-800 dark:text-zinc-200 truncate min-w-0">{displayLabel}</span>
-        <span className="flex-shrink-0 ml-2 text-stone-400 dark:text-zinc-500 text-xs">▾</span>
+        <span className="text-sm text-ink truncate min-w-0 font-serif">{displayLabel}</span>
+        <span className="flex-shrink-0 ml-2 text-ink-dim text-xs">▾</span>
       </button>
-      <p className="mt-1.5 text-xs text-stone-400 dark:text-zinc-600">{subLabel}</p>
+      <p className="mt-1.5 text-xs text-ink-dim">{subLabel}</p>
 
       {/* Dropdown */}
       {open && (
-        <div className="absolute z-50 top-full mt-1 left-0 right-0 bg-white dark:bg-zinc-900 border border-stone-200 dark:border-zinc-700 rounded-lg shadow-xl flex flex-col max-h-72 overflow-hidden">
+        <div className="absolute z-50 top-full mt-1 left-0 right-0 bg-paper-raised border border-border rounded-lg shadow-xl flex flex-col max-h-72 overflow-hidden">
           {/* Search input */}
-          <div className="px-2 pt-2 pb-1.5 border-b border-stone-100 dark:border-zinc-800">
+          <div className="px-2 pt-2 pb-1.5 border-b border-border">
             <input
               ref={inputRef}
               autoFocus
@@ -295,18 +304,18 @@ function ChapterCombobox({ chapters, currentIndex, lastAnalyzedIndex, isOmnibus,
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={handleKey}
               placeholder="Search chapters…"
-              className="w-full bg-stone-50 dark:bg-zinc-800 border border-stone-200 dark:border-zinc-700 rounded-md px-2.5 py-1.5 text-xs text-stone-800 dark:text-zinc-200 placeholder-stone-400 dark:placeholder-zinc-600 focus:outline-none focus:border-stone-400 dark:focus:border-zinc-500"
+              className="w-full bg-paper border border-border rounded-md px-2.5 py-1.5 text-xs text-ink placeholder-ink-dim focus:outline-none focus:border-rust font-serif"
             />
           </div>
           {/* List */}
           <div ref={listRef} className="overflow-y-auto flex-1">
             {groups.length === 0 || (groups.length === 1 && groups[0].items.length === 0) ? (
-              <p className="px-3 py-4 text-xs text-stone-400 dark:text-zinc-600 text-center">No chapters match</p>
+              <p className="px-3 py-4 text-xs text-ink-dim text-center">No chapters match</p>
             ) : (
               groups.map((group, gi) => (
                 <div key={gi}>
                   {group.label && (
-                    <div className="px-2.5 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-stone-400 dark:text-zinc-600">{group.label}</div>
+                    <div className="px-2.5 pt-2 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-ink-dim">{group.label}</div>
                   )}
                   {group.items.map((it) => {
                     const isActive = it.globalIndex === currentIndex;
@@ -316,15 +325,15 @@ function ChapterCombobox({ chapters, currentIndex, lastAnalyzedIndex, isOmnibus,
                         key={it.globalIndex}
                         data-active={isActive}
                         onClick={() => select(it.globalIndex)}
-                        className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                        className={`w-full text-left px-3 py-1.5 text-xs font-serif transition-colors ${
                           isActive
-                            ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 font-medium'
+                            ? 'bg-amber-500/10 text-amber font-medium'
                             : analyzed
-                            ? 'text-amber-600/60 dark:text-amber-500/50 hover:bg-stone-50 dark:hover:bg-zinc-800'
-                            : 'text-stone-700 dark:text-zinc-300 hover:bg-stone-50 dark:hover:bg-zinc-800'
+                            ? 'text-amber/60 hover:bg-paper'
+                            : 'text-ink hover:bg-paper'
                         }`}
                       >
-                        <span className="text-stone-400 dark:text-zinc-600 mr-1.5 tabular-nums">
+                        <span className="text-ink-dim mr-1.5 tabular-nums font-mono">
                           {it.chapterNum !== undefined ? `${it.chapterNum}.` : `${it.globalIndex + 1}.`}
                         </span>
                         {it.label}
@@ -346,7 +355,7 @@ export default function ChapterSelector({
   analyzing, rebuilding, rebuildProgress, lastAnalyzedIndex,
   snapshotIndices, visibleChapterOrders,
   chapterRange, onSetRange, onProcessBook, onDeleteSnapshot, readingBookmark, onSetBookmark, metaOnly,
-  needsSetup, onCompleteSetup,
+  needsSetup, onCompleteSetup, container,
 }: Props) {
   const [mode, setMode] = useState<'chapter' | 'location'>('chapter');
   const [locationInput, setLocationInput] = useState('');
@@ -429,22 +438,22 @@ export default function ChapterSelector({
     const setupEnd = chapterRange?.end ?? (chapters.length - 1);
     return (
       <div className="flex flex-col h-full">
-        <h2 className="text-sm font-semibold text-stone-800 dark:text-zinc-200 mb-1">Set up your book</h2>
-        <p className="text-xs text-stone-400 dark:text-zinc-500 mb-4">
+        <h2 className="text-sm font-semibold text-ink mb-1 font-serif">Set up your book</h2>
+        <p className="text-xs text-ink-dim mb-4">
           Choose which chapters to analyze. Front &amp; back matter have been auto-detected — adjust if needed.
         </p>
 
         {/* Range summary */}
         <div className="p-2.5 rounded-lg border border-amber-500/30 bg-amber-500/5 space-y-1.5 mb-4">
           <p className="text-[10px] font-semibold text-amber-500 uppercase tracking-wider">Analysis range</p>
-          <div className="flex items-center gap-1.5 text-xs text-stone-500 dark:text-zinc-400">
-            <span className="text-amber-500 font-bold">Start:</span>
+          <div className="flex items-center gap-1.5 text-xs text-ink-soft">
+            <span className="text-amber font-bold">Start:</span>
             <span className="truncate flex-1 min-w-0">
               {normalizeTitle(chapters[setupStart]?.title ?? '') || `Ch. ${setupStart + 1}`}
             </span>
           </div>
-          <div className="flex items-center gap-1.5 text-xs text-stone-500 dark:text-zinc-400">
-            <span className="text-amber-500 font-bold">End:</span>
+          <div className="flex items-center gap-1.5 text-xs text-ink-soft">
+            <span className="text-amber font-bold">End:</span>
             <span className="truncate flex-1 min-w-0">
               {normalizeTitle(chapters[setupEnd]?.title ?? '') || `Ch. ${setupEnd + 1}`}
             </span>
@@ -462,14 +471,14 @@ export default function ChapterSelector({
                 <li key={ch.id} className={`flex items-center gap-1 rounded-md transition-colors ${
                   isStart || isEnd ? 'bg-amber-500/10' : ''
                 }`}>
-                  <span className={`flex-1 text-xs px-2 py-1.5 truncate ${
+                  <span className={`flex-1 text-xs px-2 py-1.5 truncate font-serif ${
                     isStart || isEnd
-                      ? 'text-amber-500 font-semibold'
+                      ? 'text-amber font-semibold'
                       : inRange
-                      ? 'text-stone-700 dark:text-zinc-300'
-                      : 'text-stone-300 dark:text-zinc-700'
+                      ? 'text-ink'
+                      : 'text-ink-dim/40'
                   }`}>
-                    <span className="text-stone-400 dark:text-zinc-600 mr-1.5 tabular-nums text-[10px]">{i + 1}.</span>
+                    <span className="text-ink-dim mr-1.5 tabular-nums text-[10px] font-mono">{i + 1}.</span>
                     {normalizeTitle(ch.title)}
                   </span>
                   <button
@@ -477,7 +486,7 @@ export default function ChapterSelector({
                     className={`flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
                       isStart
                         ? 'text-amber-500 bg-amber-500/20'
-                        : 'text-stone-400 dark:text-zinc-600 hover:text-amber-500 hover:bg-amber-500/10'
+                        : 'text-ink-dim hover:text-amber hover:bg-amber-500/10'
                     }`}
                   >
                     Start
@@ -487,7 +496,7 @@ export default function ChapterSelector({
                     className={`flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${
                       isEnd
                         ? 'text-amber-500 bg-amber-500/20'
-                        : 'text-stone-400 dark:text-zinc-600 hover:text-amber-500 hover:bg-amber-500/10'
+                        : 'text-ink-dim hover:text-amber hover:bg-amber-500/10'
                     }`}
                   >
                     End
@@ -501,7 +510,7 @@ export default function ChapterSelector({
         {/* Confirm button */}
         <button
           onClick={() => onCompleteSetup({ start: setupStart, end: setupEnd })}
-          className="w-full py-2.5 rounded-lg text-sm font-semibold bg-amber-500 text-zinc-900 hover:bg-amber-400 transition-colors"
+          className="w-full py-2.5 rounded-lg text-sm font-semibold bg-rust text-white hover:bg-rust/90 transition-colors"
         >
           Confirm &amp; Continue
         </button>
@@ -512,13 +521,13 @@ export default function ChapterSelector({
   return (
     <div className="flex flex-col h-full">
       {/* Mode toggle */}
-      <div className="flex rounded-lg overflow-hidden border border-stone-300 dark:border-zinc-700 mb-4">
+      <div className="flex rounded-lg overflow-hidden border border-border mb-4">
         {(['chapter', 'location'] as const).map((m) => (
           <button
             key={m}
             onClick={() => handleModeSwitch(m)}
             className={`flex-1 py-1.5 text-xs font-medium transition-colors ${
-              mode === m ? 'bg-stone-200 dark:bg-zinc-700 text-stone-900 dark:text-zinc-100' : 'bg-transparent text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300'
+              mode === m ? 'bg-paper-dark text-ink' : 'bg-transparent text-ink-dim hover:text-ink'
             }`}
           >
             {m === 'chapter' ? 'By Chapter' : 'Kindle Location'}
@@ -528,7 +537,7 @@ export default function ChapterSelector({
 
       {/* Currently at */}
       <div className="mb-4">
-        <label className="block text-xs font-medium text-stone-400 dark:text-zinc-500 uppercase tracking-wider mb-2">Currently at</label>
+        <label className="block text-xs font-medium text-ink-dim uppercase tracking-wider mb-2">Currently at</label>
         {mode === 'chapter' ? (
           <ChapterCombobox
             chapters={chapters}
@@ -537,6 +546,7 @@ export default function ChapterSelector({
             isOmnibus={isOmnibus}
             bookGroups={bookGroups}
             onChange={onChange}
+            container={container}
           />
         ) : (
           <>
@@ -544,10 +554,10 @@ export default function ChapterSelector({
               type="number" min={1} max={totalLocations} value={locationInput}
               onChange={(e) => handleLocationChange(e.target.value)}
               placeholder="e.g. 3421"
-              className="w-full bg-stone-100 dark:bg-zinc-800 border border-stone-300 dark:border-zinc-700 rounded-lg px-3 py-2.5 text-stone-800 dark:text-zinc-200 text-sm focus:outline-none focus:border-stone-400 dark:focus:border-zinc-500"
+              className="w-full bg-paper border border-border rounded-lg px-3 py-2.5 text-ink text-sm focus:outline-none focus:border-rust"
             />
-            <p className="mt-1.5 text-xs text-stone-400 dark:text-zinc-600">≈ {normalizeTitle(chapters[currentIndex]?.title ?? '')} · ~{totalLocations.toLocaleString()} total</p>
-            <p className="mt-0.5 text-xs text-stone-300 dark:text-zinc-700">Approximate (±1 chapter)</p>
+            <p className="mt-1.5 text-xs text-ink-dim">≈ {normalizeTitle(chapters[currentIndex]?.title ?? '')} · ~{totalLocations.toLocaleString()} total</p>
+            <p className="mt-0.5 text-xs text-ink-dim/50">Approximate (±1 chapter)</p>
           </>
         )}
       </div>
@@ -563,17 +573,17 @@ export default function ChapterSelector({
           onClick={onAnalyze} disabled={busy}
           title={metaOnly ? 'Re-upload EPUB to analyze' : undefined}
           className={`w-full py-2.5 rounded-lg text-sm font-semibold transition-colors ${
-            busy ? 'bg-stone-100 dark:bg-zinc-800 text-stone-400 dark:text-zinc-600 cursor-not-allowed' : 'bg-amber-500 text-zinc-900 hover:bg-amber-400'
+            busy ? 'bg-paper-dark text-ink-dim cursor-not-allowed' : 'bg-rust text-white hover:bg-rust/90'
           }`}
         >
           ⌖ Analyze Chapters
         </button>
       )}
       {metaOnly && (
-        <p className="mt-1.5 text-xs text-center text-stone-400 dark:text-zinc-600">Re-upload EPUB to analyze</p>
+        <p className="mt-1.5 text-xs text-center text-ink-dim">Re-upload EPUB to analyze</p>
       )}
       {!busy && !metaOnly && lastAnalyzedIndex !== null && lastAnalyzedIndex >= 0 && lastAnalyzedIndex < currentIndex && (
-        <p className="mt-1.5 text-xs text-center text-stone-400 dark:text-zinc-600">Ch.{lastAnalyzedIndex + 2}–{currentIndex + 1} · chapter by chapter</p>
+        <p className="mt-1.5 text-xs text-center text-ink-dim">Ch.{lastAnalyzedIndex + 2}–{currentIndex + 1} · chapter by chapter</p>
       )}
 
       {/* Rebuild */}
@@ -588,55 +598,55 @@ export default function ChapterSelector({
             onClick={onRebuild} disabled={busy}
             title="Re-analyze from chapter 1, overwriting existing data"
             className={`w-full py-2 rounded-lg text-xs font-medium border transition-colors ${
-              busy ? 'border-stone-200 dark:border-zinc-800 text-stone-300 dark:text-zinc-700 cursor-not-allowed' : 'border-stone-300 dark:border-zinc-700 text-stone-400 dark:text-zinc-500 hover:text-stone-700 dark:hover:text-zinc-300 hover:border-stone-400 dark:hover:border-zinc-600'
+              busy ? 'border-border/50 text-ink-dim/40 cursor-not-allowed' : 'border-border text-ink-dim hover:text-ink hover:border-ink-dim'
             }`}
           >
             Rebuild from scratch
           </button>
         )}
-        {!busy && <p className="mt-1 text-xs text-center text-stone-300 dark:text-zinc-700">Re-analyze ch.1–{currentIndex + 1} from scratch</p>}
+        {!busy && <p className="mt-1 text-xs text-center text-ink-dim/50">Re-analyze ch.1–{currentIndex + 1} from scratch</p>}
       </div>
 
       {/* Analysis range */}
       {onSetRange && (
-        <div className="mt-3 p-2.5 rounded-lg border border-stone-200 dark:border-zinc-800 bg-stone-50 dark:bg-zinc-900/50 space-y-1.5">
+        <div className="mt-3 p-2.5 rounded-lg border border-border bg-paper space-y-1.5">
           <div className="flex items-center justify-between">
-            <p className="text-[10px] font-semibold text-stone-400 dark:text-zinc-500 uppercase tracking-wider">Analysis range</p>
+            <p className="text-[10px] font-semibold text-ink-dim uppercase tracking-wider">Analysis range</p>
             {chapterRange && (
               <button
                 onClick={() => onSetRange(null)}
-                className="text-[10px] text-stone-400 dark:text-zinc-600 hover:text-red-500 transition-colors"
+                className="text-[10px] text-ink-dim hover:text-danger transition-colors"
                 title="Clear range"
               >
                 Clear
               </button>
             )}
           </div>
-          <div className="flex items-center gap-1.5 text-xs text-stone-500 dark:text-zinc-400">
-            <span className="text-amber-500">⌞</span>
+          <div className="flex items-center gap-1.5 text-xs text-ink-soft">
+            <span className="text-amber">⌞</span>
             <span className="truncate flex-1 min-w-0">
               {rangeStart !== undefined
                 ? (normalizeTitle(chapters[rangeStart]?.title ?? '') || `Ch. ${rangeStart + 1}`)
-                : <span className="text-stone-300 dark:text-zinc-700 italic">First chapter</span>}
+                : <span className="text-ink-dim/50 italic">First chapter</span>}
             </span>
           </div>
-          <div className="flex items-center gap-1.5 text-xs text-stone-500 dark:text-zinc-400">
-            <span className="text-amber-500">⌟</span>
+          <div className="flex items-center gap-1.5 text-xs text-ink-soft">
+            <span className="text-amber">⌟</span>
             <span className="truncate flex-1 min-w-0">
               {rangeEnd !== undefined
                 ? (normalizeTitle(chapters[rangeEnd]?.title ?? '') || `Ch. ${rangeEnd + 1}`)
-                : <span className="text-stone-300 dark:text-zinc-700 italic">Last chapter</span>}
+                : <span className="text-ink-dim/50 italic">Last chapter</span>}
             </span>
           </div>
-          <p className="text-[10px] text-stone-300 dark:text-zinc-700">Hover a chapter below to set ⌞ start or ⌟ end</p>
+          <p className="text-[10px] text-ink-dim/50">Hover a chapter below to set ⌞ start or ⌟ end</p>
           {onProcessBook && chapterRange && (
             <button
               onClick={onProcessBook}
               disabled={busy}
               className={`w-full mt-1 py-1.5 rounded-md text-xs font-semibold transition-colors ${
                 busy
-                  ? 'bg-stone-100 dark:bg-zinc-800 text-stone-300 dark:text-zinc-700 cursor-not-allowed'
-                  : 'bg-amber-500/15 text-amber-500 hover:bg-amber-500/25 border border-amber-500/30'
+                  ? 'bg-paper-dark text-ink-dim/40 cursor-not-allowed'
+                  : 'bg-amber-500/15 text-amber hover:bg-amber-500/25 border border-amber-500/30'
               }`}
             >
               ⌖ Process entire book
@@ -647,7 +657,7 @@ export default function ChapterSelector({
 
       {/* Chapter list */}
       <div className="mt-5 flex-1 overflow-y-auto">
-        <p className="text-xs font-medium text-stone-400 dark:text-zinc-600 uppercase tracking-wider mb-2">Chapters</p>
+        <p className="text-xs font-medium text-ink-dim uppercase tracking-wider mb-2">Chapters</p>
 
         {isOmnibus ? (
           // If both range boundaries fall within the same book group, promote its
@@ -695,21 +705,21 @@ export default function ChapterSelector({
                   <div className={`flex items-center rounded-lg border transition-colors ${
                     isCurrent
                       ? 'border-amber-500/20 bg-amber-500/5'
-                      : 'border-stone-200 dark:border-zinc-800 bg-stone-100/20 dark:bg-zinc-800/20 hover:bg-stone-100/40 dark:hover:bg-zinc-800/40'
+                      : 'border-border bg-paper/20 hover:bg-paper/40'
                   }`}>
                     <button
                       onClick={() => toggleExpand(bookIdx)}
                       className="flex-1 flex items-center gap-2 px-2.5 py-2 text-left min-w-0"
                     >
-                      <span className={`flex-shrink-0 text-[10px] ${isExpanded ? 'text-stone-500 dark:text-zinc-400' : 'text-stone-400 dark:text-zinc-600'}`}>
+                      <span className={`flex-shrink-0 text-[10px] ${isExpanded ? 'text-ink-soft' : 'text-ink-dim'}`}>
                         {isExpanded ? '▾' : '▸'}
                       </span>
-                      <span className={`text-xs font-semibold truncate ${isCurrent ? 'text-amber-400/80' : 'text-stone-500 dark:text-zinc-400'}`}>
+                      <span className={`text-xs font-semibold truncate font-serif ${isCurrent ? 'text-amber/80' : 'text-ink-soft'}`}>
                         {bookTitle}
                       </span>
                     </button>
                     <div className="flex items-center gap-1.5 pr-2 flex-shrink-0">
-                      <span className="text-[10px] text-stone-400 dark:text-zinc-600">
+                      <span className="text-[10px] text-ink-dim">
                         {analyzedCount > 0 ? `${analyzedCount}/${items.length}` : `${items.length} ch.`}
                       </span>
                     </div>
@@ -717,7 +727,7 @@ export default function ChapterSelector({
 
                   {/* Chapters (expanded) */}
                   {isExpanded && (
-                    <ul className="mt-0.5 ml-2 space-y-0.5 border-l border-stone-200 dark:border-zinc-800 pl-2">
+                    <ul className="mt-0.5 ml-2 space-y-0.5 border-l border-border pl-2">
                       {rangeFilteredItems.map(({ ch, globalIndex }) => (
                         <ChapterItem key={ch.id} ch={ch} globalIndex={globalIndex} isExcluded={false} isRangeStart={rangeStart === globalIndex} isRangeEnd={rangeEnd === globalIndex} {...itemProps} />
                       ))}

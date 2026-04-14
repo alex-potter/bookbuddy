@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import type { AnalysisResult, NarrativeArc, ParentArc, Snapshot } from '@/types';
+import type { AnalysisResult, BookContainer, NarrativeArc, ParentArc, Snapshot } from '@/types';
 import type { SnapshotTransform } from '@/lib/propagate-edit';
+import { getDisplayLabel } from '@/lib/series';
 import NarrativeArcModal from '@/components/NarrativeArcModal';
 import CharacterModal from '@/components/CharacterModal';
 import LocationModal from '@/components/LocationModal';
@@ -19,6 +20,7 @@ interface Props {
   onUpdateParentArcs?: (parentArcs: ParentArc[]) => void;
   staleBooks?: string[];
   onRegroupArcs?: () => void;
+  container?: BookContainer;
 }
 
 const STATUS_CONFIG = {
@@ -27,7 +29,7 @@ const STATUS_CONFIG = {
   resolved: { label: 'Resolved', dot: 'bg-emerald-500', badge: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
 };
 
-export default function ArcsPanel({ arcs, snapshots, chapterTitles, currentResult, onResultEdit, arcChapterMap: arcChapterMapProp, currentChapterIndex, parentArcs, onUpdateParentArcs, staleBooks, onRegroupArcs }: Props) {
+export default function ArcsPanel({ arcs, snapshots, chapterTitles, currentResult, onResultEdit, arcChapterMap: arcChapterMapProp, currentChapterIndex, parentArcs, onUpdateParentArcs, staleBooks, onRegroupArcs, container }: Props) {
   const [selectedArc, setSelectedArc] = useState<string | null>(null);
   const [selectedCharName, setSelectedCharName] = useState<string | null>(null);
   const [selectedLocationName, setSelectedLocationName] = useState<string | null>(null);
@@ -131,9 +133,9 @@ export default function ArcsPanel({ arcs, snapshots, chapterTitles, currentResul
           {chapters.length > 0 && totalChapters > 1 && (
             <div className="space-y-1">
               <div className="flex justify-between text-[10px] text-stone-400 dark:text-zinc-600">
-                <span>{firstCh !== null ? (chapterTitles[firstCh] ?? `Ch. ${firstCh + 1}`) : '—'}</span>
+                <span>{firstCh !== null ? (container ? getDisplayLabel(container, firstCh) : (chapterTitles[firstCh] ?? `Ch. ${firstCh + 1}`)) : '—'}</span>
                 {lastCh !== firstCh && lastCh !== null && (
-                  <span>{chapterTitles[lastCh] ?? `Ch. ${lastCh + 1}`}</span>
+                  <span>{container ? getDisplayLabel(container, lastCh) : (chapterTitles[lastCh] ?? `Ch. ${lastCh + 1}`)}</span>
                 )}
               </div>
               <div className="w-full h-1.5 bg-stone-100 dark:bg-zinc-800 rounded-full overflow-hidden relative">
@@ -149,7 +151,7 @@ export default function ArcsPanel({ arcs, snapshots, chapterTitles, currentResul
                     key={idx}
                     className={`absolute top-0 w-0.5 h-full ${cfg.dot}`}
                     style={{ left: `${((idx + 0.5) / totalChapters) * 100}%` }}
-                    title={chapterTitles[idx] ?? `Ch. ${idx + 1}`}
+                    title={container ? getDisplayLabel(container, idx) : (chapterTitles[idx] ?? `Ch. ${idx + 1}`)}
                   />
                 ))}
               </div>

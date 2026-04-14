@@ -1803,6 +1803,7 @@ export default function Home() {
           onSetReadingPosition={handleSetReadingPosition}
           onClose={() => setShowTimeline(false)}
           onJumpToChapter={(i) => { handleChapterChange(i); setShowTimeline(false); }}
+          container={stored?.container}
         />
       )}
 

@@ -1,11 +1,12 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { AnalysisResult, ChapterEvent, PinUpdates, ReadingPosition, Snapshot } from '@/types';
+import type { AnalysisResult, BookContainer, ChapterEvent, PinUpdates, ReadingPosition, Snapshot } from '@/types';
 import type { SnapshotTransform } from '@/lib/propagate-edit';
 import CharacterModal from './CharacterModal';
 import NarrativeArcModal from './NarrativeArcModal';
 import LocationModal from './LocationModal';
+import { getDisplayLabel } from '@/lib/series';
 
 interface StoryTimelineProps {
   snapshots: Snapshot[];
@@ -17,9 +18,10 @@ interface StoryTimelineProps {
   onSetReadingPosition?: (position: ReadingPosition) => void;
   onClose: () => void;
   onJumpToChapter: (index: number) => void;
+  container?: BookContainer;
 }
 
-export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, currentResult, onResultEdit, readingPosition, onSetReadingPosition, onClose, onJumpToChapter }: StoryTimelineProps) {
+export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, currentResult, onResultEdit, readingPosition, onSetReadingPosition, onClose, onJumpToChapter, container }: StoryTimelineProps) {
   const currentRef = useRef<HTMLDivElement>(null);
   const [selectedCharacter, setSelectedCharacter] = useState<string | null>(null);
   const [selectedArc, setSelectedArc] = useState<string | null>(null);
@@ -87,18 +89,18 @@ export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, 
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
 
       <div
-        className="relative z-10 w-full max-w-2xl max-h-[85vh] max-h-[85dvh] flex flex-col bg-white dark:bg-zinc-900 rounded-2xl border border-stone-200 dark:border-zinc-800 shadow-2xl"
+        className="relative z-10 w-full max-w-2xl max-h-[85vh] max-h-[85dvh] flex flex-col bg-paper-raised rounded-2xl border border-border shadow-2xl font-serif"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center gap-3 p-6 pb-4 border-b border-stone-200 dark:border-zinc-800 flex-shrink-0">
-          <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-stone-100 dark:bg-zinc-800 flex items-center justify-center text-lg">
+        <div className="flex items-center gap-3 p-6 pb-4 border-b border-border flex-shrink-0">
+          <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-paper flex items-center justify-center text-lg">
             📖
           </div>
-          <h2 className="text-lg font-bold text-stone-900 dark:text-zinc-100 flex-1">Story Timeline</h2>
+          <h2 className="text-lg font-bold text-ink flex-1">Story Timeline</h2>
           <button
             onClick={onClose}
-            className="text-stone-400 hover:text-stone-600 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors"
+            className="text-ink-dim hover:text-ink transition-colors"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -109,11 +111,11 @@ export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6">
           {visibleEntries.length === 0 ? (
-            <p className="text-sm text-stone-400 dark:text-zinc-500 text-center py-8">No chapter summaries yet</p>
+            <p className="text-sm text-ink-dim text-center py-8">No chapter summaries yet</p>
           ) : (
             <div className="relative">
               {/* Vertical connector line */}
-              <div className="absolute left-[9px] top-3 bottom-3 w-px bg-stone-200 dark:bg-zinc-700" />
+              <div className="absolute left-[9px] top-3 bottom-3 w-px bg-border" />
 
               <div className="space-y-5">
                 {visibleEntries.map((snap, entryIdx) => {
@@ -144,10 +146,10 @@ export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, 
                       {/* Chapter header */}
                       <div className="relative pl-8 mb-2">
                         <div className="flex items-center gap-2">
-                          <span className="text-[11px] font-medium text-stone-400 dark:text-zinc-500 bg-stone-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded">
-                            Ch {snap.index + 1}
+                          <span className="text-[11px] font-medium text-ink-dim bg-paper px-1.5 py-0.5 rounded">
+                            {container ? getDisplayLabel(container, snap.index) : `Ch ${snap.index + 1}`}
                           </span>
-                          <span className="text-sm font-semibold text-stone-800 dark:text-zinc-200 truncate">
+                          <span className="text-sm font-semibold text-ink truncate">
                             {chapterTitles[snap.index] ?? `Chapter ${snap.index + 1}`}
                           </span>
                         </div>
@@ -162,7 +164,7 @@ export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, 
                             className={`relative pl-8 cursor-pointer group transition-colors rounded-lg p-3 -ml-3 ${
                               isLastVisible
                                 ? 'bg-amber-50 dark:bg-amber-950/30 ring-1 ring-amber-300 dark:ring-amber-700'
-                                : 'hover:bg-stone-50 dark:hover:bg-zinc-800/50'
+                                : 'hover:bg-paper'
                             }`}
                             onClick={() => onJumpToChapter(snap.index)}
                           >
@@ -171,12 +173,12 @@ export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, 
                               className={`absolute left-[5px] top-[18px] w-[10px] h-[10px] rounded-full border-2 ${
                                 isLastVisible
                                   ? 'bg-amber-400 border-amber-500 dark:bg-amber-500 dark:border-amber-400'
-                                  : 'bg-white dark:bg-zinc-900 border-stone-300 dark:border-zinc-600 group-hover:border-stone-400 dark:group-hover:border-zinc-500'
+                                  : 'bg-paper-raised border-border group-hover:border-ink-soft'
                               }`}
                             />
 
                             {/* Summary */}
-                            <p className="text-sm text-stone-500 dark:text-zinc-400 leading-relaxed">
+                            <p className="text-sm text-ink-soft leading-relaxed">
                               {ev.summary}
                             </p>
 
@@ -187,7 +189,7 @@ export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, 
                                   <button
                                     key={`char-${name}`}
                                     onClick={(e) => { e.stopPropagation(); setSelectedCharacter(name); }}
-                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-stone-100 dark:bg-zinc-800 text-stone-600 dark:text-zinc-300 hover:bg-stone-200 dark:hover:bg-zinc-700 transition-colors"
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-paper text-ink hover:bg-paper-dark transition-colors"
                                   >
                                     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                       <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0" />
@@ -208,7 +210,7 @@ export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, 
                                   <button
                                     key={`loc-${name}`}
                                     onClick={(e) => { e.stopPropagation(); setSelectedLocation(name); }}
-                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-stone-100 dark:bg-zinc-800 text-stone-500 dark:text-zinc-400 hover:bg-stone-200 dark:hover:bg-zinc-700 transition-colors"
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-paper text-ink-soft hover:bg-paper-dark transition-colors"
                                   >
                                     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                       <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -226,7 +228,7 @@ export default function StoryTimeline({ snapshots, chapterTitles, currentIndex, 
                                   const progress = snap.events?.[ev._origIdx]?.chapterProgress;
                                   onSetReadingPosition({ chapterIndex: snap.index, progress });
                                 }}
-                                className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-stone-400 dark:text-zinc-500 hover:text-stone-600 dark:hover:text-zinc-300"
+                                className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-ink-dim hover:text-ink"
                                 title="Set reading position here"
                               >
                                 <svg width="12" height="16" viewBox="0 0 10 14" fill="none" stroke="currentColor" strokeWidth="1.5" className="flex-shrink-0">
