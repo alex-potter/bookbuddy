@@ -8,6 +8,11 @@ const apiBak = path.join(root, '_api_bak');
 
 const isCapacitor = process.env.NEXT_PUBLIC_CAPACITOR === 'true';
 
+// Keep android/app/build.gradle versionName/Code in sync with package.json
+if (isCapacitor) {
+  execSync('node scripts/sync-android-version.js', { stdio: 'inherit', cwd: root });
+}
+
 const PWA_PATTERNS = ['sw.js', 'sw.js.map', 'manifest.json', '_pwa-meta.html'];
 const WORKBOX_PREFIX = 'workbox-';
 const FALLBACK_PREFIX = 'fallback-';
