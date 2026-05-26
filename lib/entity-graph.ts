@@ -1,5 +1,5 @@
 // lib/entity-graph.ts
-import type { Character, LocationInfo, NarrativeArc, AnalysisResult, Snapshot } from '@/types';
+import type { Character, LocationInfo, NarrativeArc } from '@/types';
 import { openDB, ENTITY_STORE } from './book-storage';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -51,7 +51,3 @@ export function containerKey(title: string, author: string): string {
 
 // Re-export for consumers that need the store name
 export { openDB, ENTITY_STORE };
-
-// Suppress unused-import errors for types used in later tasks (Tasks 8 & 9)
-type _Used = AnalysisResult | Snapshot;
-export type { _Used };
