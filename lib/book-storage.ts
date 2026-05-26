@@ -10,9 +10,10 @@
 import type { MapState, StoredBookState, SavedBookEntry } from '@/types';
 
 const DB_NAME = 'bookbuddy-state';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STATE_STORE = 'book-state';
 const MAP_STORE = 'map-state';
+const ENTITY_STORE = 'entity-graph';
 const INDEX_KEY = 'bookbuddy-index';
 
 function dbKey(title: string, author: string) {
@@ -21,7 +22,7 @@ function dbKey(title: string, author: string) {
 
 let dbInstance: IDBDatabase | null = null;
 
-function openDB(): Promise<IDBDatabase> {
+export function openDB(): Promise<IDBDatabase> {
   if (dbInstance) return Promise.resolve(dbInstance);
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -29,6 +30,10 @@ function openDB(): Promise<IDBDatabase> {
       const db = req.result;
       if (!db.objectStoreNames.contains(STATE_STORE)) db.createObjectStore(STATE_STORE);
       if (!db.objectStoreNames.contains(MAP_STORE)) db.createObjectStore(MAP_STORE);
+      if (!db.objectStoreNames.contains(ENTITY_STORE)) {
+        const store = db.createObjectStore(ENTITY_STORE);
+        store.createIndex('containerId', 'containerId', { unique: false });
+      }
     };
     req.onsuccess = () => {
       dbInstance = req.result;
@@ -38,6 +43,8 @@ function openDB(): Promise<IDBDatabase> {
     req.onerror = () => reject(req.error);
   });
 }
+
+export { ENTITY_STORE };
 
 // ---------------------------------------------------------------------------
 // Sync localStorage index  (tiny — just title/author/progress per book)
