@@ -18,3 +18,5 @@ node_modules/
 # graphify generated output
 graphify-out/
 .graphify_uncached.txt
+
+/coverage/
