@@ -75,3 +75,34 @@ export function buildAliasRegex(records: EntityRecord[]): RegExp | null {
     return new RegExp(`(?<!\\w)(${aliases.map(escapeRegex).join('|')})(?!\\w)`, 'giu');
   }
 }
+
+// ─── Mention detection ──────────────────────────────────────────────────────
+
+/**
+ * Scan chapter text for any alias of any record. Returns a deduplicated list
+ * of record IDs whose name or alias appears in the text.
+ */
+export function matchAliasesInText(records: EntityRecord[], text: string): string[] {
+  // Rebuild the alias→record map (mirror of what buildAliasRegex did internally).
+  const aliasMap = new Map<string, EntityRecord>();
+  for (const r of records) {
+    for (const alias of [r.canonicalName, ...aliasesOf(r)]) {
+      const lower = alias.toLowerCase().trim();
+      if (lower.length < 3) continue;
+      if (STOPWORDS.has(lower)) continue;
+      if (!aliasMap.has(lower)) aliasMap.set(lower, r);
+    }
+  }
+
+  const pattern = buildAliasRegex(records);
+  if (!pattern) return [];
+
+  const hits = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(text)) !== null) {
+    const matched = m[1].toLowerCase();
+    const rec = aliasMap.get(matched);
+    if (rec) hits.add(rec.id);
+  }
+  return [...hits];
+}
