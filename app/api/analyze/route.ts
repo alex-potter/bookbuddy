@@ -1959,7 +1959,9 @@ export async function POST(req: NextRequest) {
         }
         const { result: chunkResult, totalRateLimitMs: chunkRl, chunkDelta } = await runMultiPassDelta(
           bookTitle, bookAuthor, currentChapterTitle, chunk.text, accumulated, config, contextWindow,
-          charContext, locContext, arcContext,
+          chunk.index === 0 ? charContext : undefined,
+          chunk.index === 0 ? locContext : undefined,
+          chunk.index === 0 ? arcContext : undefined,
         );
         totalRateLimitMs += chunkRl;
         events.push({
@@ -2018,7 +2020,7 @@ export async function POST(req: NextRequest) {
         console.log(`[analyze] Chapter "${currentChapterTitle}" chunk ${chunk.index + 1}/${chunk.total} (${chunk.text.length} chars)`);
         const { result: chunkResult, totalRateLimitMs: chunkRl, chunkDelta } = await runMultiPassDelta(
           bookTitle, bookAuthor, currentChapterTitle, chunk.text, accumulated, config, contextWindow,
-          charContext, locContext, arcContext,
+          undefined, undefined, undefined,
         );
         totalRateLimitMs += chunkRl;
         events.push({
