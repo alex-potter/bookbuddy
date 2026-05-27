@@ -3,6 +3,7 @@ import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import type { Character } from '@/types';
 import type { AnalysisResult } from '@/types';
+import type { Snapshot } from '@/types';
 
 // Reset IDB state and module cache between tests so dbInstance is cleared
 beforeEach(() => {
@@ -181,5 +182,48 @@ describe('syncFromResult', () => {
 
     const all = await getAllByContainer('c');
     expect(all.map(r => r.canonicalName).sort()).toEqual(['Caemlyn of Andor', 'Caemlyn the City']);
+  });
+});
+
+function snap(index: number, chars: Character[]): Snapshot {
+  return { index, result: { characters: chars, summary: '' } };
+}
+
+describe('rebuildEntityGraph', () => {
+  it('wipes the container when snapshots is empty', async () => {
+    const { upsertEntity, getAllByContainer, rebuildEntityGraph } = await import('@/lib/entity-graph');
+    await upsertEntity('c', 'character', ch('Rand'), 0);
+    await rebuildEntityGraph('c', []);
+    expect(await getAllByContainer('c')).toEqual([]);
+  });
+
+  it('builds the graph from a single snapshot', async () => {
+    const { getAllByContainer, rebuildEntityGraph } = await import('@/lib/entity-graph');
+    await rebuildEntityGraph('c', [snap(3, [ch('Rand'), ch('Mat')])]);
+    const all = await getAllByContainer('c');
+    expect(all.map(r => r.canonicalName).sort()).toEqual(['Mat', 'Rand']);
+    expect(all.every(r => r.lastSeenOrder === 3)).toBe(true);
+  });
+
+  it('later snapshots overwrite earlier ones — final lastSeenOrder is the max', async () => {
+    const { getAllByContainer, rebuildEntityGraph } = await import('@/lib/entity-graph');
+    await rebuildEntityGraph('c', [
+      snap(0, [ch('Rand')]),
+      snap(5, [ch('Rand'), ch('Mat')]),
+      snap(10, [ch('Rand'), ch('Mat'), ch('Perrin')]),
+    ]);
+    const all = await getAllByContainer('c');
+    const byName = new Map(all.map(r => [r.canonicalName, r]));
+    expect(byName.get('Rand')!.lastSeenOrder).toBe(10);
+    expect(byName.get('Mat')!.lastSeenOrder).toBe(10);
+    expect(byName.get('Perrin')!.lastSeenOrder).toBe(10);
+  });
+
+  it('clears prior records for this container only', async () => {
+    const { upsertEntity, getAllByContainer, rebuildEntityGraph } = await import('@/lib/entity-graph');
+    await upsertEntity('keep', 'character', ch('OtherBook'), 0);
+    await rebuildEntityGraph('c', [snap(0, [ch('Rand')])]);
+    expect((await getAllByContainer('keep')).map(r => r.canonicalName)).toEqual(['OtherBook']);
+    expect((await getAllByContainer('c')).map(r => r.canonicalName)).toEqual(['Rand']);
   });
 });

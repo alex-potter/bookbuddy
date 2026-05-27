@@ -1,5 +1,5 @@
 // lib/entity-graph.ts
-import type { Character, LocationInfo, NarrativeArc, AnalysisResult } from '@/types';
+import type { Character, LocationInfo, NarrativeArc, AnalysisResult, Snapshot } from '@/types';
 import { openDB, ENTITY_STORE } from './book-storage';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -207,5 +207,29 @@ export async function syncFromResult(
       }
     }
     await deleteEntity(r.id);
+  }
+}
+
+// ─── Rebuild from snapshots ─────────────────────────────────────────────────
+
+export async function rebuildEntityGraph(
+  containerId: string,
+  snapshots: Snapshot[],
+): Promise<void> {
+  await deleteByContainer(containerId);
+
+  // Walk in chapter-index order so later snapshots overwrite earlier.
+  const ordered = [...snapshots].sort((a, b) => a.index - b.index);
+  for (const snap of ordered) {
+    const order = snap.index;
+    for (const c of snap.result.characters) {
+      await upsertEntity(containerId, 'character', c, order);
+    }
+    for (const l of snap.result.locations ?? []) {
+      await upsertEntity(containerId, 'location', l, order);
+    }
+    for (const a of snap.result.arcs ?? []) {
+      await upsertEntity(containerId, 'arc', a, order);
+    }
   }
 }
