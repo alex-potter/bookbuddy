@@ -160,7 +160,8 @@ export function trimSketch(others: EntityRecord[], charBudget: number): SketchEn
 
 // ─── Top-level retrieval ────────────────────────────────────────────────────
 
-import { getAllByContainer } from './entity-graph';
+import { getAllByContainer, rebuildEntityGraph } from './entity-graph';
+import { loadBookState } from './book-storage';
 
 /**
  * Per-chapter retrieval: returns the entities to send to the LLM, split into
@@ -174,7 +175,32 @@ export async function retrieveContext<T = unknown>(
   chapterOrder: number,
   charBudget: number,
 ): Promise<RetrievedContext<T>> {
-  const records = await getAllByContainer(containerId, type);
+  // Debug feature flag: bypass the graph entirely to compare behavior.
+  const disabled = typeof localStorage !== 'undefined' &&
+    typeof localStorage.getItem === 'function' &&
+    localStorage.getItem('bookbuddy-disable-entity-graph') === '1';
+  if (disabled) {
+    return {
+      full: [],
+      sketch: [],
+      stats: { rosterSize: 0, mentionedCount: 0, recentCount: 0, sketchTrimmed: 0 },
+    };
+  }
+
+  let records = await getAllByContainer(containerId, type);
+
+  // Lazy migration: if the graph is empty but the book has snapshots,
+  // backfill from snapshots once. Subsequent calls hit the populated graph.
+  if (records.length === 0) {
+    const [title, author] = containerId.split('::');
+    const state = await loadBookState(title, author);
+    if (state?.snapshots?.length) {
+      console.log(`[entity-graph] lazy backfill for container=${containerId} (${state.snapshots.length} snapshots)`);
+      await rebuildEntityGraph(containerId, state.snapshots);
+      records = await getAllByContainer(containerId, type);
+    }
+  }
+
   if (records.length === 0) {
     return {
       full: [],
