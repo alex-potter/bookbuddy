@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parseEpub } from '@/lib/epub-parser';
-import type { AnalysisResult, BookBuddyExport, BookContainer, BookFilter, BookMeta, ChapterEvent, Character, MapState, NarrativeArc, ParentArc, ParsedEbook, PinUpdates, QueueJob, ReadingPosition, SavedBookEntry, Snapshot, StoredBookState } from '@/types';
+import type { AnalysisResult, BookBuddyExport, BookContainer, BookFilter, BookMeta, ChapterEvent, Character, LocationInfo, MapState, NarrativeArc, ParentArc, ParsedEbook, PinUpdates, QueueJob, ReadingPosition, SavedBookEntry, Snapshot, StoredBookState } from '@/types';
+import { containerKey, syncFromResult, type MentionedNames, type RetrievedContext } from '@/lib/entity-graph';
+import { retrieveContext } from '@/lib/retrieve-context';
 import CalibreLibrary from '@/components/CalibreLibrary';
 import ChapterSelector from '@/components/ChapterSelector';
 import MapBoard from '@/components/MapBoard';
@@ -150,47 +152,121 @@ function detectChapterRange(chapters: Array<{ title: string; text: string }>): {
   return { start, end };
 }
 
+// Char budget for retrieved-context payloads sent to the model. ~40% of a
+// typical 100k context window leaves room for chapter text + system prompt +
+// response. Conservative default — the trim logic will shrink the sketch tier
+// to fit anyway.
+const ENTITY_CONTEXT_BUDGET = 40_000;
+
 async function analyzeChapter(
   bookTitle: string,
   bookAuthor: string,
   chapter: { title: string; text: string },
   previousResult: AnalysisResult | null,
+  chapterOrder: number,
   allChapterTitles?: string[],
 ): Promise<{ result: AnalysisResult; model: string; rateLimitWaitMs?: number; events?: ChapterEvent[] }> {
-  if (IS_MOBILE) {
-    const { analyzeChapterClient } = await import('@/lib/ai-client');
-    const result = await analyzeChapterClient(bookTitle, bookAuthor, chapter, previousResult);
-    return { result, model: 'mobile' };
+  // Compute retrieved context from the local entity graph for delta updates.
+  // For the first chapter (no previousResult) the graph is empty, so we skip.
+  const containerId = containerKey(bookTitle, bookAuthor);
+  let charContext: RetrievedContext<Character> | undefined;
+  let locContext: RetrievedContext<LocationInfo> | undefined;
+  let arcContext: RetrievedContext<NarrativeArc> | undefined;
+  if (previousResult) {
+    try {
+      [charContext, locContext, arcContext] = await Promise.all([
+        retrieveContext<Character>(containerId, 'character', chapter.text, chapterOrder, ENTITY_CONTEXT_BUDGET),
+        retrieveContext<LocationInfo>(containerId, 'location', chapter.text, chapterOrder, ENTITY_CONTEXT_BUDGET),
+        retrieveContext<NarrativeArc>(containerId, 'arc', chapter.text, chapterOrder, ENTITY_CONTEXT_BUDGET),
+      ]);
+    } catch (err) {
+      console.warn('[analyzeChapter] retrieveContext failed, falling back to legacy path:', err);
+      charContext = undefined;
+      locContext = undefined;
+      arcContext = undefined;
+    }
   }
 
-  // Include client-side AI settings so server can use them when env vars aren't set
-  let aiSettings: Record<string, string | number> = {};
+  let result: AnalysisResult;
+  let model = 'unknown';
+  let rateLimitWaitMs: number | undefined;
+  let events: ChapterEvent[] | undefined;
+
+  if (IS_MOBILE) {
+    const { analyzeChapterClient } = await import('@/lib/ai-client');
+    result = await analyzeChapterClient(bookTitle, bookAuthor, chapter, previousResult, charContext, locContext, arcContext);
+    model = 'mobile';
+  } else {
+    // Include client-side AI settings so server can use them when env vars aren't set
+    let aiSettings: Record<string, string | number> = {};
+    try {
+      const { loadAiSettings } = await import('@/lib/ai-client');
+      const s = loadAiSettings();
+      if (s.provider) aiSettings._provider = s.provider;
+      if (s.anthropicKey) aiSettings._apiKey = s.anthropicKey;
+      if (s.ollamaUrl) aiSettings._ollamaUrl = s.ollamaUrl;
+      if (s.model) aiSettings._model = s.model;
+      if (s.geminiKey) aiSettings._geminiKey = s.geminiKey;
+      if (s.openaiCompatibleUrl) aiSettings._openaiCompatibleUrl = s.openaiCompatibleUrl;
+      if (s.openaiCompatibleKey) aiSettings._openaiCompatibleKey = s.openaiCompatibleKey;
+      if (s.ollamaContextLength) aiSettings._ollamaContextLength = s.ollamaContextLength;
+    } catch { /* ignore — server will use env vars */ }
+
+    const baseBody = previousResult
+      ? { newChapters: [chapter], previousResult, currentChapterTitle: chapter.title, bookTitle, bookAuthor, ...aiSettings }
+      : { chaptersRead: [chapter], allChapterTitles, currentChapterTitle: chapter.title, bookTitle, bookAuthor, ...aiSettings };
+    const body = {
+      ...baseBody,
+      _charContext: charContext,
+      _locContext: locContext,
+      _arcContext: arcContext,
+    };
+
+    const res = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json() as AnalysisResult & { _model?: string; _rateLimitWaitMs?: number; _events?: ChapterEvent[] };
+    if (!res.ok) throw new Error((data as unknown as { error?: string }).error ?? 'Analysis failed.');
+    const { _model, _rateLimitWaitMs, _events, ...rest } = data;
+    result = rest as AnalysisResult;
+    model = _model ?? 'unknown';
+    rateLimitWaitMs = _rateLimitWaitMs;
+    events = _events;
+  }
+
+  // Write the merged result back to the local entity graph so future chapters
+  // see updated lastSeenOrder + payloads. Mentioned names come from the
+  // server's per-chunk event log when available; for the mobile/client path
+  // we approximate using the deltas implicit in the merged result.
   try {
-    const { loadAiSettings } = await import('@/lib/ai-client');
-    const s = loadAiSettings();
-    if (s.provider) aiSettings._provider = s.provider;
-    if (s.anthropicKey) aiSettings._apiKey = s.anthropicKey;
-    if (s.ollamaUrl) aiSettings._ollamaUrl = s.ollamaUrl;
-    if (s.model) aiSettings._model = s.model;
-    if (s.geminiKey) aiSettings._geminiKey = s.geminiKey;
-    if (s.openaiCompatibleUrl) aiSettings._openaiCompatibleUrl = s.openaiCompatibleUrl;
-    if (s.openaiCompatibleKey) aiSettings._openaiCompatibleKey = s.openaiCompatibleKey;
-    if (s.ollamaContextLength) aiSettings._ollamaContextLength = s.ollamaContextLength;
-  } catch { /* ignore — server will use env vars */ }
+    const mentioned: MentionedNames = {
+      characters: new Set<string>(),
+      locations: new Set<string>(),
+      arcs: new Set<string>(),
+    };
+    if (events?.length) {
+      for (const ev of events) {
+        for (const c of ev.characterSnapshots ?? []) mentioned.characters.add(c.name.toLowerCase().trim());
+        for (const l of ev.locationSnapshots ?? []) mentioned.locations.add(l.name.toLowerCase().trim());
+        for (const a of ev.arcSnapshots ?? []) mentioned.arcs.add(a.name.toLowerCase().trim());
+      }
+    } else {
+      // Fallback (mobile single-pass): the merged result IS the new state,
+      // but we don't know per-chapter mentions. Treat everything as mentioned
+      // so lastSeenOrder advances for everyone — coarse but correct enough
+      // for the simpler client path.
+      for (const c of result.characters) mentioned.characters.add(c.name.toLowerCase().trim());
+      for (const l of result.locations ?? []) mentioned.locations.add(l.name.toLowerCase().trim());
+      for (const a of result.arcs ?? []) mentioned.arcs.add(a.name.toLowerCase().trim());
+    }
+    await syncFromResult(containerId, result, mentioned, chapterOrder);
+  } catch (err) {
+    console.warn('[analyzeChapter] syncFromResult failed (graph may lag):', err);
+  }
 
-  const body = previousResult
-    ? { newChapters: [chapter], previousResult, currentChapterTitle: chapter.title, bookTitle, bookAuthor, ...aiSettings }
-    : { chaptersRead: [chapter], allChapterTitles, currentChapterTitle: chapter.title, bookTitle, bookAuthor, ...aiSettings };
-
-  const res = await fetch('/api/analyze', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json() as AnalysisResult & { _model?: string; _rateLimitWaitMs?: number; _events?: ChapterEvent[] };
-  if (!res.ok) throw new Error((data as unknown as { error?: string }).error ?? 'Analysis failed.');
-  const { _model, _rateLimitWaitMs, _events, ...result } = data;
-  return { result: result as AnalysisResult, model: _model ?? 'unknown', rateLimitWaitMs: _rateLimitWaitMs, events: _events };
+  return { result, model, rateLimitWaitMs, events };
 }
 
 async function reconcileResult(
@@ -1114,7 +1190,7 @@ export default function Home() {
             continue;
           }
 
-          const { result: chResult, model: chModel, events: chEvents } = await analyzeChapter(title, author, { title: ch.title, text: ch.text }, accumulated, chapters.map((c) => c.title));
+          const { result: chResult, model: chModel, events: chEvents } = await analyzeChapter(title, author, { title: ch.title, text: ch.text }, accumulated, i, chapters.map((c) => c.title));
           accumulated = chResult;
           recentText += `\n=== ${ch.title} ===\n${ch.text}`;
           if (recentText.length > MAX_RECENT_TEXT) recentText = recentText.slice(-MAX_RECENT_TEXT);
@@ -1465,7 +1541,7 @@ export default function Home() {
         const i = toAnalyze[step];
         const ch = book.chapters[i];
         setRebuildProgress({ current: step + 1, total, chapterTitle: ch.title, chapterIndex: i });
-        const { result: chapterResult, model: chapterModel, rateLimitWaitMs, events: chapterEvents } = await analyzeChapter(book.title, book.author, { title: ch.title, text: ch.text }, accumulated, book.chapters.map((c) => c.title));
+        const { result: chapterResult, model: chapterModel, rateLimitWaitMs, events: chapterEvents } = await analyzeChapter(book.title, book.author, { title: ch.title, text: ch.text }, accumulated, i, book.chapters.map((c) => c.title));
         if (rateLimitWaitMs) {
           setRebuildProgress((prev) => prev ? { ...prev, chapterTitle: `${ch.title} (rate limit: waited ${Math.ceil(rateLimitWaitMs / 1000)}s)` } : prev);
         }
@@ -1514,7 +1590,7 @@ export default function Home() {
         const i = toRebuild[step];
         const ch = book.chapters[i];
         setRebuildProgress({ current: step + 1, total: rebuildTotal, chapterTitle: ch.title, chapterIndex: i });
-        const { result: rebuildResult, model: rebuildModel, events: rebuildEvents } = await analyzeChapter(book.title, book.author, { title: ch.title, text: ch.text }, accumulated, book.chapters.map((c) => c.title));
+        const { result: rebuildResult, model: rebuildModel, events: rebuildEvents } = await analyzeChapter(book.title, book.author, { title: ch.title, text: ch.text }, accumulated, i, book.chapters.map((c) => c.title));
         accumulated = rebuildResult;
         snapshots = upsertSnapshot(snapshots, i, accumulated, rebuildModel, APP_VERSION, rebuildEvents);
         const partial: StoredBookState = { ...rebuildBase, lastAnalyzedIndex: i, result: accumulated, snapshots };
@@ -1560,7 +1636,7 @@ export default function Home() {
         const i = toProcess[step];
         const ch = book.chapters[i];
         setRebuildProgress({ current: step + 1, total, chapterTitle: ch.title, chapterIndex: i });
-        const { result: chResult, model: chModel, events: chEvents } = await analyzeChapter(book.title, book.author, { title: ch.title, text: ch.text }, accumulated, book.chapters.map((c) => c.title));
+        const { result: chResult, model: chModel, events: chEvents } = await analyzeChapter(book.title, book.author, { title: ch.title, text: ch.text }, accumulated, i, book.chapters.map((c) => c.title));
         accumulated = chResult;
         snapshots = upsertSnapshot(snapshots, i, accumulated, chModel, APP_VERSION, chEvents);
         const partial: StoredBookState = { ...processBase, lastAnalyzedIndex: i, result: accumulated, snapshots };
