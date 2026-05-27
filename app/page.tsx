@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parseEpub } from '@/lib/epub-parser';
 import type { AnalysisResult, BookBuddyExport, BookContainer, BookFilter, BookMeta, ChapterEvent, Character, LocationInfo, MapState, NarrativeArc, ParentArc, ParsedEbook, PinUpdates, QueueJob, ReadingPosition, SavedBookEntry, Snapshot, StoredBookState } from '@/types';
-import { containerKey, syncFromResult, type MentionedNames, type RetrievedContext } from '@/lib/entity-graph';
+import { containerKey, syncFromResult, rebuildEntityGraph, type MentionedNames, type RetrievedContext } from '@/lib/entity-graph';
 import { retrieveContext } from '@/lib/retrieve-context';
 import CalibreLibrary from '@/components/CalibreLibrary';
 import ChapterSelector from '@/components/ChapterSelector';
@@ -738,6 +738,9 @@ export default function Home() {
     };
     storedRef.current = updated;
     persistState(book.title, book.author, updated);
+    rebuildEntityGraph(containerKey(book.title, book.author), updated.snapshots).catch((err) => {
+      console.error('[entity-graph] rebuildEntityGraph failed:', err);
+    });
     setContainerRev(r => r + 1);
     setShowBookStructureEditor(false);
     setLockedBookIndices(undefined);
@@ -844,6 +847,10 @@ export default function Home() {
     if (mergedChapterEntries.length > 0) {
       await saveChapters(seriesTitle, seriesAuthor, mergedChapterEntries).catch(() => {});
     }
+
+    await rebuildEntityGraph(containerKey(seriesTitle, seriesAuthor), updatedState.snapshots).catch((err) => {
+      console.error('[entity-graph] rebuildEntityGraph failed:', err);
+    });
 
     // Clear pending state
     setPendingBook(null);
@@ -1105,6 +1112,11 @@ export default function Home() {
 
       storedRef.current = updated;
       persistState(book.title, book.author, updated);
+      if (propagate) {
+        rebuildEntityGraph(containerKey(book.title, book.author), updated.snapshots).catch((err) => {
+          console.error('[entity-graph] rebuildEntityGraph failed:', err);
+        });
+      }
     }
 
     if (pinUpdates) {
@@ -1670,6 +1682,9 @@ export default function Home() {
       const updated: StoredBookState = { lastAnalyzedIndex: -2, result: { characters: [], summary: '' }, snapshots: [], bookMeta: cur.bookMeta, container: cur.container };
       storedRef.current = updated;
       persistState(book.title, book.author, updated);
+      rebuildEntityGraph(containerKey(book.title, book.author), []).catch((err) => {
+        console.error('[entity-graph] rebuildEntityGraph failed:', err);
+      });
       setResult(null);
       setViewingSnapshotIndex(null);
       return;
@@ -1680,6 +1695,9 @@ export default function Home() {
     const updated: StoredBookState = { lastAnalyzedIndex: newLastIdx, result: newResult, snapshots: newSnapshots, bookMeta: cur.bookMeta, container: cur.container };
     storedRef.current = updated;
     persistState(book.title, book.author, updated);
+    rebuildEntityGraph(containerKey(book.title, book.author), newSnapshots).catch((err) => {
+      console.error('[entity-graph] rebuildEntityGraph failed:', err);
+    });
     setResult(newResult);
     setViewingSnapshotIndex(null);
     if (currentIndex > newLastIdx) setCurrentIndex(newLastIdx);
