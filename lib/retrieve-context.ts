@@ -1,5 +1,5 @@
 // lib/retrieve-context.ts
-import type { Character, LocationInfo } from '@/types';
+import type { Character, LocationInfo, NarrativeArc } from '@/types';
 import type { EntityRecord, EntityType, RetrievedContext, SketchEntry } from './entity-graph';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -216,4 +216,63 @@ export async function retrieveContext<T = unknown>(
       sketchTrimmed: others.length - sketch.length,
     },
   };
+}
+
+// ─── Prompt format helpers ──────────────────────────────────────────────────
+
+/**
+ * Format a RetrievedContext for inclusion in a prompt. Returns two blocks:
+ *   - "fullBlock":   detailed entries the LLM should treat as known context
+ *   - "sketchBlock": one-line entries the LLM should be aware exist (avoid
+ *                    creating duplicates), without their detailed state
+ */
+export function formatCharContext(ctx: RetrievedContext<Character>): {
+  fullBlock: string;
+  sketchBlock: string;
+} {
+  const fullBlock = ctx.full
+    .map(c => {
+      const aliasStr = c.aliases?.length ? ` [aliases: ${c.aliases.join(', ')}]` : '';
+      return `- ${c.name}${aliasStr} (${c.status}, last: ${c.lastSeen ?? '?'}, loc: ${c.currentLocation ?? '?'})`;
+    })
+    .join('\n');
+
+  const sketchBlock = ctx.sketch
+    .map(s => {
+      const aliasStr = s.aliases?.length ? ` [aliases: ${s.aliases.join(', ')}]` : '';
+      return `- ${s.name}${aliasStr}`;
+    })
+    .join('\n');
+
+  return { fullBlock, sketchBlock };
+}
+
+export function formatLocContext(ctx: RetrievedContext<LocationInfo>): {
+  fullBlock: string;
+  sketchBlock: string;
+} {
+  const fullBlock = ctx.full
+    .map(l => `- ${l.name}: ${l.description ?? '(no description yet)'}`)
+    .join('\n');
+
+  const sketchBlock = ctx.sketch
+    .map(s => `- ${s.name}`)
+    .join('\n');
+
+  return { fullBlock, sketchBlock };
+}
+
+export function formatArcContext(ctx: RetrievedContext<NarrativeArc>): {
+  fullBlock: string;
+  sketchBlock: string;
+} {
+  const fullBlock = ctx.full
+    .map(a => `- ${a.name} [${a.status}]: ${a.summary}`)
+    .join('\n');
+
+  const sketchBlock = ctx.sketch
+    .map(s => `- ${s.name}`)
+    .join('\n');
+
+  return { fullBlock, sketchBlock };
 }
