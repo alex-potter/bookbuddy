@@ -1,6 +1,6 @@
 // lib/retrieve-context.ts
 import type { Character, LocationInfo } from '@/types';
-import type { EntityRecord, EntityType, SketchEntry } from './entity-graph';
+import type { EntityRecord, EntityType, RetrievedContext, SketchEntry } from './entity-graph';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -156,4 +156,64 @@ export function trimSketch(others: EntityRecord[], charBudget: number): SketchEn
     used += cost;
   }
   return kept;
+}
+
+// ─── Top-level retrieval ────────────────────────────────────────────────────
+
+import { getAllByContainer } from './entity-graph';
+
+/**
+ * Per-chapter retrieval: returns the entities to send to the LLM, split into
+ * a `full` tier (full payloads — mentioned in chapter text OR in recency window)
+ * and a `sketch` tier (name + aliases only, budget-trimmed).
+ */
+export async function retrieveContext<T = unknown>(
+  containerId: string,
+  type: EntityType,
+  chapterText: string,
+  chapterOrder: number,
+  charBudget: number,
+): Promise<RetrievedContext<T>> {
+  const records = await getAllByContainer(containerId, type);
+  if (records.length === 0) {
+    return {
+      full: [],
+      sketch: [],
+      stats: { rosterSize: 0, mentionedCount: 0, recentCount: 0, sketchTrimmed: 0 },
+    };
+  }
+
+  const mentionedIds = new Set(matchAliasesInText(records, chapterText));
+
+  const window = RECENCY_WINDOW[type];
+  const recentIds = new Set<string>();
+  for (const r of records) {
+    if (r.lastSeenOrder >= chapterOrder - window) recentIds.add(r.id);
+  }
+
+  const fullIds = new Set([...mentionedIds, ...recentIds]);
+  const full: T[] = [];
+  const others: EntityRecord[] = [];
+  for (const r of records) {
+    if (fullIds.has(r.id)) full.push(r.payload as T);
+    else others.push(r);
+  }
+
+  const fullSize = estimateCharSize(full);
+  const sketch = trimSketch(others, Math.max(0, charBudget - fullSize));
+
+  // "recent" stat = recent AND NOT mentioned (the new info recency adds)
+  let recentOnly = 0;
+  for (const id of recentIds) if (!mentionedIds.has(id)) recentOnly++;
+
+  return {
+    full,
+    sketch,
+    stats: {
+      rosterSize: records.length,
+      mentionedCount: mentionedIds.size,
+      recentCount: recentOnly,
+      sketchTrimmed: others.length - sketch.length,
+    },
+  };
 }

@@ -117,3 +117,78 @@ describe('RECENCY_WINDOW', () => {
     expect(RECENCY_WINDOW.arc).toBe(Infinity);
   });
 });
+
+// ─── retrieveContext tests (IDB — dynamic imports + module reset) ─────────────
+
+import 'fake-indexeddb/auto';
+import { IDBFactory } from 'fake-indexeddb';
+import { beforeEach, vi } from 'vitest';
+
+beforeEach(() => {
+  (globalThis as { indexedDB: IDBFactory }).indexedDB = new IDBFactory();
+  vi.resetModules();
+});
+
+describe('retrieveContext', () => {
+  it('returns empty result for an empty container', async () => {
+    const { retrieveContext } = await import('@/lib/retrieve-context');
+    const ctx = await retrieveContext('empty', 'character', 'some text', 10, 1000);
+    expect(ctx.full).toEqual([]);
+    expect(ctx.sketch).toEqual([]);
+    expect(ctx.stats.rosterSize).toBe(0);
+  });
+
+  it('puts mentioned entities in full tier, others in sketch', async () => {
+    const { upsertEntity } = await import('@/lib/entity-graph');
+    const { retrieveContext } = await import('@/lib/retrieve-context');
+    await upsertEntity('c', 'character', { name: 'Rand', aliases: [], importance: 'main', status: 'alive', lastSeen: '', currentLocation: '', description: '', relationships: [], recentEvents: '' }, 0);
+    await upsertEntity('c', 'character', { name: 'Mat', aliases: [], importance: 'main', status: 'alive', lastSeen: '', currentLocation: '', description: '', relationships: [], recentEvents: '' }, 0);
+    await upsertEntity('c', 'character', { name: 'Perrin', aliases: [], importance: 'main', status: 'alive', lastSeen: '', currentLocation: '', description: '', relationships: [], recentEvents: '' }, 0);
+
+    // Only Rand mentioned, none in recency window (lastSeenOrder=0, chapterOrder=20, N=5)
+    const ctx = await retrieveContext('c', 'character', 'Rand walked alone.', 20, 1000);
+
+    expect(ctx.full.map((c: any) => c.name)).toEqual(['Rand']);
+    expect(ctx.sketch.map(s => s.name).sort()).toEqual(['Mat', 'Perrin']);
+    expect(ctx.stats.mentionedCount).toBe(1);
+    expect(ctx.stats.recentCount).toBe(0);
+  });
+
+  it('includes entities seen within the recency window even when not mentioned', async () => {
+    const { upsertEntity } = await import('@/lib/entity-graph');
+    const { retrieveContext } = await import('@/lib/retrieve-context');
+    await upsertEntity('c', 'character', { name: 'Rand', aliases: [], importance: 'main', status: 'alive', lastSeen: '', currentLocation: '', description: '', relationships: [], recentEvents: '' }, 18);
+    await upsertEntity('c', 'character', { name: 'Egwene', aliases: [], importance: 'main', status: 'alive', lastSeen: '', currentLocation: '', description: '', relationships: [], recentEvents: '' }, 10);  // outside window
+
+    // chapterOrder=20, N=5 → recency boundary is order ≥ 15. Rand (18) included, Egwene (10) not.
+    const ctx = await retrieveContext('c', 'character', 'unrelated text', 20, 1000);
+
+    expect(ctx.full.map((c: any) => c.name)).toEqual(['Rand']);
+    expect(ctx.sketch.map(s => s.name)).toEqual(['Egwene']);
+    expect(ctx.stats.mentionedCount).toBe(0);
+    expect(ctx.stats.recentCount).toBe(1);
+  });
+
+  it('mentioned ∪ recent — overlap counted only once', async () => {
+    const { upsertEntity } = await import('@/lib/entity-graph');
+    const { retrieveContext } = await import('@/lib/retrieve-context');
+    await upsertEntity('c', 'character', { name: 'Rand', aliases: [], importance: 'main', status: 'alive', lastSeen: '', currentLocation: '', description: '', relationships: [], recentEvents: '' }, 18);
+
+    const ctx = await retrieveContext('c', 'character', 'Rand returned.', 20, 1000);
+    expect(ctx.full).toHaveLength(1);
+    expect(ctx.stats.mentionedCount).toBe(1);
+    expect(ctx.stats.recentCount).toBe(0);   // recent excludes the mentioned overlap
+  });
+
+  it('reports sketchTrimmed when budget is too small for everyone', async () => {
+    const { upsertEntity } = await import('@/lib/entity-graph');
+    const { retrieveContext } = await import('@/lib/retrieve-context');
+    for (let i = 0; i < 10; i++) {
+      await upsertEntity('c', 'character', { name: `Char${i}`, aliases: [], importance: 'minor', status: 'alive', lastSeen: '', currentLocation: '', description: '', relationships: [], recentEvents: '' }, 0);
+    }
+    // Budget only enough for ~2 sketch entries
+    const ctx = await retrieveContext('c', 'character', 'unrelated', 100, 25);
+    expect(ctx.sketch.length).toBeLessThan(10);
+    expect(ctx.stats.sketchTrimmed).toBeGreaterThan(0);
+  });
+});
