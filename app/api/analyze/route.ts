@@ -8,8 +8,8 @@ import { getContextWindow, splitChapterText, computeTextBudget } from '@/lib/con
 import type { ProviderType } from '@/lib/rate-limiter';
 import { resolveCharacterLocationsToExtracted } from '@/lib/resolve-locations';
 import { groupLocations } from '@/lib/group-locations';
-import { retrieveContext, formatCharContext, formatLocContext, formatArcContext } from '@/lib/retrieve-context';
-import { syncFromResult, type MentionedNames } from '@/lib/entity-graph';
+import { formatCharContext, formatLocContext, formatArcContext } from '@/lib/retrieve-context';
+import type { RetrievedContext } from '@/lib/entity-graph';
 
 // ─── System prompts (one per pass) ───────────────────────────────────────────
 
@@ -1552,14 +1552,8 @@ async function runMultiPassFull(
   text: string,
   allChapterTitles: string[] | undefined,
   config: AnalyzeConfig,
-  contextWindow: number | undefined,
-  chapterOrder: number,
-  containerId: string,
+  contextWindow?: number,
 ): Promise<{ result: AnalysisResult; totalRateLimitMs: number }> {
-  // chapterOrder/containerId are plumbed for future retrieval inside this function;
-  // currently runMultiPassFull does not need to retrieve since it's the seed of the graph.
-  void chapterOrder;
-  void containerId;
   let totalRateLimitMs = 0;
 
   // Pass 1: Characters
@@ -1706,48 +1700,24 @@ async function runMultiPassDelta(
   previousResult: AnalysisResult,
   config: AnalyzeConfig,
   contextWindow: number | undefined,
-  chapterOrder: number,
-  containerId: string,
+  charContext: RetrievedContext<Character> | undefined,
+  locContext: RetrievedContext<LocationInfo> | undefined,
+  arcContext: RetrievedContext<NarrativeArc> | undefined,
 ): Promise<{ result: AnalysisResult; totalRateLimitMs: number; chunkDelta: ChunkDelta }> {
   let totalRateLimitMs = 0;
 
-  // Compute entity-context budget: 40% of the available chars after output reserve + overhead.
-  const conservativeOverhead = 6000;
-  const outputReserve = config.provider === 'ollama' ? 4096 : 8192;
-  const availableTokens = Math.max(
-    1024,
-    (contextWindow ?? 8192) - outputReserve - Math.ceil(conservativeOverhead / 3.5),
-  );
-  const entityCharBudget = Math.floor((availableTokens * 3.5) * 0.4);
-
-  // Fail-soft wrapper: entity-graph is browser-backed (IndexedDB). When this route
-  // runs on the Node server, IDB is unavailable and retrieveContext rejects — fall
-  // back to an empty context so the existing previousResult-based prompts still work.
-  async function safeRetrieve<T>(type: 'character' | 'location' | 'arc') {
-    try {
-      return await retrieveContext<T>(containerId, type, text, chapterOrder, entityCharBudget);
-    } catch (err) {
-      console.warn(`[retrieve] failed for type=${type} container=${containerId}:`, err);
-      return {
-        full: [] as T[],
-        sketch: [] as { name: string; aliases?: string[] }[],
-        stats: { rosterSize: 0, mentionedCount: 0, recentCount: 0, sketchTrimmed: 0 },
-      };
-    }
+  // Pass 1: Characters — use client-supplied tiered context if present, else fall back
+  // to previousResult.characters (legacy / direct-API-call path).
+  if (charContext) {
+    console.log(
+      `[retrieve][body] type=character ` +
+      `rosterSize=${charContext.stats.rosterSize} mentioned=${charContext.stats.mentionedCount} ` +
+      `recent=${charContext.stats.recentCount} full=${charContext.full.length} ` +
+      `sketch=${charContext.sketch.length} trimmed=${charContext.stats.sketchTrimmed}`,
+    );
   }
-
-  // Pass 1: Characters — retrieve tiered char context, then build the delta prompt.
-  const charCtx = await safeRetrieve<Character>('character');
-  console.log(
-    `[retrieve] container=${containerId} type=character chapter=${chapterOrder} ` +
-    `rosterSize=${charCtx.stats.rosterSize} mentioned=${charCtx.stats.mentionedCount} ` +
-    `recent=${charCtx.stats.recentCount} full=${charCtx.full.length} sketch=${charCtx.sketch.length} ` +
-    `trimmed=${charCtx.stats.sketchTrimmed}`,
-  );
-  // Fall back to previousResult.characters when the graph is empty (Task 14 lazy backfill
-  // will later seed it from snapshots; for now we still want a usable existing-list).
-  const charContextFull: Character[] = charCtx.full.length > 0 ? [...charCtx.full] : previousResult.characters;
-  const charSketchBlock = formatCharContext(charCtx).sketchBlock;
+  const charContextFull: Character[] = charContext ? [...charContext.full] : previousResult.characters;
+  const charSketchBlock = charContext ? formatCharContext(charContext).sketchBlock : '';
 
   console.log('[analyze] Pass 1: characters (delta)');
   const charSystem = config.provider === 'ollama' ? CHARACTERS_SYSTEM_LOCAL : CHARACTERS_SYSTEM;
@@ -1797,19 +1767,20 @@ async function runMultiPassDelta(
   const charNameMap = postMergeDedup.nameMap;
   console.log(`[analyze] Pass 1 done: ${deltaChars.length} char changes → ${currentCharacters.length} chars`);
 
-  // Pass 2: Locations + summary — retrieve tiered location context.
-  const locCtx = await safeRetrieve<LocationInfo>('location');
-  console.log(
-    `[retrieve] container=${containerId} type=location chapter=${chapterOrder} ` +
-    `rosterSize=${locCtx.stats.rosterSize} mentioned=${locCtx.stats.mentionedCount} ` +
-    `recent=${locCtx.stats.recentCount} full=${locCtx.full.length} sketch=${locCtx.sketch.length} ` +
-    `trimmed=${locCtx.stats.sketchTrimmed}`,
-  );
-  // Reuse charCtx.full as the "characters for cross-reference" list — this is the
-  // change that trims downstream prompts inheriting from the (full) character list.
-  const locPassCharacters: Character[] = charCtx.full.length > 0 ? [...charCtx.full] : currentCharacters;
-  const locPreviousList = locCtx.full.length > 0 ? [...locCtx.full] : previousResult.locations;
-  const locSketchBlock = formatLocContext(locCtx).sketchBlock;
+  // Pass 2: Locations + summary — use client-supplied tiered location context if present.
+  if (locContext) {
+    console.log(
+      `[retrieve][body] type=location ` +
+      `rosterSize=${locContext.stats.rosterSize} mentioned=${locContext.stats.mentionedCount} ` +
+      `recent=${locContext.stats.recentCount} full=${locContext.full.length} ` +
+      `sketch=${locContext.sketch.length} trimmed=${locContext.stats.sketchTrimmed}`,
+    );
+  }
+  // Reuse charContext.full as the "characters for cross-reference" list when available,
+  // otherwise fall back to the currently-merged character list.
+  const locPassCharacters: Character[] = charContext ? [...charContext.full] : currentCharacters;
+  const locPreviousList = locContext ? [...locContext.full] : previousResult.locations;
+  const locSketchBlock = locContext ? formatLocContext(locContext).sketchBlock : '';
 
   console.log('[analyze] Pass 2: locations (delta)');
   const locSystem = config.provider === 'ollama' ? LOCATIONS_SYSTEM_LOCAL : LOCATIONS_SYSTEM;
@@ -1831,19 +1802,20 @@ async function runMultiPassDelta(
   // Remap character sub-locations to extracted canonical locations
   currentCharacters = resolveCharacterLocationsToExtracted(currentCharacters, currentLocations ?? []);
 
-  // Pass 3: Arcs (with full character + location context) — retrieve tiered arc context.
-  const arcCtx = await safeRetrieve<NarrativeArc>('arc');
-  console.log(
-    `[retrieve] container=${containerId} type=arc chapter=${chapterOrder} ` +
-    `rosterSize=${arcCtx.stats.rosterSize} mentioned=${arcCtx.stats.mentionedCount} ` +
-    `recent=${arcCtx.stats.recentCount} full=${arcCtx.full.length} sketch=${arcCtx.sketch.length} ` +
-    `trimmed=${arcCtx.stats.sketchTrimmed}`,
-  );
+  // Pass 3: Arcs (with full character + location context) — use client-supplied arc context if present.
+  if (arcContext) {
+    console.log(
+      `[retrieve][body] type=arc ` +
+      `rosterSize=${arcContext.stats.rosterSize} mentioned=${arcContext.stats.mentionedCount} ` +
+      `recent=${arcContext.stats.recentCount} full=${arcContext.full.length} ` +
+      `sketch=${arcContext.sketch.length} trimmed=${arcContext.stats.sketchTrimmed}`,
+    );
+  }
   // For arcs, RECENCY_WINDOW = Infinity, so full usually = entire roster. Sketch is usually empty.
-  const arcPassPrevious = arcCtx.full.length > 0 ? [...arcCtx.full] : previousResult.arcs;
-  const arcPassCharacters: Character[] = charCtx.full.length > 0 ? [...charCtx.full] : currentCharacters;
-  const arcPassLocations = locCtx.full.length > 0 ? [...locCtx.full] : currentLocations;
-  const arcSketchBlock = formatArcContext(arcCtx).sketchBlock;
+  const arcPassPrevious = arcContext ? [...arcContext.full] : previousResult.arcs;
+  const arcPassCharacters: Character[] = charContext ? [...charContext.full] : currentCharacters;
+  const arcPassLocations = locContext ? [...locContext.full] : currentLocations;
+  const arcSketchBlock = arcContext ? formatArcContext(arcContext).sketchBlock : '';
 
   console.log('[analyze] Pass 3: arcs (delta)');
   const arcSystem = config.provider === 'ollama' ? ARCS_SYSTEM_LOCAL : ARCS_SYSTEM;
@@ -1928,12 +1900,14 @@ export async function POST(req: NextRequest) {
       _openaiCompatibleUrl?: string;
       _openaiCompatibleKey?: string;
       _ollamaContextLength?: number;
-      _containerId?: string;
-      _chapterOrder?: number;
+      _charContext?: RetrievedContext<Character>;
+      _locContext?: RetrievedContext<LocationInfo>;
+      _arcContext?: RetrievedContext<NarrativeArc>;
     };
     const { chaptersRead, newChapters, allChapterTitles, currentChapterTitle, bookTitle, bookAuthor, previousResult } = body;
-    const containerId = body._containerId ?? `${body.bookTitle}::${body.bookAuthor}`;
-    const chapterOrder = body._chapterOrder ?? 0;
+    const charContext = body._charContext;
+    const locContext = body._locContext;
+    const arcContext = body._arcContext;
 
     const config = resolveConfig(body);
     // Pass user's context length override for Ollama
@@ -1984,19 +1958,10 @@ export async function POST(req: NextRequest) {
           console.log(`[analyze] Chapter "${currentChapterTitle}" chunk ${chunk.index + 1}/${chunk.total} (${chunk.text.length} chars)`);
         }
         const { result: chunkResult, totalRateLimitMs: chunkRl, chunkDelta } = await runMultiPassDelta(
-          bookTitle, bookAuthor, currentChapterTitle, chunk.text, accumulated, config, contextWindow, chapterOrder, containerId,
+          bookTitle, bookAuthor, currentChapterTitle, chunk.text, accumulated, config, contextWindow,
+          charContext, locContext, arcContext,
         );
         totalRateLimitMs += chunkRl;
-        const mentioned: MentionedNames = {
-          characters: new Set(chunkDelta.characters.map((c) => c.name.toLowerCase().trim())),
-          locations: new Set(chunkDelta.locations.map((l) => l.name.toLowerCase().trim())),
-          arcs: new Set(chunkDelta.arcs.map((a) => a.name.toLowerCase().trim())),
-        };
-        try {
-          await syncFromResult(containerId, chunkResult, mentioned, chapterOrder);
-        } catch (err) {
-          console.warn('[analyze] syncFromResult failed (delta chunk):', err);
-        }
         events.push({
           summary: chunkDelta.summary,
           characters: chunkDelta.characters.map((c) => c.name),
@@ -2032,23 +1997,10 @@ export async function POST(req: NextRequest) {
 
       // First chunk: full analysis. Subsequent chunks: delta.
       const { result: firstResult, totalRateLimitMs: firstRl } = await runMultiPassFull(
-        bookTitle, bookAuthor, currentChapterTitle, chunks[0].text, allChapterTitles, config, contextWindow, chapterOrder, containerId,
+        bookTitle, bookAuthor, currentChapterTitle, chunks[0].text, allChapterTitles, config, contextWindow,
       );
       totalRateLimitMs += firstRl;
       let accumulated = firstResult;
-
-      // Sync the first full-result into the entity graph. There's no chunkDelta here,
-      // so mentions are computed from firstResult directly.
-      const mentionedFirst: MentionedNames = {
-        characters: new Set(firstResult.characters.map((c) => c.name.toLowerCase().trim())),
-        locations: new Set((firstResult.locations ?? []).map((l) => l.name.toLowerCase().trim())),
-        arcs: new Set((firstResult.arcs ?? []).map((a) => a.name.toLowerCase().trim())),
-      };
-      try {
-        await syncFromResult(containerId, firstResult, mentionedFirst, chapterOrder);
-      } catch (err) {
-        console.warn('[analyze] syncFromResult failed (full first chunk):', err);
-      }
 
       events.push({
         summary: firstResult.summary,
@@ -2065,19 +2017,10 @@ export async function POST(req: NextRequest) {
         const chunk = chunks[i];
         console.log(`[analyze] Chapter "${currentChapterTitle}" chunk ${chunk.index + 1}/${chunk.total} (${chunk.text.length} chars)`);
         const { result: chunkResult, totalRateLimitMs: chunkRl, chunkDelta } = await runMultiPassDelta(
-          bookTitle, bookAuthor, currentChapterTitle, chunk.text, accumulated, config, contextWindow, chapterOrder, containerId,
+          bookTitle, bookAuthor, currentChapterTitle, chunk.text, accumulated, config, contextWindow,
+          charContext, locContext, arcContext,
         );
         totalRateLimitMs += chunkRl;
-        const mentioned: MentionedNames = {
-          characters: new Set(chunkDelta.characters.map((c) => c.name.toLowerCase().trim())),
-          locations: new Set(chunkDelta.locations.map((l) => l.name.toLowerCase().trim())),
-          arcs: new Set(chunkDelta.arcs.map((a) => a.name.toLowerCase().trim())),
-        };
-        try {
-          await syncFromResult(containerId, chunkResult, mentioned, chapterOrder);
-        } catch (err) {
-          console.warn('[analyze] syncFromResult failed (full subsequent chunk):', err);
-        }
         events.push({
           summary: chunkDelta.summary,
           characters: chunkDelta.characters.map((c) => c.name),
