@@ -1,6 +1,6 @@
 // lib/retrieve-context.ts
 import type { Character, LocationInfo } from '@/types';
-import type { EntityRecord } from './entity-graph';
+import type { EntityRecord, EntityType, SketchEntry } from './entity-graph';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -105,4 +105,55 @@ export function matchAliasesInText(records: EntityRecord[], text: string): strin
     if (rec) hits.add(rec.id);
   }
   return [...hits];
+}
+
+// ─── Sketch trimming + size estimators ──────────────────────────────────────
+
+export const RECENCY_WINDOW: Record<EntityType, number> = {
+  character: 5,
+  location: 8,
+  arc: Infinity,   // arcs are capped at ~8 already; always include
+};
+
+const IMPORTANCE_RANK: Record<string, number> = { main: 3, secondary: 2, minor: 1 };
+
+export function estimateSketchEntrySize(e: SketchEntry): number {
+  // Format the LLM sees: "- Name [aliases: a, b]\n"
+  const aliasPart = e.aliases?.length ? ` [aliases: ${e.aliases.join(', ')}]` : '';
+  return 3 + e.name.length + aliasPart.length;   // "- " + name + aliases + "\n"
+}
+
+export function estimateCharSize<T>(items: T[]): number {
+  // Conservative: serialize as JSON and measure. The actual prompt format is
+  // shorter, but this is the right order of magnitude and is provider-agnostic.
+  return JSON.stringify(items).length;
+}
+
+/**
+ * Reduce a candidate list to fit within charBudget, preferring higher
+ * importance and more-recently-seen entries.
+ */
+export function trimSketch(others: EntityRecord[], charBudget: number): SketchEntry[] {
+  if (charBudget <= 0) return [];
+
+  const sorted = [...others].sort((a, b) => {
+    const ai = IMPORTANCE_RANK[a.importance ?? 'secondary'] ?? 2;
+    const bi = IMPORTANCE_RANK[b.importance ?? 'secondary'] ?? 2;
+    if (ai !== bi) return bi - ai;
+    return b.lastSeenOrder - a.lastSeenOrder;
+  });
+
+  const kept: SketchEntry[] = [];
+  let used = 0;
+  for (const r of sorted) {
+    const aliases = aliasesOf(r);
+    const entry: SketchEntry = aliases.length
+      ? { name: r.canonicalName, aliases }
+      : { name: r.canonicalName };
+    const cost = estimateSketchEntrySize(entry);
+    if (used + cost > charBudget) break;
+    kept.push(entry);
+    used += cost;
+  }
+  return kept;
 }
