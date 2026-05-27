@@ -51,14 +51,14 @@ describe('buildAliasRegex', () => {
   });
 
   it('filters aliases shorter than 3 chars', () => {
-    const re = buildAliasRegex([rec('Al')])!;
+    const re = buildAliasRegex([rec('Al')]);
     expect(re).toBeNull();  // Al is length 2 → filtered → no aliases left → null
   });
 
   it('filters stopwords (titles that collide with common English)', () => {
     expect(STOPWORDS.has('lord')).toBe(true);
     expect(STOPWORDS.has('father')).toBe(true);
-    const re = buildAliasRegex([rec('Father', ['Lord'])])!;
+    const re = buildAliasRegex([rec('Father', ['Lord'])]);
     expect(re).toBeNull();
   });
 
