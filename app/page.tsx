@@ -152,10 +152,11 @@ function detectChapterRange(chapters: Array<{ title: string; text: string }>): {
   return { start, end };
 }
 
-// Char budget for retrieved-context payloads sent to the model. ~40% of a
-// typical 100k context window leaves room for chapter text + system prompt +
-// response. Conservative default — the trim logic will shrink the sketch tier
-// to fit anyway.
+// Per-entity-type budget in characters for retrieveContext's sketch tier.
+// Conservative: 40k each × 3 entity types = 120k max if all tiers fill, but
+// sketch trimming + the analyze route's own context-window management usually
+// keep the actual prompt size much smaller. Tune down if cold-start prompts
+// feel oversized for small-context models.
 const ENTITY_CONTEXT_BUDGET = 40_000;
 
 async function analyzeChapter(
