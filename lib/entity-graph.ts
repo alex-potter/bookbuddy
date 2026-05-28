@@ -199,8 +199,10 @@ export async function syncFromResult(
     const absorber = findAbsorberByAlias(r, newResult);
     if (absorber) {
       const absorberKey = keyFor(containerId, absorber.type, absorber.name);
-      const absorberRecord = (await getAllByContainer(containerId, absorber.type))
-        .find(rec => keyFor(containerId, rec.type, rec.canonicalName) === absorberKey);
+      // First check existingByKey (covers absorbers that existed before this sync);
+      // if not there, the absorber was newly created in this sync — its current
+      // lastSeenOrder is already chapterOrder, so no fold needed.
+      const absorberRecord = existingByKey.get(absorberKey);
       if (absorberRecord && r.lastSeenOrder > absorberRecord.lastSeenOrder) {
         // Re-upsert absorber with the folded lastSeenOrder (max of the two)
         await upsertEntity(containerId, absorber.type, absorberRecord.payload, r.lastSeenOrder);
@@ -212,24 +214,67 @@ export async function syncFromResult(
 
 // ─── Rebuild from snapshots ─────────────────────────────────────────────────
 
+/**
+ * Helper that writes a record inside an existing transaction (no new tx).
+ * Used by rebuildEntityGraph to avoid one IDB commit per put.
+ */
+function putRecordInline(
+  store: IDBObjectStore,
+  containerId: string,
+  type: EntityType,
+  payload: Character | LocationInfo | NarrativeArc,
+  lastSeenOrder: number,
+): void {
+  const id = keyFor(containerId, type, payload.name);
+  const record: EntityRecord = {
+    id,
+    containerId,
+    type,
+    canonicalName: payload.name,
+    canonicalLower: payload.name.toLowerCase().trim(),
+    lastSeenOrder,
+    importance: (payload as Character).importance,
+    payload,
+  };
+  store.put(record, id);
+}
+
 export async function rebuildEntityGraph(
   containerId: string,
   snapshots: Snapshot[],
 ): Promise<void> {
-  await deleteByContainer(containerId);
+  const { store, done } = await tx('readwrite');
+
+  // Delete existing records for this container, in the same transaction
+  const idx = store.index('containerId');
+  const cursorReq = idx.openCursor(IDBKeyRange.only(containerId));
+  await new Promise<void>((resolve, reject) => {
+    cursorReq.onsuccess = () => {
+      const cursor = cursorReq.result;
+      if (cursor) {
+        cursor.delete();
+        cursor.continue();
+      } else {
+        resolve();
+      }
+    };
+    cursorReq.onerror = () => reject(cursorReq.error);
+  });
 
   // Walk in chapter-index order so later snapshots overwrite earlier.
   const ordered = [...snapshots].sort((a, b) => a.index - b.index);
   for (const snap of ordered) {
     const order = snap.index;
     for (const c of snap.result.characters) {
-      await upsertEntity(containerId, 'character', c, order);
+      putRecordInline(store, containerId, 'character', c, order);
     }
     for (const l of snap.result.locations ?? []) {
-      await upsertEntity(containerId, 'location', l, order);
+      putRecordInline(store, containerId, 'location', l, order);
     }
     for (const a of snap.result.arcs ?? []) {
-      await upsertEntity(containerId, 'arc', a, order);
+      putRecordInline(store, containerId, 'arc', a, order);
     }
   }
+
+  await done;
 }

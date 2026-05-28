@@ -123,9 +123,20 @@ export async function deleteBookState(title: string, author: string): Promise<vo
   const db = await openDB();
   const { deleteChapters } = await import('./chapter-storage');
   return new Promise((resolve, reject) => {
-    const tx = db.transaction([STATE_STORE, MAP_STORE], 'readwrite');
-    tx.objectStore(STATE_STORE).delete(dbKey(title, author));
-    tx.objectStore(MAP_STORE).delete(dbKey(title, author));
+    const tx = db.transaction([STATE_STORE, MAP_STORE, ENTITY_STORE], 'readwrite');
+    const containerId = dbKey(title, author);
+    tx.objectStore(STATE_STORE).delete(containerId);
+    tx.objectStore(MAP_STORE).delete(containerId);
+
+    // Cascade-delete entity-graph records for this container so orphans
+    // don't accumulate across delete-and-re-add cycles.
+    const entityStore = tx.objectStore(ENTITY_STORE);
+    const cursorReq = entityStore.index('containerId').openCursor(IDBKeyRange.only(containerId));
+    cursorReq.onsuccess = () => {
+      const cursor = cursorReq.result;
+      if (cursor) { cursor.delete(); cursor.continue(); }
+    };
+
     tx.oncomplete = () => {
       removeFromIndex(title, author);
       deleteChapters(title, author).catch(() => {});

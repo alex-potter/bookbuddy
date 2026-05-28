@@ -164,6 +164,43 @@ import { getAllByContainer, rebuildEntityGraph } from './entity-graph';
 import { loadBookState } from './book-storage';
 
 /**
+ * Module-scope cache of in-flight backfill promises, keyed by containerId.
+ * Prevents redundant rebuilds when retrieveContext is called concurrently
+ * (e.g. parallel character/location/arc retrieval on cold start).
+ */
+const inFlightBackfills = new Map<string, Promise<void>>();
+
+async function lazyBackfillIfMissing(
+  containerId: string,
+  type: EntityType,
+): Promise<EntityRecord[]> {
+  let records = await getAllByContainer(containerId, type);
+  if (records.length > 0) return records;
+
+  // Check if the FULL container is empty (any type), not just this type.
+  // If only this type is empty (e.g. a book with characters but no arcs),
+  // we don't need to rebuild.
+  const anyRecord = await getAllByContainer(containerId);
+  if (anyRecord.length > 0) return records;
+
+  let backfill = inFlightBackfills.get(containerId);
+  if (!backfill) {
+    backfill = (async () => {
+      const [title, author] = containerId.split('::');
+      const state = await loadBookState(title, author);
+      if (state?.snapshots?.length) {
+        console.log(`[entity-graph] lazy backfill for container=${containerId} (${state.snapshots.length} snapshots)`);
+        await rebuildEntityGraph(containerId, state.snapshots);
+      }
+    })();
+    inFlightBackfills.set(containerId, backfill);
+    backfill.finally(() => inFlightBackfills.delete(containerId));
+  }
+  await backfill;
+  return getAllByContainer(containerId, type);
+}
+
+/**
  * Per-chapter retrieval: returns the entities to send to the LLM, split into
  * a `full` tier (full payloads — mentioned in chapter text OR in recency window)
  * and a `sketch` tier (name + aliases only, budget-trimmed).
@@ -187,19 +224,7 @@ export async function retrieveContext<T = unknown>(
     };
   }
 
-  let records = await getAllByContainer(containerId, type);
-
-  // Lazy migration: if the graph is empty but the book has snapshots,
-  // backfill from snapshots once. Subsequent calls hit the populated graph.
-  if (records.length === 0) {
-    const [title, author] = containerId.split('::');
-    const state = await loadBookState(title, author);
-    if (state?.snapshots?.length) {
-      console.log(`[entity-graph] lazy backfill for container=${containerId} (${state.snapshots.length} snapshots)`);
-      await rebuildEntityGraph(containerId, state.snapshots);
-      records = await getAllByContainer(containerId, type);
-    }
-  }
+  const records = await lazyBackfillIfMissing(containerId, type);
 
   if (records.length === 0) {
     return {
