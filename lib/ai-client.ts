@@ -3,12 +3,14 @@
  * Calls Anthropic, Gemini, OpenAI-compatible, or an Ollama endpoint directly from the browser.
  */
 
-import type { AnalysisResult } from '@/types';
+import type { AnalysisResult, Character, LocationInfo, NarrativeArc } from '@/types';
 import type { ReconcileProposals } from './reconcile';
 import {
   SYSTEM_PROMPT,
   buildFullPrompt,
   buildUpdatePrompt,
+  buildUpdatePromptTiered,
+  compactCharacterList,
   truncateForFullAnalysis,
   truncateForDelta,
   mergeDelta,
@@ -18,6 +20,8 @@ import {
 import { validateCharactersAgainstText, validateLocationsAgainstText } from './validate-entities';
 import { waitIfNeeded, recordSuccess, recordRateLimit } from './rate-limiter';
 import type { ProviderType } from './rate-limiter';
+import type { RetrievedContext } from './entity-graph';
+import { formatCharContext } from './retrieve-context';
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -430,14 +434,45 @@ export async function analyzeChapterClient(
   bookAuthor: string,
   chapter: { title: string; text: string },
   previousResult: AnalysisResult | null,
+  charContext?: RetrievedContext<Character>,
+  locContext?: RetrievedContext<LocationInfo>,
+  arcContext?: RetrievedContext<NarrativeArc>,
 ): Promise<AnalysisResult> {
+  // locContext/arcContext are reserved for future use; the current client path
+  // only swaps the character list in the tiered prompt. They are accepted so
+  // that callers can wire the same arguments as the server route without
+  // branching on path.
+  void locContext;
+  void arcContext;
   const settings = loadAiSettings();
   const isDelta = !!previousResult;
 
   let userPrompt: string;
   if (isDelta) {
     const newText = `=== ${chapter.title} ===\n\n${chapter.text}`;
-    userPrompt = buildUpdatePrompt(bookTitle, bookAuthor, chapter.title, previousResult, truncateForDelta(newText));
+    if (charContext) {
+      console.log(
+        `[retrieve][client] type=character ` +
+        `rosterSize=${charContext.stats.rosterSize} mentioned=${charContext.stats.mentionedCount} ` +
+        `recent=${charContext.stats.recentCount} full=${charContext.full.length} ` +
+        `sketch=${charContext.sketch.length} trimmed=${charContext.stats.sketchTrimmed}`,
+      );
+      const { fullBlock, sketchBlock } = formatCharContext(charContext);
+      const arcList = (previousResult.arcs ?? [])
+        .map((a) => `- ${a.name} [${a.status}]: ${a.summary}`)
+        .join('\n');
+      userPrompt = buildUpdatePromptTiered(
+        bookTitle,
+        bookAuthor,
+        chapter.title,
+        fullBlock || compactCharacterList(previousResult.characters),
+        sketchBlock,
+        arcList,
+        truncateForDelta(newText),
+      );
+    } else {
+      userPrompt = buildUpdatePrompt(bookTitle, bookAuthor, chapter.title, previousResult, truncateForDelta(newText));
+    }
   } else {
     const fullText = `=== ${chapter.title} ===\n\n${chapter.text}`;
     userPrompt = buildFullPrompt(bookTitle, bookAuthor, chapter.title, truncateForFullAnalysis(fullText));

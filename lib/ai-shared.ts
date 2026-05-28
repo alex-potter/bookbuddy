@@ -182,6 +182,49 @@ Return ONLY a JSON object with "updatedCharacters", "updatedLocations", and "sum
 ${DELTA_SCHEMA}`;
 }
 
+/**
+ * Tiered-context variant of buildUpdatePrompt. Replaces the unbounded
+ * EXISTING CHARACTERS list with two tiers: detailed (mentioned + recent)
+ * and sketch (name-only roster, so the LLM doesn't dup against existing
+ * entries it can't see in full).
+ */
+export function buildUpdatePromptTiered(
+  bookTitle: string,
+  bookAuthor: string,
+  currentChapterTitle: string,
+  fullCharsBlock: string,
+  sketchCharsBlock: string,
+  arcList: string,
+  newChaptersText: string,
+): string {
+  const knownSection = fullCharsBlock
+    ? `KNOWN CHARACTERS (full detail — these have appeared recently or are mentioned in this chapter):\n${fullCharsBlock}\n`
+    : '';
+  const rosterSection = sketchCharsBlock
+    ? `\nALSO TRACKED (names only — to avoid duplicates; do NOT reproduce in your output):\n${sketchCharsBlock}\n`
+    : '';
+  return `I am reading "${bookTitle}" by ${bookAuthor}. I have just finished the chapter titled "${currentChapterTitle}".
+
+${knownSection}${rosterSection}${arcList ? `\nEXISTING NARRATIVE ARCS (carry forward unchanged arcs; only include in "updatedArcs" if this chapter changes them):\n${arcList}\n` : ''}
+NEW CHAPTER TEXT TO PROCESS:
+${newChaptersText}
+
+INSTRUCTIONS — RETURN ONLY CHANGES, NOT THE FULL LIST:
+1. Read the new chapter text carefully.
+2. For each character who APPEARS in the new chapter: include them in "updatedCharacters" with updated fields.
+3. For any BRAND NEW named character introduced in this chapter: include them in "updatedCharacters" with all fields filled in.
+4. Do NOT include characters from KNOWN CHARACTERS or ALSO TRACKED who do not appear in the new chapter.
+5. When returning an existing character, use their EXACT NAME from KNOWN CHARACTERS or ALSO TRACKED. Do NOT use a shortened form.
+6. ONLY include characters whose name or alias literally appears in the new chapter text. Do NOT hallucinate characters.
+7. For any location appearing in this chapter: include it in "updatedLocations".
+8. For narrative arcs: include in "updatedArcs" only those that progressed, changed status, or are new this chapter.
+9. Update the summary to reflect the story as of the current chapter.
+10. Do NOT use any knowledge of this book beyond what is listed above and the new chapter text.
+
+Return ONLY a JSON object with "updatedCharacters", "updatedLocations", and "summary" (no markdown fences, no explanation):
+${DELTA_SCHEMA}`;
+}
+
 export function truncateForFullAnalysis(fullText: string): string {
   if (fullText.length <= MAX_CHARS) return fullText;
   const head = fullText.slice(0, HEAD_CHARS);
