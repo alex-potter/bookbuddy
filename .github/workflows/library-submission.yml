@@ -1,0 +1,311 @@
+name: Process Library Submission
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  process-submission:
+    if: startsWith(github.event.issue.title, '[Library]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download attachment
+        uses: actions/github-script@v7
+        id: download
+        with:
+          script: |
+            const fs = require('fs');
+            const body = context.payload.issue.body || '';
+
+            // Parse for .zip attachment link in markdown
+            const zipMatch = body.match(/\[([^\]]*\.zip)\]\((https:\/\/github\.com\/[^\)]+)\)/i);
+            if (!zipMatch) {
+              core.setOutput('error', 'no-attachment');
+              return;
+            }
+
+            const [, filename, url] = zipMatch;
+            core.info(`Found attachment: ${filename} at ${url}`);
+
+            // Download the ZIP file
+            const response = await fetch(url);
+            if (!response.ok) {
+              core.setOutput('error', 'download-failed');
+              return;
+            }
+
+            const buffer = Buffer.from(await response.arrayBuffer());
+            fs.writeFileSync('/tmp/submission.zip', buffer);
+            core.setOutput('error', '');
+            core.info(`Downloaded ${buffer.length} bytes`);
+
+      - name: Extract and validate
+        if: steps.download.outputs.error == ''
+        id: validate
+        run: |
+          cd /tmp
+          unzip -o submission.zip -d submission
+
+          # Find the .bookbuddy file (use absolute path so later steps can read it)
+          BOOKBUDDY_FILE=$(find /tmp/submission -name '*.bookbuddy' -o -name '*.etbook' | head -1)
+
+          if [ -z "$BOOKBUDDY_FILE" ]; then
+            echo "error=no-bookbuddy" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "bookbuddy_path=$BOOKBUDDY_FILE" >> "$GITHUB_OUTPUT"
+
+          # Validate JSON structure with Node
+          BOOKBUDDY_FILE_PATH="$BOOKBUDDY_FILE" node -e "
+            const fs = require('fs');
+            const data = JSON.parse(fs.readFileSync(process.env.BOOKBUDDY_FILE_PATH, 'utf8'));
+            const errors = [];
+
+            if (!data.title || typeof data.title !== 'string') errors.push('missing or invalid field: title');
+            if (!data.author || typeof data.author !== 'string') errors.push('missing or invalid field: author');
+            if (data.version === undefined) errors.push('missing field: version');
+
+            // v3 has flat fields (result, snapshots, container, bookMeta).
+            // v2 wrapped everything inside data.state. Accept either.
+            const result = data.version === 3 ? data.result : data.state?.result;
+            if (data.version === 3) {
+              if (!data.result) errors.push('missing field: result');
+              if (!data.container) errors.push('missing field: container');
+            } else if (data.version === 2) {
+              if (!data.state) errors.push('missing field: state');
+              if (data.state && !data.state.result) errors.push('missing field: state.result');
+            } else {
+              errors.push('unsupported version: ' + data.version);
+            }
+            if (result) {
+              if (!Array.isArray(result.characters)) errors.push('missing or invalid field: result.characters');
+              if (!Array.isArray(result.locations)) errors.push('missing or invalid field: result.locations');
+              if (!Array.isArray(result.arcs)) errors.push('missing or invalid field: result.arcs');
+            }
+
+            if (errors.length > 0) {
+              console.log('error=validation-failed');
+              console.log('validation_errors=' + errors.join('; '));
+              process.exit(1);
+            }
+
+            // Output parsed metadata
+            console.log('title=' + data.title);
+            console.log('author=' + data.author);
+          " > /tmp/validation_output.txt 2>&1 || {
+            # Check if it was a validation error vs JSON parse error
+            if grep -q 'validation-failed' /tmp/validation_output.txt; then
+              ERRORS=$(grep 'validation_errors=' /tmp/validation_output.txt | cut -d= -f2-)
+              echo "error=validation-failed" >> "$GITHUB_OUTPUT"
+              echo "validation_errors=$ERRORS" >> "$GITHUB_OUTPUT"
+            else
+              echo "error=invalid-json" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          }
+
+          # Extract title and author from validation output
+          TITLE=$(grep '^title=' /tmp/validation_output.txt | cut -d= -f2-)
+          AUTHOR=$(grep '^author=' /tmp/validation_output.txt | cut -d= -f2-)
+          echo "title=$TITLE" >> "$GITHUB_OUTPUT"
+          echo "author=$AUTHOR" >> "$GITHUB_OUTPUT"
+          echo "error=" >> "$GITHUB_OUTPUT"
+
+      - name: Check for duplicate
+        if: steps.validate.outputs.error == '' && steps.download.outputs.error == ''
+        id: duplicate
+        env:
+          AUTHOR: ${{ steps.validate.outputs.author }}
+          TITLE: ${{ steps.validate.outputs.title }}
+        run: |
+          TARGET_PATH="books/${AUTHOR}/${TITLE} — ${AUTHOR}.bookbuddy"
+
+          if [ -f "$TARGET_PATH" ]; then
+            echo "is_duplicate=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_duplicate=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "target_path=$TARGET_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Create branch and PR
+        if: steps.validate.outputs.error == '' && steps.download.outputs.error == ''
+        uses: actions/github-script@v7
+        id: create-pr
+        env:
+          TITLE: ${{ steps.validate.outputs.title }}
+          AUTHOR: ${{ steps.validate.outputs.author }}
+          TARGET_PATH: ${{ steps.duplicate.outputs.target_path }}
+          BOOKBUDDY_PATH: ${{ steps.validate.outputs.bookbuddy_path }}
+          IS_DUPLICATE: ${{ steps.duplicate.outputs.is_duplicate }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { TITLE, AUTHOR, TARGET_PATH, BOOKBUDDY_PATH, IS_DUPLICATE, ISSUE_NUMBER } = process.env;
+
+            // Create sanitized branch name
+            const sanitized = `${TITLE}-${AUTHOR}`
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, '-')
+              .replace(/^-|-$/g, '')
+              .slice(0, 60);
+            let branchName = `library/${sanitized}`;
+
+            // Get the default branch SHA
+            const { data: ref } = await github.rest.git.getRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'heads/main',
+            });
+            const baseSha = ref.object.sha;
+
+            // Create the branch, handling collision by appending issue number
+            try {
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `refs/heads/${branchName}`,
+                sha: baseSha,
+              });
+            } catch (e) {
+              if (e.status === 422) {
+                branchName = `library/${sanitized}-${ISSUE_NUMBER}`;
+                await github.rest.git.createRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `refs/heads/${branchName}`,
+                  sha: baseSha,
+                });
+              } else {
+                throw e;
+              }
+            }
+
+            // Read the .bookbuddy file and create it in the repo
+            const content = fs.readFileSync(BOOKBUDDY_PATH);
+            const contentBase64 = content.toString('base64');
+
+            // When overwriting an existing file the GitHub API requires its current sha.
+            let existingSha;
+            if (IS_DUPLICATE === 'true') {
+              try {
+                const { data: existing } = await github.rest.repos.getContent({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  path: TARGET_PATH,
+                  ref: branchName,
+                });
+                if (!Array.isArray(existing) && existing.type === 'file') {
+                  existingSha = existing.sha;
+                }
+              } catch (e) {
+                if (e.status !== 404) throw e;
+              }
+            }
+
+            await github.rest.repos.createOrUpdateFileContents({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: TARGET_PATH,
+              message: existingSha
+                ? `feat: update ${TITLE} by ${AUTHOR} in library`
+                : `feat: add ${TITLE} by ${AUTHOR} to library`,
+              content: contentBase64,
+              branch: branchName,
+              ...(existingSha ? { sha: existingSha } : {}),
+            });
+
+            // Build PR body
+            let prBody = `## Library Submission\n\n`;
+            prBody += `- **Title:** ${TITLE}\n`;
+            prBody += `- **Author:** ${AUTHOR}\n`;
+            prBody += `- **Path:** \`${TARGET_PATH}\`\n\n`;
+            if (IS_DUPLICATE === 'true') {
+              prBody += `> **Note:** This updates an existing book in the library.\n\n`;
+            }
+            prBody += `Closes #${ISSUE_NUMBER}\n`;
+
+            // Create the PR
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[Library] Add ${TITLE} by ${AUTHOR}`,
+              body: prBody,
+              head: branchName,
+              base: 'main',
+            });
+
+            core.setOutput('pr_url', pr.html_url);
+            core.setOutput('pr_number', pr.number);
+
+      - name: Comment on issue (success)
+        if: steps.create-pr.outputs.pr_url
+        uses: actions/github-script@v7
+        env:
+          IS_DUPLICATE: ${{ steps.duplicate.outputs.is_duplicate }}
+          PR_URL: ${{ steps.create-pr.outputs.pr_url }}
+        with:
+          script: |
+            const { IS_DUPLICATE, PR_URL } = process.env;
+            const isDuplicate = IS_DUPLICATE === 'true';
+            let body = `Your submission has been processed and a pull request has been created:\n\n`;
+            body += `${PR_URL}\n\n`;
+            if (isDuplicate) {
+              body += `> **Note:** This book already exists in the library. The PR will update the existing file. A maintainer will review the changes.\n\n`;
+            }
+            body += `A maintainer will review and merge it shortly. Thanks for contributing!`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body,
+            });
+
+      - name: Comment on issue (error)
+        if: steps.download.outputs.error != '' || steps.validate.outputs.error != ''
+        uses: actions/github-script@v7
+        env:
+          DOWNLOAD_ERROR: ${{ steps.download.outputs.error }}
+          VALIDATE_ERROR: ${{ steps.validate.outputs.error }}
+          VALIDATION_ERRORS: ${{ steps.validate.outputs.validation_errors }}
+        with:
+          script: |
+            const { DOWNLOAD_ERROR, VALIDATE_ERROR, VALIDATION_ERRORS } = process.env;
+
+            let body = '';
+            if (DOWNLOAD_ERROR === 'no-attachment') {
+              body = `No \`.zip\` attachment was found on this issue.\n\nPlease edit this issue and attach your \`.bookbuddy\` ZIP file, then close and re-open the issue to retry.`;
+            } else if (DOWNLOAD_ERROR === 'download-failed') {
+              body = `Failed to download the attached file. Please close and re-open the issue to retry.`;
+            } else if (VALIDATE_ERROR === 'no-bookbuddy') {
+              body = `The ZIP file did not contain a \`.bookbuddy\` or \`.etbook\` file. Please re-export from BookBuddy and try again.`;
+            } else if (VALIDATE_ERROR === 'invalid-json') {
+              body = `The \`.bookbuddy\` file is not valid JSON. It may be corrupted. Please re-export from BookBuddy and try again.`;
+            } else if (VALIDATE_ERROR === 'validation-failed') {
+              body = `The \`.bookbuddy\` file failed validation:\n\n- ${VALIDATION_ERRORS.split('; ').join('\n- ')}\n\nPlease re-export from BookBuddy and try again.`;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body,
+            });
+
+            if (VALIDATE_ERROR) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.issue.number,
+                labels: ['invalid'],
+              });
+            }

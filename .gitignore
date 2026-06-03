@@ -1,0 +1,22 @@
+.next/
+out/
+node_modules/
+.env.local
+*.env
+.superpowers/
+
+# next-pwa generated
+/public/sw.js
+/public/sw.js.map
+/public/workbox-*.js
+/public/workbox-*.js.map
+/public/fallback-*.js
+
+# Claude Code local state
+.claude/
+
+# graphify generated output
+graphify-out/
+.graphify_uncached.txt
+
+/coverage/
