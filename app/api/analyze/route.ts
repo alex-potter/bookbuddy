@@ -4,7 +4,7 @@ import { reconcileResult, computeNameOverlaps, updateArcReferences, buildCharRec
 import { levenshtein, sanitizeEntityNames } from '@/lib/ai-shared';
 import { escapeRegex, validateCharactersAgainstText, validateLocationsAgainstText } from '@/lib/validate-entities';
 import { callLLM, resolveConfig, type LLMResult } from '@/lib/llm';
-import { getContextWindow, splitChapterText, computeTextBudget } from '@/lib/context-window';
+import { getContextWindow, splitChapterText, computeTextBudget, resolveMaxOutputTokens } from '@/lib/context-window';
 import type { ProviderType } from '@/lib/rate-limiter';
 import { resolveCharacterLocationsToExtracted } from '@/lib/resolve-locations';
 import { groupLocations } from '@/lib/group-locations';
@@ -1109,7 +1109,7 @@ function assignArcsToLocations(
     // Fallback: check if arc summary mentions the location name
     if (!bestArc) {
       for (const arc of arcs) {
-        if (locNames.has(norm(arc.name)) || norm(arc.summary).includes(norm(loc.name))) {
+        if (locNames.has(norm(arc.name)) || (arc.summary && norm(arc.summary).includes(norm(loc.name)))) {
           bestArc = arc.name;
           break;
         }
@@ -1403,12 +1403,12 @@ async function callAndParseJSON<T>(
 ): Promise<{ result: T | null; rateLimitWaitMs: number }> {
   let totalRateLimitMs = 0;
 
-  // Dynamic output token scaling: scale based on input size, capped by context window
   const inputChars = userPrompt.length + (system?.length ?? 0);
-  const scaledTokens = Math.max(maxTokens ?? 16384, Math.ceil(inputChars / 20));
-  const effectiveMaxTokens = contextWindow
-    ? Math.min(scaledTokens, Math.floor(contextWindow * 0.4))
-    : scaledTokens;
+  const effectiveMaxTokens = resolveMaxOutputTokens({
+    contextWindow,
+    floor: maxTokens ?? 16384,
+    inputChars,
+  });
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const { text: raw, truncated, rateLimitWaitMs } = await callLLM({

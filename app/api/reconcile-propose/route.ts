@@ -9,6 +9,7 @@ import {
   type ReconcileProposals,
 } from '@/lib/reconcile';
 import { callLLM, resolveConfig } from '@/lib/llm';
+import { getContextWindow, resolveMaxOutputTokens } from '@/lib/context-window';
 
 // ─── JSON parsing helpers ────────────────────────────────────────────────────
 
@@ -54,9 +55,16 @@ function recoverPartialResponse(raw: string): Record<string, unknown> | null {
 
 async function callAndParseJSON<T>(
   system: string, userPrompt: string, config: ReturnType<typeof resolveConfig>, label: string,
+  contextWindow: number | undefined,
 ): Promise<T | null> {
+  const maxTokens = resolveMaxOutputTokens({
+    contextWindow,
+    floor: 16384,
+    inputChars: userPrompt.length + (system?.length ?? 0),
+    ceilingFraction: 0.5,
+  });
   for (let attempt = 0; attempt < 2; attempt++) {
-    const { text: raw } = await callLLM({ ...config, system, userPrompt, maxTokens: 16384, jsonMode: true });
+    const { text: raw } = await callLLM({ ...config, system, userPrompt, maxTokens, jsonMode: true });
     let cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
     const firstBrace = cleaned.indexOf('{');
     const lastBrace = cleaned.lastIndexOf('}');
@@ -93,6 +101,7 @@ export async function POST(req: NextRequest) {
       _geminiKey?: string;
       _openaiCompatibleUrl?: string;
       _openaiCompatibleKey?: string;
+      _ollamaContextLength?: number;
     };
     const { entityType, result, bookTitle, bookAuthor, chapterExcerpts } = body;
 
@@ -130,6 +139,10 @@ export async function POST(req: NextRequest) {
     }
 
     const config = resolveConfig(body);
+    if (body._ollamaContextLength && config.provider === 'ollama') {
+      (config as { contextLengthOverride?: number }).contextLengthOverride = body._ollamaContextLength;
+    }
+    const { contextWindow } = await getContextWindow(config);
 
     const stream = new ReadableStream({
       async start(controller) {
@@ -139,7 +152,7 @@ export async function POST(req: NextRequest) {
           emit({ phase: 'preparing', entityCount: entities.length, entityType });
           emit({ phase: 'calling_ai' });
           const rawResult = await callAndParseJSON<ReconcileResult<CharSplitEntry | LocSplitEntry | ArcSplitEntry>>(
-            system, userPrompt, config, `${entityType}-propose`,
+            system, userPrompt, config, `${entityType}-propose`, contextWindow,
           );
           emit({ phase: 'parsing' });
           const proposals = (!rawResult || (!rawResult.mergeGroups?.length && !rawResult.splits?.length))

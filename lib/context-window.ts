@@ -179,6 +179,32 @@ export async function getContextWindow(config: ContextConfig): Promise<{ context
   }
 }
 
+// ─── Output token budget ─────────────────────────────────────────────────────
+
+/**
+ * Compute the effective max_tokens (output budget) for an LLM call.
+ *
+ * - `floor` is the minimum output budget for the call.
+ * - When `contextWindow` is known, output budget is allowed to grow up to
+ *   `ceilingFraction * contextWindow` (default 40%). Larger windows get
+ *   proportionally more output room, which avoids hitting `finish_reason: length`
+ *   on small calls with hard-coded floors.
+ * - `inputChars` further raises the budget for prompts with lots to summarize.
+ * - When `contextWindow` is missing, just returns the input-scaled floor.
+ */
+export function resolveMaxOutputTokens(opts: {
+  contextWindow?: number;
+  floor: number;
+  inputChars?: number;
+  ceilingFraction?: number;
+}): number {
+  const { contextWindow, floor, inputChars = 0, ceilingFraction = 0.4 } = opts;
+  const inputScaled = Math.max(floor, Math.ceil(inputChars / 20));
+  if (!contextWindow) return inputScaled;
+  const ctxBudget = Math.floor(contextWindow * ceilingFraction);
+  return Math.max(inputScaled, Math.min(ctxBudget, contextWindow));
+}
+
 // ─── Text budget calculation ─────────────────────────────────────────────────
 
 /**

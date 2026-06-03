@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { callLLM, resolveConfig } from '@/lib/llm';
+import { getContextWindow, resolveMaxOutputTokens } from '@/lib/context-window';
 import type { NarrativeArc, ParentArc } from '@/types';
 
 const PARENT_ARC_SCHEMA = `{
@@ -50,6 +51,7 @@ export async function POST(req: NextRequest) {
       _geminiKey?: string;
       _openaiCompatibleUrl?: string;
       _openaiCompatibleKey?: string;
+      _ollamaContextLength?: number;
     };
     const { bookTitle, bookAuthor, arcs } = body;
 
@@ -62,11 +64,20 @@ export async function POST(req: NextRequest) {
     const arcNamesLower = new Map(arcs.map((a) => [a.name.toLowerCase(), a.name]));
 
     const config = resolveConfig(body, { defaultAnthropicModel: 'claude-sonnet-4-20250514' });
+    if (body._ollamaContextLength && config.provider === 'ollama') {
+      (config as { contextLengthOverride?: number }).contextLengthOverride = body._ollamaContextLength;
+    }
+    const { contextWindow } = await getContextWindow(config);
+    const maxTokens = resolveMaxOutputTokens({
+      contextWindow,
+      floor: 4096,
+      inputChars: prompt.length,
+    });
     const { text } = await callLLM({
       ...config,
       system: '',
       userPrompt: prompt,
-      maxTokens: 4096,
+      maxTokens,
       jsonMode: true,
     });
 

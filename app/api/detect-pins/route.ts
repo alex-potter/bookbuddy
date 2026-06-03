@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { LocationPin } from '@/types';
 import { callLLM, resolveConfig } from '@/lib/llm';
+import { getContextWindow, resolveMaxOutputTokens } from '@/lib/context-window';
 
 const SUPPORTED_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 
@@ -103,6 +104,7 @@ export async function POST(req: NextRequest) {
       _geminiKey?: string;
       _openaiCompatibleUrl?: string;
       _openaiCompatibleKey?: string;
+      _ollamaContextLength?: number;
     };
     const { imageDataUrl, locations, imageWidth, imageHeight } = body;
 
@@ -112,6 +114,16 @@ export async function POST(req: NextRequest) {
 
     const prompt = buildPrompt(locations);
     const config = resolveConfig(body, { useVisionModel: true });
+    if (body._ollamaContextLength && config.provider === 'ollama') {
+      (config as { contextLengthOverride?: number }).contextLengthOverride = body._ollamaContextLength;
+    }
+    const { contextWindow } = await getContextWindow(config);
+    const maxTokens = resolveMaxOutputTokens({
+      contextWindow,
+      floor: 4096,
+      inputChars: prompt.length,
+      ceilingFraction: 0.3,
+    });
 
     const commaIdx = imageDataUrl.indexOf(',');
     const base64Data = imageDataUrl.slice(commaIdx + 1);
@@ -122,7 +134,7 @@ export async function POST(req: NextRequest) {
       ...config,
       system: '',
       userPrompt: prompt,
-      maxTokens: 4096,
+      maxTokens,
       images: [{ data: base64Data, mimeType: mediaType }],
     });
 

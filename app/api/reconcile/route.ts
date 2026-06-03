@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { AnalysisResult } from '@/types';
 import { reconcileResult, type CallAndParseFn } from '@/lib/reconcile';
 import { callLLM, resolveConfig } from '@/lib/llm';
+import { getContextWindow, resolveMaxOutputTokens } from '@/lib/context-window';
 
 // ─── JSON parsing helpers ────────────────────────────────────────────────────
 
@@ -48,9 +49,16 @@ function recoverPartialResponse(raw: string): Record<string, unknown> | null {
 
 async function callAndParseJSON<T>(
   system: string, userPrompt: string, config: ReturnType<typeof resolveConfig>, label: string,
+  contextWindow: number | undefined,
 ): Promise<T | null> {
+  const maxTokens = resolveMaxOutputTokens({
+    contextWindow,
+    floor: 16384,
+    inputChars: userPrompt.length + (system?.length ?? 0),
+    ceilingFraction: 0.5,
+  });
   for (let attempt = 0; attempt < 2; attempt++) {
-    const { text: raw } = await callLLM({ ...config, system, userPrompt, maxTokens: 16384, jsonMode: true });
+    const { text: raw } = await callLLM({ ...config, system, userPrompt, maxTokens, jsonMode: true });
     let cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
     const firstBrace = cleaned.indexOf('{');
     const lastBrace = cleaned.lastIndexOf('}');
@@ -86,6 +94,7 @@ export async function POST(req: NextRequest) {
       _geminiKey?: string;
       _openaiCompatibleUrl?: string;
       _openaiCompatibleKey?: string;
+      _ollamaContextLength?: number;
     };
     const { result, bookTitle, bookAuthor, chapterExcerpts } = body;
 
@@ -94,8 +103,12 @@ export async function POST(req: NextRequest) {
     }
 
     const config = resolveConfig(body);
+    if (body._ollamaContextLength && config.provider === 'ollama') {
+      (config as { contextLengthOverride?: number }).contextLengthOverride = body._ollamaContextLength;
+    }
+    const { contextWindow } = await getContextWindow(config);
     const callAndParse: CallAndParseFn = <T>(system: string, userPrompt: string, label: string) =>
-      callAndParseJSON<T>(system, userPrompt, config, label);
+      callAndParseJSON<T>(system, userPrompt, config, label, contextWindow);
 
     const reconciled = await reconcileResult(result, bookTitle, bookAuthor, chapterExcerpts, callAndParse);
     return NextResponse.json(reconciled);
